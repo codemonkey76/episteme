@@ -1,0 +1,18 @@
+services:
+  episteme:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - episteme_data:/data
+    environment:
+      BIND: "0.0.0.0:3000"
+      DATA_DIR: /data
+      STATIC_DIR: /app/static
+      RUST_LOG: "episteme=info,tower_http=info"
+    env_file:
+      - path: .env
+        required: false
+
+volumes:
+  episteme_data:

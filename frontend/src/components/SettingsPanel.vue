@@ -1,0 +1,488 @@
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import * as api from '../api'
+
+const props = defineProps<{ initialTab?: string }>()
+
+type Tab = 'account' | 'providers' | 'mcp' | 'integrations' | 'appearance' | 'users' | 'system'
+const activeTab = ref<Tab>((props.initialTab as Tab) ?? 'account')
+
+// ── Providers ─────────────────────────────────────────────────────────────────
+const providers = ref<api.ProviderConfig[]>([])
+const mcpServers = ref<api.McpServerConfig[]>([])
+const newProvider = ref<api.ProviderConfig>({
+  name: '', provider: 'anthropic', model_id: '', base_url: '', api_key: '',
+})
+
+onMounted(async () => {
+  const [pRes, mRes] = await Promise.all([
+    api.settings.listProviders(),
+    api.settings.listMcpServers(),
+  ])
+  providers.value = pRes.providers
+  mcpServers.value = mRes.mcp_servers
+})
+
+async function saveProvider() {
+  await api.settings.upsertProvider(newProvider.value)
+  providers.value = (await api.settings.listProviders()).providers
+  newProvider.value = { name: '', provider: 'anthropic', model_id: '', base_url: '', api_key: '' }
+}
+
+async function deleteProvider(name: string) {
+  await api.settings.deleteProvider(name)
+  providers.value = providers.value.filter((p) => p.name !== name)
+}
+
+// ── Account ───────────────────────────────────────────────────────────────────
+const passwordForm = ref({ current: '', next: '', confirm: '' })
+const passwordMsg = ref('')
+const twoFactorEnabled = ref(false)
+const accountMsg = ref('')
+
+async function changePassword() {
+  if (passwordForm.value.next !== passwordForm.value.confirm) {
+    passwordMsg.value = 'New passwords do not match.'
+    return
+  }
+  try {
+    await api.auth.changePassword(passwordForm.value.current, passwordForm.value.next)
+    passwordMsg.value = 'Password updated.'
+    passwordForm.value = { current: '', next: '', confirm: '' }
+  } catch (e: unknown) {
+    passwordMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
+}
+
+async function toggleTwoFactor() {
+  try {
+    await api.auth.toggleTwoFactor(!twoFactorEnabled.value)
+    twoFactorEnabled.value = !twoFactorEnabled.value
+    accountMsg.value = twoFactorEnabled.value ? '2FA enabled.' : '2FA disabled.'
+  } catch (e: unknown) {
+    accountMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
+}
+
+async function logout() {
+  await api.auth.logout()
+  window.location.href = '/login'
+}
+</script>
+
+<template>
+  <div class="settings-panel">
+    <!-- Vertical nav -->
+    <nav class="side-nav">
+      <button :class="['nav-item', { active: activeTab === 'account' }]" @click="activeTab = 'account'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+        </svg>
+        Account
+      </button>
+      <button :class="['nav-item', { active: activeTab === 'providers' }]" @click="activeTab = 'providers'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+        Providers
+      </button>
+      <button :class="['nav-item', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+        </svg>
+        MCP Servers
+      </button>
+      <button :class="['nav-item', { active: activeTab === 'integrations' }]" @click="activeTab = 'integrations'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+        </svg>
+        Integrations
+      </button>
+      <button :class="['nav-item', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        Appearance
+      </button>
+
+      <div class="nav-group">
+        <span class="nav-group-label">Admin</span>
+        <button :class="['nav-item', { active: activeTab === 'users' }]" @click="activeTab = 'users'">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          Users
+        </button>
+        <button :class="['nav-item', { active: activeTab === 'system' }]" @click="activeTab = 'system'">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          System
+        </button>
+      </div>
+    </nav>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- Account -->
+      <div v-if="activeTab === 'account'" class="tab-content">
+        <h2>Account</h2>
+
+        <section>
+          <h3>Change password</h3>
+          <form class="form" @submit.prevent="changePassword">
+            <label>Current password <input v-model="passwordForm.current" type="password" autocomplete="current-password" /></label>
+            <label>New password <input v-model="passwordForm.next" type="password" autocomplete="new-password" /></label>
+            <label>Confirm new password <input v-model="passwordForm.confirm" type="password" autocomplete="new-password" /></label>
+            <p v-if="passwordMsg" class="msg">{{ passwordMsg }}</p>
+            <button type="submit" class="btn-primary">Update password</button>
+          </form>
+        </section>
+
+        <section>
+          <h3>Two-factor authentication</h3>
+          <div class="row">
+            <div>
+              <div class="row-title">Authenticator app</div>
+              <div class="row-sub">{{ twoFactorEnabled ? 'Active' : 'Not configured' }}</div>
+            </div>
+            <button class="btn-secondary" @click="toggleTwoFactor">
+              {{ twoFactorEnabled ? 'Disable' : 'Enable' }}
+            </button>
+          </div>
+          <p v-if="accountMsg" class="msg">{{ accountMsg }}</p>
+        </section>
+
+        <section class="section-danger">
+          <h3>Danger zone</h3>
+          <button class="btn-danger" @click="logout">Sign out</button>
+        </section>
+      </div>
+
+      <!-- Providers -->
+      <div v-else-if="activeTab === 'providers'" class="tab-content">
+        <h2>Model Providers</h2>
+
+        <section>
+          <ul v-if="providers.length" class="item-list">
+            <li v-for="p in providers" :key="p.name">
+              <div class="item-info">
+                <span class="item-name">{{ p.name }}</span>
+                <span class="item-sub">{{ p.provider }} · {{ p.model_id }}</span>
+              </div>
+              <button class="btn-remove" @click="deleteProvider(p.name)">Remove</button>
+            </li>
+          </ul>
+          <p v-else class="empty">No providers configured.</p>
+        </section>
+
+        <section>
+          <h3>Add / update provider</h3>
+          <form class="form" @submit.prevent="saveProvider">
+            <label>Name <input v-model="newProvider.name" required /></label>
+            <label>
+              Provider
+              <select v-model="newProvider.provider">
+                <option>anthropic</option>
+                <option>openai</option>
+                <option>ollama</option>
+                <option>openai_compatible</option>
+              </select>
+            </label>
+            <label>Model ID <input v-model="newProvider.model_id" required /></label>
+            <label>Base URL <input v-model="newProvider.base_url" /></label>
+            <label>API Key <input v-model="newProvider.api_key" type="password" /></label>
+            <button type="submit" class="btn-primary">Save</button>
+          </form>
+        </section>
+      </div>
+
+      <!-- MCP Servers -->
+      <div v-else-if="activeTab === 'mcp'" class="tab-content">
+        <h2>MCP Servers</h2>
+
+        <section>
+          <ul v-if="mcpServers.length" class="item-list">
+            <li v-for="s in mcpServers" :key="s.name">
+              <div class="item-info">
+                <span class="item-name">{{ s.name }}</span>
+                <span class="item-sub">{{ s.transport.type }}</span>
+              </div>
+            </li>
+          </ul>
+          <p v-else class="empty">No MCP servers configured.</p>
+        </section>
+      </div>
+
+      <!-- Integrations -->
+      <div v-else-if="activeTab === 'integrations'" class="tab-content">
+        <h2>Integrations</h2>
+        <section>
+          <p class="empty">No integrations available yet.</p>
+        </section>
+      </div>
+
+      <!-- Appearance -->
+      <div v-else-if="activeTab === 'appearance'" class="tab-content">
+        <h2>Appearance</h2>
+        <section>
+          <p class="empty">Appearance options coming soon.</p>
+        </section>
+      </div>
+
+      <!-- Users -->
+      <div v-else-if="activeTab === 'users'" class="tab-content">
+        <h2>Users</h2>
+        <section>
+          <p class="empty">User management coming soon.</p>
+        </section>
+      </div>
+
+      <!-- System -->
+      <div v-else-if="activeTab === 'system'" class="tab-content">
+        <h2>System</h2>
+        <section>
+          <p class="empty">System information coming soon.</p>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.settings-panel {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 420px;
+}
+
+/* ── Side nav ── */
+.side-nav {
+  width: 156px;
+  min-width: 156px;
+  background: #141414;
+  border-right: 1px solid #252525;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  gap: 0.125rem;
+  overflow-y: auto;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 0.375rem;
+  color: #808080;
+  font-size: 0.8125rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.nav-item svg { flex-shrink: 0; }
+
+.nav-item:hover { background: #1e1e1e; color: #d0d0d0; }
+.nav-item.active { background: #222; color: #e0e0e0; }
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #252525;
+}
+
+.nav-group-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #484848;
+  padding: 0.25rem 0.75rem 0.375rem;
+  pointer-events: none;
+}
+
+/* ── Content ── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.tab-content {
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+h3 {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #585858;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+/* ── Forms ── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: #111;
+  padding: 0.875rem;
+  border-radius: 0.5rem;
+  border: 1px solid #222;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.775rem;
+  color: #909090;
+}
+
+input, select {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  border: 1px solid #2a2a2a;
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: #3a6adf;
+}
+
+/* ── Buttons ── */
+.btn-primary {
+  background: #1e3a6e;
+  color: #7ab0ff;
+  border: 1px solid #2a4a8a;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  align-self: flex-start;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+.btn-primary:hover { background: #254880; }
+
+.btn-secondary {
+  background: #1e1e1e;
+  color: #c0c0c0;
+  border: 1px solid #303030;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+.btn-secondary:hover { background: #282828; }
+
+.btn-danger {
+  background: #2a1010;
+  color: #ff7070;
+  border: 1px solid #4a1a1a;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  align-self: flex-start;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+.btn-danger:hover { background: #3a1515; }
+
+.btn-remove {
+  background: #1e1010;
+  color: #a06060;
+  border: none;
+  border-radius: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+.btn-remove:hover { background: #2a1515; color: #d08080; }
+
+/* ── Row layout ── */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  gap: 1rem;
+}
+
+.row-title { font-size: 0.8125rem; color: #d0d0d0; }
+.row-sub { font-size: 0.75rem; color: #585858; margin-top: 0.1rem; }
+
+/* ── Lists ── */
+.item-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.item-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  gap: 1rem;
+}
+
+.item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.item-name { font-size: 0.8125rem; color: #d0d0d0; }
+.item-sub { font-size: 0.75rem; color: #585858; }
+
+/* ── Misc ── */
+.empty { color: #484848; font-size: 0.8125rem; }
+.msg { font-size: 0.775rem; color: #888; }
+.section-danger { border-top: 1px solid #222; padding-top: 1.25rem; }
+</style>
