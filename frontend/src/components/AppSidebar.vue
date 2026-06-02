@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 import { useWindowsStore } from '../stores/windows'
-import { useSessionsStore } from '../stores/sessions'
 import SettingsPanel from './SettingsPanel.vue'
 import Email from '../views/Email.vue'
+import Logs from '../views/Logs.vue'
+import Chat from '../views/Chat.vue'
 
 const winStore = useWindowsStore()
-const sessionsStore = useSessionsStore()
-const router = useRouter()
 const collapsed = ref(false)
 
 onMounted(() => {
@@ -31,6 +30,26 @@ function openEmail() {
   })
 }
 
+function openChat() {
+  winStore.open({
+    key: 'chat',
+    title: 'Chat',
+    component: Chat,
+    width: 740,
+    height: 560,
+  })
+}
+
+function openLogs() {
+  winStore.open({
+    key: 'logs',
+    title: 'Logs',
+    component: Logs,
+    width: 900,
+    height: 520,
+  })
+}
+
 function openSettings(tab: string) {
   winStore.open({
     key: 'settings',
@@ -41,11 +60,7 @@ function openSettings(tab: string) {
   })
 }
 
-async function newChat() {
-  const session = await sessionsStore.createSession()
-  await sessionsStore.loadSession(session.id)
-  router.push('/')
-}
+
 </script>
 
 <template>
@@ -62,21 +77,20 @@ async function newChat() {
     </div>
 
     <nav>
-      <!-- New Chat -->
-      <button class="nav-item new-chat-btn" :title="collapsed ? 'New Chat' : ''" @click="newChat">
+      <!-- Chat -->
+      <button class="nav-item new-chat-btn" :title="collapsed ? 'Chat' : ''" @click="openChat">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19"/>
-          <line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        <span v-if="!collapsed">New Chat</span>
-      </button>
-
-      <!-- Chats -->
-      <RouterLink to="/chats" class="nav-item" :title="collapsed ? 'Chats' : ''">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
-        <span v-if="!collapsed">Chats</span>
+        <span v-if="!collapsed">Chat</span>
+      </button>
+
+      <!-- History -->
+      <RouterLink to="/chats" class="nav-item" :title="collapsed ? 'History' : ''">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span v-if="!collapsed">History</span>
       </RouterLink>
 
       <div class="nav-divider" />
@@ -112,6 +126,18 @@ async function newChat() {
         </svg>
         <span v-if="!collapsed">Notes</span>
       </RouterLink>
+
+      <!-- Logs -->
+      <button class="nav-item" :title="collapsed ? 'Logs' : ''" @click="openLogs">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <line x1="10" y1="9" x2="8" y2="9"/>
+        </svg>
+        <span v-if="!collapsed">Logs</span>
+      </button>
 
       <!-- Tasks -->
       <RouterLink to="/tasks" class="nav-item" :title="collapsed ? 'Tasks' : ''">

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import * as api from '../api'
+import { useLogsStore } from '../stores/logs'
+
+const logs = useLogsStore()
 
 const props = defineProps<{ initialTab?: string }>()
 
@@ -22,14 +25,18 @@ async function fetchOllamaModels() {
   ollamaFetching.value = true
   ollamaFetchError.value = ''
   ollamaModels.value = []
+  logs.info('Ollama', `Fetching models from ${newProvider.value.base_url}`)
   try {
     const res = await api.settings.listOllamaModels(newProvider.value.base_url)
     ollamaModels.value = res.models
+    logs.info('Ollama', `Found ${res.models.length} models: ${res.models.join(', ')}`)
     if (res.models.length > 0 && !newProvider.value.model_id) {
       newProvider.value.model_id = res.models[0]
     }
   } catch (e: unknown) {
-    ollamaFetchError.value = e instanceof Error ? e.message : 'Could not reach Ollama'
+    const msg = e instanceof Error ? e.message : 'Could not reach Ollama'
+    ollamaFetchError.value = msg
+    logs.error('Ollama', `Failed to fetch models: ${msg}`)
   } finally {
     ollamaFetching.value = false
   }
@@ -55,12 +62,14 @@ onMounted(async () => {
 
 async function saveProvider() {
   await api.settings.upsertProvider(newProvider.value)
+  logs.info('Settings', `Saved provider "${newProvider.value.name}" (${newProvider.value.provider} / ${newProvider.value.model_id})`)
   providers.value = (await api.settings.listProviders()).providers
   newProvider.value = { name: '', provider: 'anthropic', model_id: '', base_url: '', api_key: '' }
 }
 
 async function deleteProvider(name: string) {
   await api.settings.deleteProvider(name)
+  logs.info('Settings', `Deleted provider "${name}"`)
   providers.value = providers.value.filter((p) => p.name !== name)
 }
 

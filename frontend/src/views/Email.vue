@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as api from '../api'
+import { useLogsStore } from '../stores/logs'
+
+const logs = useLogsStore()
 
 // ── Connection state ──────────────────────────────────────────────────────────
 const connected = ref(false)
@@ -27,6 +30,7 @@ const folderError = ref('')
 async function loadFolders() {
   loadingFolders.value = true
   folderError.value = ''
+  logs.debug('Email', 'Loading mail folders')
   try {
     const res = await api.email.listFolders()
     folders.value = [...res.value].sort((a, b) => {
@@ -37,10 +41,13 @@ async function loadFolders() {
       if (bi === -1) return -1
       return ai - bi
     })
+    logs.info('Email', `Loaded ${folders.value.length} folders`)
     const inbox = folders.value.find(f => f.displayName === 'Inbox') ?? folders.value[0] ?? null
     if (inbox) selectFolder(inbox)
   } catch (e: unknown) {
-    folderError.value = e instanceof Error ? e.message : 'Failed to load folders'
+    const msg = e instanceof Error ? e.message : 'Failed to load folders'
+    folderError.value = msg
+    logs.error('Email', `Failed to load folders: ${msg}`)
   } finally {
     loadingFolders.value = false
   }
@@ -68,6 +75,8 @@ const messagesError = ref('')
 async function loadMessages(folderId: string, skip = 0) {
   loadingMessages.value = true
   messagesError.value = ''
+  const folder = folders.value.find(f => f.id === folderId)
+  logs.debug('Email', `Loading messages for "${folder?.displayName ?? folderId}" (skip=${skip})`)
   try {
     const res = await api.email.listMessages(folderId, skip, PAGE)
     if (skip === 0) {
@@ -77,8 +86,11 @@ async function loadMessages(folderId: string, skip = 0) {
     }
     messagesSkip.value = skip + res.value.length
     messagesHasMore.value = res.value.length === PAGE
+    logs.info('Email', `Loaded ${res.value.length} messages (total ${messagesSkip.value})`)
   } catch (e: unknown) {
-    messagesError.value = e instanceof Error ? e.message : 'Failed to load messages'
+    const msg = e instanceof Error ? e.message : 'Failed to load messages'
+    messagesError.value = msg
+    logs.error('Email', `Failed to load messages: ${msg}`)
   } finally {
     loadingMessages.value = false
   }
@@ -168,6 +180,8 @@ function openReply() {
 async function sendEmail() {
   sending.value = true
   sendMsg.value = ''
+  const toList = composeForm.value.to.split(',').map(s => s.trim()).filter(Boolean)
+  logs.info('Email', `Sending email to ${toList.join(', ')}`)
   try {
     const payload: api.SendEmailPayload = {
       to: composeForm.value.to.split(',').map(s => s.trim()).filter(Boolean),
@@ -180,6 +194,7 @@ async function sendEmail() {
     }
     const res = await api.email.send(payload)
     if (!res.ok) throw new Error(`${res.status}`)
+    logs.info('Email', 'Email sent successfully')
     sendMsg.value = 'Sent.'
     if (!showReply.value) {
       view.value = 'none'
@@ -188,7 +203,9 @@ async function sendEmail() {
     }
     composeForm.value = { to: '', subject: '', body: '' }
   } catch (e: unknown) {
-    sendMsg.value = e instanceof Error ? `Failed: ${e.message}` : 'Send failed.'
+    const msg = e instanceof Error ? e.message : 'Send failed'
+    sendMsg.value = `Failed: ${msg}`
+    logs.error('Email', `Failed to send email: ${msg}`)
   } finally {
     sending.value = false
   }
@@ -261,6 +278,7 @@ watch(searchQuery, (q) => {
 async function runSearch(q: string, nextLink?: string | null) {
   searchLoading.value = true
   searchError.value = ''
+  if (!nextLink) logs.info('Email', `Searching for "${q}"`)
   try {
     const res = await api.email.search(q, nextLink)
     if (nextLink) {
@@ -269,8 +287,11 @@ async function runSearch(q: string, nextLink?: string | null) {
       searchResults.value = res.value
     }
     searchNextLink.value = res.next_link
+    logs.info('Email', `Search returned ${res.value.length} results${nextLink ? ' (page+)' : ''}`)
   } catch (e: unknown) {
-    searchError.value = e instanceof Error ? e.message : 'Search failed'
+    const msg = e instanceof Error ? e.message : 'Search failed'
+    searchError.value = msg
+    logs.error('Email', `Search failed: ${msg}`)
   } finally {
     searchLoading.value = false
   }
