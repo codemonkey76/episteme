@@ -165,7 +165,8 @@ export interface MessageSummary {
 
 export interface MessageDetail extends MessageSummary {
   ccRecipients: { emailAddress: GraphEmailAddress }[]
-  body: { contentType: 'Text' | 'HTML'; content: string }
+  // Microsoft Graph returns this lowercase ("html"/"text"); compare case-insensitively.
+  body: { contentType: string; content: string }
 }
 
 export interface SearchResult {
@@ -178,6 +179,7 @@ export interface SendEmailPayload {
   subject?: string
   body: string
   reply_to_message_id?: string
+  action?: 'reply' | 'replyAll' | 'forward'
 }
 
 export const email = {
@@ -200,6 +202,47 @@ export const email = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+}
+
+// AI draft — POST returns an SSE stream of reply tokens (model can be slow, so stream live).
+export async function streamAiDraft(
+  payload: { provider: string; from: string; subject: string; body: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/email/ai-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw || raw === '[DONE]') continue
+
+      let data: { type: string; text?: string; message?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'error') throw new Error(data.message || 'draft failed')
+    }
+  }
 }
 
 // Integrations
@@ -238,6 +281,35 @@ export const auth = {
   toggleTwoFactor: (_enable: boolean) =>
     Promise.reject(new Error('Not implemented yet.')),
   logout: () => Promise.resolve(),
+}
+
+// Logs
+export interface LogEntry {
+  id: string
+  ts: number
+  category: string
+  level: string
+  message: string
+}
+
+export const logs = {
+  create: (entry: LogEntry) =>
+    fetch(BASE + '/logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    }),
+  list: (params?: { limit?: number; offset?: number; category?: string; level?: string; q?: string }) => {
+    const p = new URLSearchParams()
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    if (params?.offset !== undefined) p.set('offset', String(params.offset))
+    if (params?.category) p.set('category', params.category)
+    if (params?.level) p.set('level', params.level)
+    if (params?.q) p.set('q', params.q)
+    return json<{ entries: LogEntry[] }>(`/logs?${p}`)
+  },
+  clear: () => fetch(BASE + '/logs', { method: 'DELETE' }),
+  streamUrl: `${BASE}/logs/stream`,
 }
 
 // Settings

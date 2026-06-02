@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* Design tokens mapped from the existing palette. These generate utilities
+   like `bg-surface`, `text-fg`, `border-accent/35`, etc. */
+@theme {
+  --color-bg: #0f0f0f;       /* body / app background */
+  --color-fg: #e0e0e0;       /* primary text */
+  --color-accent: #4a8aff;   /* brand blue (== rgba(74,138,255)) */
+  --color-surface: #1a1a1a;  /* panel / card background */
+  --color-raised: #2a2a2a;   /* hover / raised surface, common borders */
+  --color-muted: #909090;    /* secondary / muted text */
+  --color-success: #4ec97a;  /* success / online */
+  --color-danger: #c05050;   /* error / destructive */
+}
+
+/* Global base — kept here so it survives once component <style> blocks are
+   removed during the Tailwind migration. */
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Rules that can't be expressed as utilities ──────────────────────────
+   Pseudo-elements, keyframes and [open]-state markers. Moved here (from the
+   former component <style> blocks) so no SFC carries a <style> tag. Class
+   names are app-unique, so global scope is safe. */
+
+/* AppWindow: resize grip in the bottom-right corner */
+.resize-se::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid #484848;
+  border-bottom: 2px solid #484848;
+  border-radius: 0 0 2px 0;
+  transition: border-color 0.15s;
+}
+.resize-se:hover::after { border-color: rgba(74, 138, 255, 0.8); }
+
+/* SettingsPanel: custom <details> disclosure marker */
+.instructions summary::-webkit-details-marker { display: none; }
+.instructions summary::before {
+  content: '▶ ';
+  font-size: 0.6rem;
+  opacity: 0.5;
+}
+.instructions[open] summary::before { content: '▼ '; }
+
+/* Email: spinner keyframes (used via animate-[spin_0.7s_linear_infinite]) */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

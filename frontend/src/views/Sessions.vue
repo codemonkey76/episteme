@@ -27,29 +27,17 @@ async function remove(id: string) {
 </script>
 
 <template>
-  <div class="sessions">
-    <div class="header">
-      <h2>Sessions</h2>
-      <button @click="newSession">New</button>
+  <div class="p-5 max-w-[40rem]">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-base">Sessions</h2>
+      <button @click="newSession" class="bg-[#2a4a7a] text-fg border-none rounded-md py-1.5 px-3 cursor-pointer text-[0.85rem]">New</button>
     </div>
-    <ul>
-      <li v-for="s in store.sessions" :key="s.id">
-        <button class="title" @click="open(s.id)">{{ s.title }}</button>
-        <span class="date">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
-        <button class="del" @click="remove(s.id)">✕</button>
+    <ul class="list-none flex flex-col gap-2">
+      <li v-for="s in store.sessions" :key="s.id" class="flex items-center gap-3 bg-surface rounded-md py-[0.6rem] px-[0.8rem]">
+        <button class="flex-1 bg-none border-none text-inherit text-left cursor-pointer text-[0.9rem]" @click="open(s.id)">{{ s.title }}</button>
+        <span class="text-xs text-[#606060]">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
+        <button class="bg-none border-none text-[#606060] cursor-pointer text-xs" @click="remove(s.id)">✕</button>
       </li>
     </ul>
   </div>
 </template>
-
-<style scoped>
-.sessions { padding: 1.25rem; max-width: 40rem; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-h2 { font-size: 1rem; }
-ul { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
-li { display: flex; align-items: center; gap: 0.75rem; background: #1a1a1a; border-radius: 0.375rem; padding: 0.6rem 0.8rem; }
-.title { flex: 1; background: none; border: none; color: inherit; text-align: left; cursor: pointer; font-size: 0.9rem; }
-.date { font-size: 0.75rem; color: #606060; }
-.del { background: none; border: none; color: #606060; cursor: pointer; font-size: 0.75rem; }
-button { background: #2a4a7a; color: #e0e0e0; border: none; border-radius: 0.375rem; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.85rem; }
-</style>

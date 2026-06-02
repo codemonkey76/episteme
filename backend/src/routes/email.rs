@@ -1,15 +1,21 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, Sse},
     Json,
 };
+use futures::stream;
 use serde::Deserialize;
 use serde_json::Value;
+use std::convert::Infallible;
 use std::sync::Arc;
 
+use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::integrations::microsoft;
+use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig, StreamChunk};
 use crate::state::AppState;
+use tokio::sync::mpsc;
 
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 
@@ -198,6 +204,10 @@ pub struct SendBody {
     subject: Option<String>,
     body: String,
     reply_to_message_id: Option<String>,
+    /// "reply" | "replyAll" | "forward" — only "forward" changes the Graph
+    /// endpoint; reply/replyAll both send via /reply with explicit recipients.
+    #[serde(default)]
+    action: Option<String>,
 }
 
 pub async fn send_email(
@@ -215,13 +225,22 @@ pub async fn send_email(
         .collect::<Vec<_>>();
 
     if let Some(reply_id) = payload.reply_to_message_id {
-        let body = serde_json::json!({
-            "message": { "toRecipients": recipients },
-            "comment": payload.body,
-        });
+        // /forward carries the original message; /reply (used for both reply and
+        // reply-all) takes the recipient list the frontend computed.
+        let (url, body) = if payload.action.as_deref() == Some("forward") {
+            (
+                format!("{GRAPH}/me/messages/{reply_id}/forward"),
+                serde_json::json!({ "toRecipients": recipients, "comment": payload.body }),
+            )
+        } else {
+            (
+                format!("{GRAPH}/me/messages/{reply_id}/reply"),
+                serde_json::json!({ "message": { "toRecipients": recipients }, "comment": payload.body }),
+            )
+        };
         state
             .http_client
-            .post(format!("{GRAPH}/me/messages/{reply_id}/reply"))
+            .post(url)
             .bearer_auth(&token)
             .json(&body)
             .send()
@@ -246,4 +265,81 @@ pub async fn send_email(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// POST /api/email/ai-draft — produce a draft reply for the user to edit/send.
+#[derive(Deserialize)]
+pub struct AiDraftBody {
+    provider: String,
+    from: String,
+    subject: String,
+    /// Plain-text body of the email being replied to (HTML stripped client-side).
+    body: String,
+}
+
+pub async fn ai_draft(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AiDraftBody>,
+) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == payload.provider)
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider))
+        })?;
+
+    let system = "You draft email replies on behalf of the user. Output only the body of the \
+reply — no subject line, no quoted original message, and no placeholder tokens like [Name]. \
+Keep it clear, polite, and concise in a professional tone, and directly address anything the \
+email asks.";
+
+    let user = format!(
+        "Draft a reply to this email.\n\nFrom: {}\nSubject: {}\n\n{}",
+        payload.from, payload.subject, payload.body
+    );
+
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(system.to_string()) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user) },
+    ];
+
+    // Stream the model output to the client token-by-token (SSE), like chat.
+    // A wrapper task forwards tokens and, if the model call fails (e.g. the
+    // provider is unreachable), emits an `error` event — the failure happens
+    // after the 200 response has begun, so it can't be reported via the status.
+    let (ev_tx, ev_rx) = mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
+        let model_task =
+            tokio::spawn(async move { ModelRouter::stream(&provider, history, Vec::new(), false, tx).await });
+
+        while let Some(chunk) = rx.recv().await {
+            let data = if chunk.done {
+                serde_json::json!({ "type": "done" }).to_string()
+            } else {
+                serde_json::json!({ "type": "token", "text": chunk.text }).to_string()
+            };
+            if ev_tx.send(data).await.is_err() {
+                return; // client disconnected
+            }
+        }
+
+        if let Ok(Err(e)) = model_task.await {
+            tracing::error!("ai_draft stream error: {e}");
+            let _ = ev_tx
+                .send(serde_json::json!({ "type": "error", "message": e.to_string() }).to_string())
+                .await;
+        }
+    });
+
+    let event_stream = stream::unfold(ev_rx, |mut rx| async move {
+        let data = rx.recv().await?;
+        Some((Ok::<Event, Infallible>(Event::default().data(data)), rx))
+    });
+
+    Ok(Sse::new(event_stream))
 }

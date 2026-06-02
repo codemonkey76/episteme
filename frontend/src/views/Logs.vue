@@ -33,8 +33,8 @@ watch(() => store.entries.length, async () => {
   if (listEl.value) listEl.value.scrollTop = listEl.value.scrollHeight
 })
 
-function fmt(d: Date) {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+function fmt(ts: number) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 const LEVEL_COLOR: Record<LogLevel, string> = {
@@ -63,14 +63,14 @@ function catColor(cat: string): string {
 </script>
 
 <template>
-  <div class="logs-panel">
+  <div class="flex flex-col h-full bg-[#0d0d0f] overflow-hidden font-mono text-[0.775rem]" style="font-family: ui-monospace, 'Cascadia Code', monospace;">
     <!-- Toolbar -->
-    <div class="toolbar">
-      <select v-model="categoryFilter" class="filter-select">
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0 flex-wrap">
+      <select v-model="categoryFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
         <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
       </select>
 
-      <select v-model="levelFilter" class="filter-select level-select">
+      <select v-model="levelFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer min-w-[7rem]">
         <option value="all">All levels</option>
         <option value="debug">Debug</option>
         <option value="info">Info</option>
@@ -78,203 +78,47 @@ function catColor(cat: string): string {
         <option value="error">Error</option>
       </select>
 
-      <div class="search-wrap">
+      <div class="flex items-center gap-[0.3rem] bg-surface border border-raised rounded px-2 py-[0.2rem] flex-1 min-w-[10rem] text-[#484848]">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
-        <input v-model="searchQuery" class="search-input" placeholder="Filter messages…" />
-        <button v-if="searchQuery" class="clear-btn" @click="searchQuery = ''">✕</button>
+        <input v-model="searchQuery" class="flex-1 bg-none border-none text-[#c0c0c0] text-xs font-[inherit] outline-none min-w-0 placeholder:text-[#404040]" placeholder="Filter messages…" />
+        <button v-if="searchQuery" class="bg-none border-none text-[#484848] cursor-pointer text-[0.65rem] p-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
       </div>
 
-      <div class="toolbar-right">
-        <label class="autoscroll-label" :title="autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'">
-          <input type="checkbox" v-model="autoScroll" />
+      <div class="flex items-center gap-[0.625rem] ml-auto">
+        <label class="flex items-center gap-[0.3rem] text-[#606060] text-[0.72rem] cursor-pointer font-sans" :title="autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'">
+          <input type="checkbox" v-model="autoScroll" class="cursor-pointer" />
           <span>Auto-scroll</span>
         </label>
-        <button class="clear-all-btn" @click="store.clear()">Clear</button>
+        <button class="bg-[#1e1e1e] text-[#808080] border border-raised rounded px-2 py-[0.2rem] text-[0.72rem] font-sans cursor-pointer transition-colors duration-100 hover:bg-[#282828] hover:text-[#c0c0c0]" @click="store.clear()">Clear</button>
       </div>
     </div>
 
     <!-- Log list -->
-    <div class="log-list" ref="listEl">
-      <div v-if="filtered.length === 0" class="empty">No log entries.</div>
+    <div class="flex-1 overflow-y-auto overflow-x-hidden" ref="listEl">
+      <div v-if="filtered.length === 0" class="p-6 text-[#383838] text-center font-sans">No log entries.</div>
       <div
         v-for="e in filtered"
         :key="e.id"
-        class="log-row"
+        class="group flex items-baseline gap-2 px-3 py-[0.15rem] border-b border-[#111] leading-normal min-h-[1.5rem] hover:!bg-[#141414]"
         :style="{ background: LEVEL_BG[e.level] }"
       >
-        <span class="ts">{{ fmt(e.ts) }}</span>
-        <span class="cat" :style="{ color: catColor(e.category) }">{{ e.category }}</span>
-        <span class="lvl" :style="{ color: LEVEL_COLOR[e.level] }">{{ e.level.toUpperCase() }}</span>
-        <span class="msg">{{ e.message }}</span>
+        <span class="text-[#404050] shrink-0 text-[0.72rem] min-w-[6rem]">{{ fmt(e.ts) }}</span>
+        <span class="font-semibold shrink-0 min-w-[6rem] text-[0.72rem]" :style="{ color: catColor(e.category) }">{{ e.category }}</span>
+        <span class="font-bold shrink-0 min-w-[3.5rem] text-[0.68rem] tracking-[0.04em]" :style="{ color: LEVEL_COLOR[e.level] }">{{ e.level.toUpperCase() }}</span>
+        <span class="text-[#c0c0c0] break-words flex-1 min-w-0">{{ e.message }}</span>
       </div>
     </div>
 
     <!-- Status bar -->
-    <div class="status-bar">
+    <div class="px-3 py-[0.2rem] border-t border-surface text-[#404040] text-[0.68rem] shrink-0 font-sans flex items-center">
+      <span
+        class="inline-block w-[6px] h-[6px] rounded-full mr-[0.4rem] shrink-0"
+        :class="store.connected ? 'bg-success' : 'bg-[#505050]'"
+        :title="store.connected ? 'Live' : 'Disconnected'"
+      />
       {{ filtered.length }} / {{ store.entries.length }} entries
     </div>
   </div>
 </template>
-
-<style scoped>
-.logs-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: #0d0d0f;
-  font-family: ui-monospace, 'Cascadia Code', monospace;
-  font-size: 0.775rem;
-  overflow: hidden;
-}
-
-/* Toolbar */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #1e1e1e;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.filter-select {
-  background: #1a1a1a;
-  color: #c0c0c0;
-  border: 1px solid #2a2a2a;
-  border-radius: 0.25rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  font-family: inherit;
-  cursor: pointer;
-}
-.level-select { min-width: 7rem; }
-
-.search-wrap {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 0.25rem;
-  padding: 0.2rem 0.5rem;
-  flex: 1;
-  min-width: 10rem;
-  color: #484848;
-}
-.search-input {
-  flex: 1;
-  background: none;
-  border: none;
-  color: #c0c0c0;
-  font-size: 0.75rem;
-  font-family: inherit;
-  outline: none;
-  min-width: 0;
-}
-.search-input::placeholder { color: #404040; }
-.clear-btn {
-  background: none;
-  border: none;
-  color: #484848;
-  cursor: pointer;
-  font-size: 0.65rem;
-  padding: 0;
-  transition: color 0.1s;
-}
-.clear-btn:hover { color: #909090; }
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  margin-left: auto;
-}
-
-.autoscroll-label {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: #606060;
-  font-size: 0.72rem;
-  cursor: pointer;
-  font-family: system-ui, sans-serif;
-}
-.autoscroll-label input { cursor: pointer; }
-
-.clear-all-btn {
-  background: #1e1e1e;
-  color: #808080;
-  border: 1px solid #2a2a2a;
-  border-radius: 0.25rem;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.72rem;
-  font-family: system-ui, sans-serif;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.clear-all-btn:hover { background: #282828; color: #c0c0c0; }
-
-/* Log list */
-.log-list {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.empty {
-  padding: 1.5rem;
-  color: #383838;
-  text-align: center;
-  font-family: system-ui, sans-serif;
-}
-
-.log-row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.15rem 0.75rem;
-  border-bottom: 1px solid #111;
-  line-height: 1.5;
-  min-height: 1.5rem;
-}
-.log-row:hover { background: #141414 !important; }
-
-.ts {
-  color: #404050;
-  flex-shrink: 0;
-  font-size: 0.72rem;
-  min-width: 6rem;
-}
-.cat {
-  font-weight: 600;
-  flex-shrink: 0;
-  min-width: 6rem;
-  font-size: 0.72rem;
-}
-.lvl {
-  font-weight: 700;
-  flex-shrink: 0;
-  min-width: 3.5rem;
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-}
-.msg {
-  color: #c0c0c0;
-  word-break: break-word;
-  flex: 1;
-  min-width: 0;
-}
-
-/* Status bar */
-.status-bar {
-  padding: 0.2rem 0.75rem;
-  border-top: 1px solid #1a1a1a;
-  color: #404040;
-  font-size: 0.68rem;
-  flex-shrink: 0;
-  font-family: system-ui, sans-serif;
-}
-</style>

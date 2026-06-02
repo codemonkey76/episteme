@@ -13,6 +13,7 @@ mod approvals;
 mod chat;
 mod email;
 mod integrations;
+mod logs;
 mod sessions;
 mod settings;
 
@@ -47,12 +48,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/integrations/email/config", delete(integrations::disconnect))
         .route("/api/integrations/email/connect", get(integrations::connect))
         .route("/api/integrations/email/callback", get(integrations::callback))
+        .route("/api/logs", post(logs::create))
+        .route("/api/logs", get(logs::list))
+        .route("/api/logs", delete(logs::clear))
+        .route("/api/logs/stream", get(logs::stream))
         .route("/api/email/folders", get(email::list_folders))
         .route("/api/email/folders/:id/messages", get(email::list_messages))
         .route("/api/email/search", get(email::search_messages))
         .route("/api/email/messages/:id", get(email::get_message))
         .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
         .route("/api/email/send", post(email::send_email))
+        .route("/api/email/ai-draft", post(email::ai_draft))
         .layer(cors)
         .with_state(state)
         .fallback_service(

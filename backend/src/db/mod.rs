@@ -5,6 +5,7 @@ pub mod sessions;
 pub mod messages;
 pub mod settings;
 pub mod pending_actions;
+pub mod logs;
 
 pub async fn init(url: &str) -> Result<SqlitePool> {
     let pool = SqlitePoolOptions::new()

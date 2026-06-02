@@ -59,10 +59,11 @@ impl ModelRouter {
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
         tools: Vec<Value>,
+        think: bool,
         tx: mpsc::Sender<StreamChunk>,
     ) -> Result<()> {
         if provider.provider == "ollama" {
-            return stream_ollama(provider, history, tx).await;
+            return stream_ollama(provider, history, think, tx).await;
         }
 
         let client = build_client(provider);
@@ -106,6 +107,7 @@ impl ModelRouter {
 async fn stream_ollama(
     provider: &ProviderConfig,
     history: Vec<ChatMessage>,
+    think: bool,
     tx: mpsc::Sender<StreamChunk>,
 ) -> Result<()> {
     let base_url = provider.base_url.as_deref().unwrap_or("http://localhost:11434");
@@ -122,11 +124,17 @@ async fn stream_ollama(
         })
         .collect();
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": provider.model_id,
         "messages": messages,
         "stream": true,
     });
+    // Disable reasoning for thinking-capable models (e.g. qwen3, deepseek-r1) so
+    // they emit the answer immediately. Only sent when explicitly disabling —
+    // omitted otherwise to preserve default behavior for non-thinking models.
+    if !think {
+        body["think"] = serde_json::json!(false);
+    }
 
     let client = reqwest::Client::new();
     let response = client

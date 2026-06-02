@@ -32,16 +32,20 @@ function onDragDown(e: PointerEvent) {
   store.focus(props.win.id)
 }
 
+function otherWindows() {
+  return store.windows.filter(w => w.id !== props.win.id)
+}
+
 function onDragMove(e: PointerEvent) {
   if (!dragging) return
   store.move(props.win.id, startWinX + e.clientX - startX, startWinY + e.clientY - startY)
-  store.setSnapPreview(snapPreviewForMouse(e.clientX, e.clientY))
+  store.setSnapPreview(snapPreviewForMouse(e.clientX, e.clientY, otherWindows()))
 }
 
 function onDragUp(e: PointerEvent) {
   if (!dragging) return
   dragging = false
-  const preview = snapPreviewForMouse(e.clientX, e.clientY)
+  const preview = snapPreviewForMouse(e.clientX, e.clientY, otherWindows())
   if (preview) store.snap(props.win.id, preview)
   store.setSnapPreview(null)
 }
@@ -60,7 +64,6 @@ function onResizeDown(e: PointerEvent, dir: 'e' | 's' | 'se') {
   resizeStartW = props.win.width
   resizeStartH = props.win.height ?? windowEl.value?.offsetHeight ?? 400
   if (props.win.height === null) store.setSize(props.win.id, resizeStartW, resizeStartH)
-  if (props.win.snapped) store.unsnap(props.win.id)
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   store.focus(props.win.id)
 }
@@ -91,26 +94,37 @@ const windowStyle = computed(() => ({
 
 <template>
   <div
-    v-if="!win.minimized"
     ref="windowEl"
-    class="app-window"
+    class="fixed flex flex-col bg-surface border border-[#383838] rounded-lg shadow-[0_12px_40px_rgba(0,0,0,0.6)] max-h-[85vh] min-w-[280px] transition-[border-radius] duration-[120ms] ease-[ease]"
     :style="windowStyle"
     @pointerdown="store.focus(win.id)"
   >
     <div
-      class="win-titlebar"
+      :class="[
+        'win-titlebar flex items-center justify-between cursor-grab active:cursor-grabbing select-none rounded-t-lg shrink-0 overflow-hidden transition-[padding] duration-150 ease-[ease]',
+        win.snapped
+          ? 'py-[0.2rem] pr-2 pl-[0.625rem] bg-[#1c1c1c]'
+          : 'pt-2 pr-2.5 pb-2 pl-3.5 bg-[#222] border-b border-raised',
+      ]"
       @pointerdown="onDragDown"
       @pointermove="onDragMove"
       @pointerup="onDragUp"
     >
-      <span class="win-title">{{ win.title }}</span>
-      <div class="win-actions">
-        <button class="win-btn" title="Minimize" @click.stop="store.minimize(win.id)">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-            <line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-        </button>
-        <button class="win-btn close" title="Close" @click.stop="store.close(win.id)">
+      <span
+        :class="[
+          'win-title font-semibold whitespace-nowrap overflow-hidden text-ellipsis',
+          win.snapped ? 'text-[0.72rem] text-[#808080]' : 'text-[0.8rem] text-[#c0c0c0]',
+        ]"
+      >{{ win.title }}</span>
+      <div class="win-actions flex gap-1.5 shrink-0 ml-2">
+        <button
+          :class="[
+            'win-btn rounded-full flex items-center justify-center cursor-pointer bg-[#3a3a3a] text-[#808080] transition-[background,color] duration-150 hover:bg-[#7a2a2a] hover:text-[#ffaaaa]',
+            win.snapped ? 'w-4 h-4' : 'w-5 h-5',
+          ]"
+          title="Close"
+          @click.stop="store.close(win.id)"
+        >
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/>
             <line x1="6" y1="6" x2="18" y2="18"/>
@@ -119,147 +133,28 @@ const windowStyle = computed(() => ({
       </div>
     </div>
 
-    <div class="win-body">
+    <div class="overflow-y-auto flex-1 rounded-b-lg">
       <component :is="win.component" v-bind="win.props" />
     </div>
 
     <!-- Resize handles -->
     <div
-      class="resize-handle resize-e"
+      class="absolute right-0 top-[30px] bottom-[18px] w-1.5 cursor-[ew-resize] z-20 hover:bg-[linear-gradient(to_left,rgba(74,138,255,0.2),transparent)]"
       @pointerdown="onResizeDown($event, 'e')"
       @pointermove="onResizeMove"
       @pointerup="onResizeUp"
     />
     <div
-      class="resize-handle resize-s"
+      class="absolute bottom-0 left-[30px] right-[18px] h-1.5 cursor-[ns-resize] z-20 hover:bg-[linear-gradient(to_top,rgba(74,138,255,0.2),transparent)]"
       @pointerdown="onResizeDown($event, 's')"
       @pointermove="onResizeMove"
       @pointerup="onResizeUp"
     />
     <div
-      class="resize-handle resize-se"
+      class="resize-se absolute right-0 bottom-0 w-[18px] h-[18px] cursor-nwse-resize z-[21]"
       @pointerdown="onResizeDown($event, 'se')"
       @pointermove="onResizeMove"
       @pointerup="onResizeUp"
     />
   </div>
 </template>
-
-<style scoped>
-.app-window {
-  position: fixed;
-  background: #1a1a1a;
-  border: 1px solid #383838;
-  border-radius: 0.5rem;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  display: flex;
-  flex-direction: column;
-  max-height: 85vh;
-  min-width: 280px;
-  transition: border-radius 0.12s ease;
-}
-
-.win-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0.625rem 0.5rem 0.875rem;
-  background: #222;
-  border-bottom: 1px solid #2a2a2a;
-  cursor: grab;
-  user-select: none;
-  border-radius: 0.5rem 0.5rem 0 0;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.win-titlebar:active { cursor: grabbing; }
-
-.win-title {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #c0c0c0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.win-actions {
-  display: flex;
-  gap: 0.375rem;
-  flex-shrink: 0;
-  margin-left: 0.5rem;
-}
-
-.win-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #3a3a3a;
-  color: #808080;
-  transition: background 0.15s, color 0.15s;
-}
-
-.win-btn:hover { background: #505050; color: #e0e0e0; }
-.win-btn.close:hover { background: #7a2a2a; color: #ffaaaa; }
-
-.win-body {
-  overflow-y: auto;
-  flex: 1;
-  border-radius: 0 0 0.5rem 0.5rem;
-}
-
-/* ── Resize handles ── */
-.resize-e {
-  position: absolute;
-  right: 0;
-  top: 30px;
-  bottom: 18px;
-  width: 6px;
-  cursor: ew-resize;
-  z-index: 20;
-}
-
-.resize-s {
-  position: absolute;
-  bottom: 0;
-  left: 30px;
-  right: 18px;
-  height: 6px;
-  cursor: ns-resize;
-  z-index: 20;
-}
-
-.resize-se {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 18px;
-  height: 18px;
-  cursor: nwse-resize;
-  z-index: 21;
-}
-
-/* Always-visible corner grip */
-.resize-se::after {
-  content: '';
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 9px;
-  height: 9px;
-  border-right: 2px solid #484848;
-  border-bottom: 2px solid #484848;
-  border-radius: 0 0 2px 0;
-  transition: border-color 0.15s;
-}
-
-.resize-e:hover  { background: linear-gradient(to left,  rgba(74,138,255,0.2), transparent); }
-.resize-s:hover  { background: linear-gradient(to top,   rgba(74,138,255,0.2), transparent); }
-.resize-se:hover::after { border-color: rgba(74,138,255,0.8); }
-</style>

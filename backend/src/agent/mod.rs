@@ -56,7 +56,7 @@ pub async fn run_turn(
             let hist = history.clone();
             let schemas = tool_schemas.clone();
             tokio::spawn(async move {
-                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, chunk_tx).await {
+                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, true, chunk_tx).await {
                     tracing::error!("model_router error: {e}");
                 }
             });

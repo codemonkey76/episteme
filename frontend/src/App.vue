@@ -1,63 +1,55 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useWindowsStore } from './stores/windows'
+import { useLogsStore } from './stores/logs'
 import AppSidebar from './components/AppSidebar.vue'
 import AppWindow from './components/AppWindow.vue'
-import AppTaskbar from './components/AppTaskbar.vue'
+import Chat from './views/Chat.vue'
 
 const winStore = useWindowsStore()
+useLogsStore().init()
+
+onMounted(() => {
+  winStore.open({
+    key: 'chat',
+    title: 'Chat',
+    component: Chat,
+    width: 740,
+    height: 560,
+    initialDock: 'fill',
+  })
+})
 </script>
 
 <template>
-  <div id="layout">
-    <div id="content">
+  <div class="flex flex-col h-screen overflow-hidden">
+    <div class="flex flex-row flex-1 min-h-0 overflow-hidden">
       <AppSidebar />
-      <main>
-        <RouterView />
-      </main>
     </div>
 
-    <AppTaskbar />
-
-    <!-- Fixed overlays — must be outside #content so they aren't clipped -->
-    <Transition name="snap-fade">
+    <!-- Fixed overlays — must be outside the content row so they aren't clipped -->
+    <Transition
+      enter-active-class="transition-opacity duration-100"
+      leave-active-class="transition-opacity duration-100"
+      enter-from-class="opacity-0"
+      leave-to-class="opacity-0"
+    >
       <div
         v-if="winStore.snapPreview"
-        class="snap-preview"
+        class="fixed z-[9000] flex items-center justify-center rounded-lg border-2 border-accent/35 bg-accent/8 pointer-events-none"
         :style="{
           left: winStore.snapPreview.x + 'px',
           top: winStore.snapPreview.y + 'px',
           width: winStore.snapPreview.width + 'px',
           height: winStore.snapPreview.height + 'px',
         }"
-      />
+      >
+        <span class="text-[0.7rem] font-bold uppercase tracking-[0.1em] text-accent/60 pointer-events-none">
+          {{ winStore.snapPreview.anchor }}
+        </span>
+      </div>
     </Transition>
 
     <AppWindow v-for="win in winStore.windows" :key="win.id" :win="win" />
   </div>
 </template>
-
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; height: 100vh; overflow: hidden; }
-#layout { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-#content { display: flex; flex-direction: row; flex: 1; min-height: 0; overflow: hidden; }
-main { flex: 1; overflow: hidden; min-width: 0; }
-
-.snap-preview {
-  position: fixed;
-  background: rgba(74, 138, 255, 0.08);
-  border: 2px solid rgba(74, 138, 255, 0.35);
-  border-radius: 0.5rem;
-  pointer-events: none;
-  z-index: 9000;
-}
-
-.snap-fade-enter-active,
-.snap-fade-leave-active {
-  transition: opacity 0.1s ease;
-}
-.snap-fade-enter-from,
-.snap-fade-leave-to {
-  opacity: 0;
-}
-</style>

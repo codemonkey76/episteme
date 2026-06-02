@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSessionsStore } from '../stores/sessions'
+import { useWindowsStore } from '../stores/windows'
+import Chat from './Chat.vue'
 import * as api from '../api'
 
 const store = useSessionsStore()
-const router = useRouter()
+const winStore = useWindowsStore()
 
 onMounted(() => store.fetchSessions())
 
 async function open(id: string) {
   await store.loadSession(id)
-  router.push('/')
+  winStore.open({ key: 'chat', title: 'Chat', component: Chat, width: 740, height: 560, initialDock: 'fill' })
 }
 
 async function remove(id: string) {
@@ -21,31 +22,17 @@ async function remove(id: string) {
 </script>
 
 <template>
-  <div class="chats">
-    <div class="header">
-      <h2>Chats</h2>
+  <div class="p-5 max-w-[40rem]">
+    <div class="mb-4">
+      <h2 class="text-base font-semibold">Chats</h2>
     </div>
-    <ul v-if="store.sessions.length">
-      <li v-for="s in store.sessions" :key="s.id">
-        <button class="title" @click="open(s.id)">{{ s.title }}</button>
-        <span class="date">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
-        <button class="del" @click="remove(s.id)">✕</button>
+    <ul v-if="store.sessions.length" class="list-none flex flex-col gap-1.5">
+      <li v-for="s in store.sessions" :key="s.id" class="flex items-center gap-3 bg-surface rounded-md py-[0.6rem] px-[0.8rem]">
+        <button class="flex-1 bg-none border-none text-[#d0d0d0] text-left cursor-pointer text-sm font-[inherit] hover:text-[#fff]" @click="open(s.id)">{{ s.title }}</button>
+        <span class="text-xs text-[#505050] whitespace-nowrap">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
+        <button class="bg-none border-none text-[#505050] cursor-pointer text-xs py-[0.2rem] px-[0.4rem] rounded-[0.2rem] hover:text-[#d08080]" @click="remove(s.id)">✕</button>
       </li>
     </ul>
-    <p v-else class="empty">No chats yet.</p>
+    <p v-else class="text-[#505050] text-sm">No chats yet.</p>
   </div>
 </template>
-
-<style scoped>
-.chats { padding: 1.25rem; max-width: 40rem; }
-.header { margin-bottom: 1rem; }
-h2 { font-size: 1rem; font-weight: 600; }
-ul { list-style: none; display: flex; flex-direction: column; gap: 0.375rem; }
-li { display: flex; align-items: center; gap: 0.75rem; background: #1a1a1a; border-radius: 0.375rem; padding: 0.6rem 0.8rem; }
-.title { flex: 1; background: none; border: none; color: #d0d0d0; text-align: left; cursor: pointer; font-size: 0.875rem; font-family: inherit; }
-.title:hover { color: #fff; }
-.date { font-size: 0.75rem; color: #505050; white-space: nowrap; }
-.del { background: none; border: none; color: #505050; cursor: pointer; font-size: 0.75rem; padding: 0.2rem 0.4rem; border-radius: 0.2rem; }
-.del:hover { color: #d08080; }
-.empty { color: #505050; font-size: 0.875rem; }
-</style>
