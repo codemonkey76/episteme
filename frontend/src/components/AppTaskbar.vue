@@ -28,11 +28,8 @@ function onClick(id: string, minimized: boolean) {
 
 <style scoped>
 .taskbar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
   height: 36px;
+  flex-shrink: 0;
   background: #141414;
   border-top: 1px solid #2a2a2a;
   display: flex;

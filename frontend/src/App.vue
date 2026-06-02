@@ -9,11 +9,16 @@ const winStore = useWindowsStore()
 
 <template>
   <div id="layout">
-    <AppSidebar />
-    <main>
-      <RouterView />
-    </main>
+    <div id="content">
+      <AppSidebar />
+      <main>
+        <RouterView />
+      </main>
+    </div>
 
+    <AppTaskbar />
+
+    <!-- Fixed overlays — must be outside #content so they aren't clipped -->
     <Transition name="snap-fade">
       <div
         v-if="winStore.snapPreview"
@@ -28,14 +33,14 @@ const winStore = useWindowsStore()
     </Transition>
 
     <AppWindow v-for="win in winStore.windows" :key="win.id" :win="win" />
-    <AppTaskbar />
   </div>
 </template>
 
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; height: 100vh; overflow: hidden; }
-#layout { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
+#layout { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#content { display: flex; flex-direction: row; flex: 1; min-height: 0; overflow: hidden; }
 main { flex: 1; overflow: hidden; min-width: 0; }
 
 .snap-preview {

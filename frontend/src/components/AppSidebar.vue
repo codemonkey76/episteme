@@ -151,7 +151,7 @@ async function newChat() {
   min-width: 200px;
   background: #161616;
   border-right: 1px solid #2a2a2a;
-  height: 100vh;
+  height: 100%;
   transition: width 0.2s ease, min-width 0.2s ease;
   overflow: hidden;
   flex-shrink: 0;
