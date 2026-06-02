@@ -4,6 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useWindowsStore } from '../stores/windows'
 import { useSessionsStore } from '../stores/sessions'
 import SettingsPanel from './SettingsPanel.vue'
+import Email from '../views/Email.vue'
 
 const winStore = useWindowsStore()
 const sessionsStore = useSessionsStore()
@@ -20,13 +21,23 @@ function toggle() {
   localStorage.setItem('sidebar-collapsed', String(collapsed.value))
 }
 
+function openEmail() {
+  winStore.open({
+    key: 'email',
+    title: 'Email',
+    component: Email,
+    width: 1100,
+    height: 660,
+  })
+}
+
 function openSettings(tab: string) {
   winStore.open({
     key: 'settings',
     title: 'Settings',
     component: SettingsPanel,
     props: { initialTab: tab },
-    width: 520,
+    width: 680,
   })
 }
 
@@ -71,13 +82,13 @@ async function newChat() {
       <div class="nav-divider" />
 
       <!-- Email -->
-      <RouterLink to="/email" class="nav-item" :title="collapsed ? 'Email' : ''">
+      <button class="nav-item" :title="collapsed ? 'Email' : ''" @click="openEmail">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
           <polyline points="22,6 12,13 2,6"/>
         </svg>
         <span v-if="!collapsed">Email</span>
-      </RouterLink>
+      </button>
 
       <!-- Calendar -->
       <RouterLink to="/calendar" class="nav-item" :title="collapsed ? 'Calendar' : ''">

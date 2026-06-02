@@ -472,6 +472,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "genai",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
@@ -483,6 +484,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

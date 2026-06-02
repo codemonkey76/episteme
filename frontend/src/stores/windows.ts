@@ -68,6 +68,7 @@ export const useWindowsStore = defineStore('windows', () => {
     component: Component
     props?: Record<string, unknown>
     width?: number
+    height?: number
   }) {
     if (config.key) {
       const existing = windows.value.find((w) => w.key === config.key)
@@ -78,6 +79,7 @@ export const useWindowsStore = defineStore('windows', () => {
       }
     }
     const w = Math.min(config.width ?? 520, window.innerWidth - 40)
+    const h = config.height ? Math.min(config.height, window.innerHeight - 60) : null
     const count = windows.value.filter((win) => !win.minimized).length
     windows.value.push({
       id: String(++nextId),
@@ -86,9 +88,9 @@ export const useWindowsStore = defineStore('windows', () => {
       component: markRaw(config.component),
       props: config.props ?? {},
       x: Math.max(60, (window.innerWidth - w) / 2 + count * 24),
-      y: Math.max(0, (window.innerHeight - 600) / 2 + count * 24),
+      y: Math.max(0, (window.innerHeight - (h ?? 600)) / 2 + count * 24),
       width: w,
-      height: null,
+      height: h,
       defaultWidth: w,
       minimized: false,
       zIndex: ++nextZ,

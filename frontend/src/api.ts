@@ -132,6 +132,88 @@ export const approvals = {
     fetch(BASE + `/approvals/${actionId}/reject`, { method: 'POST' }),
 }
 
+// Email (Microsoft Graph proxy)
+export interface MailFolder {
+  id: string
+  displayName: string
+  unreadItemCount: number
+  totalItemCount: number
+}
+
+export interface GraphEmailAddress {
+  name: string
+  address: string
+}
+
+export interface MessageSummary {
+  id: string
+  subject: string | null
+  from: { emailAddress: GraphEmailAddress }
+  toRecipients: { emailAddress: GraphEmailAddress }[]
+  bodyPreview: string
+  receivedDateTime: string
+  isRead: boolean
+  hasAttachments: boolean
+}
+
+export interface MessageDetail extends MessageSummary {
+  ccRecipients: { emailAddress: GraphEmailAddress }[]
+  body: { contentType: 'Text' | 'HTML'; content: string }
+}
+
+export interface SendEmailPayload {
+  to: string[]
+  subject?: string
+  body: string
+  reply_to_message_id?: string
+}
+
+export const email = {
+  listFolders: () =>
+    json<{ value: MailFolder[] }>('/email/folders'),
+  listMessages: (folderId: string, skip = 0, top = 30) =>
+    json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}`),
+  getMessage: (messageId: string) =>
+    json<MessageDetail>(`/email/messages/${messageId}`),
+  markRead: (messageId: string) =>
+    fetch(BASE + `/email/messages/${messageId}/read`, { method: 'PATCH' }),
+  send: (payload: SendEmailPayload) =>
+    fetch(BASE + '/email/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+}
+
+// Integrations
+export interface EmailConfigStatus {
+  configured: boolean
+  connected: boolean
+  tenant_id: string
+  client_id: string
+  connected_email: string | null
+}
+
+export interface SaveEmailConfig {
+  tenant_id: string
+  client_id: string
+  client_secret?: string
+}
+
+export const integrations = {
+  email: {
+    getConfig: () => json<EmailConfigStatus>('/integrations/email/config'),
+    saveConfig: (config: SaveEmailConfig) =>
+      fetch(BASE + '/integrations/email/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      }),
+    disconnect: () =>
+      fetch(BASE + '/integrations/email/config', { method: 'DELETE' }),
+  },
+}
+
 // Auth (stubs — wired once backend auth is implemented)
 export const auth = {
   changePassword: (_current: string, _next: string) =>

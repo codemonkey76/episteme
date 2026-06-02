@@ -11,6 +11,8 @@ use crate::state::AppState;
 
 mod approvals;
 mod chat;
+mod email;
+mod integrations;
 mod sessions;
 mod settings;
 
@@ -39,6 +41,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/:id/approvals", get(approvals::list_pending))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))
+        .route("/api/integrations/email/config", get(integrations::get_config))
+        .route("/api/integrations/email/config", post(integrations::save_config))
+        .route("/api/integrations/email/config", delete(integrations::disconnect))
+        .route("/api/integrations/email/connect", get(integrations::connect))
+        .route("/api/integrations/email/callback", get(integrations::callback))
+        .route("/api/email/folders", get(email::list_folders))
+        .route("/api/email/folders/:id/messages", get(email::list_messages))
+        .route("/api/email/messages/:id", get(email::get_message))
+        .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
+        .route("/api/email/send", post(email::send_email))
         .layer(cors)
         .with_state(state)
         .fallback_service(

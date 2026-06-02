@@ -4,6 +4,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod db;
 mod error;
+mod integrations;
 mod model_router;
 mod mcp_host;
 mod agent;

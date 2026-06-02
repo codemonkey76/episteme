@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import * as api from '../api'
 
 const props = defineProps<{ initialTab?: string }>()
@@ -21,6 +21,7 @@ onMounted(async () => {
   ])
   providers.value = pRes.providers
   mcpServers.value = mRes.mcp_servers
+  await loadEmailConfig()
 })
 
 async function saveProvider() {
@@ -32,6 +33,51 @@ async function saveProvider() {
 async function deleteProvider(name: string) {
   await api.settings.deleteProvider(name)
   providers.value = providers.value.filter((p) => p.name !== name)
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+const emailConfig = ref<api.EmailConfigStatus>({
+  configured: false, connected: false, tenant_id: '', client_id: '', connected_email: null,
+})
+const emailForm = ref({ tenant_id: '', client_id: '', client_secret: '' })
+const emailMsg = ref('')
+const emailSaving = ref(false)
+
+const callbackUri = computed(() => window.location.origin + '/api/integrations/email/callback')
+
+async function loadEmailConfig() {
+  const cfg = await api.integrations.email.getConfig()
+  emailConfig.value = cfg
+  emailForm.value.tenant_id = cfg.tenant_id
+  emailForm.value.client_id = cfg.client_id
+  emailForm.value.client_secret = ''
+}
+
+async function saveEmailConfig() {
+  emailSaving.value = true
+  emailMsg.value = ''
+  try {
+    await api.integrations.email.saveConfig({
+      tenant_id: emailForm.value.tenant_id,
+      client_id: emailForm.value.client_id,
+      client_secret: emailForm.value.client_secret || undefined,
+    })
+    await loadEmailConfig()
+    emailMsg.value = 'Credentials saved.'
+  } catch (e: unknown) {
+    emailMsg.value = e instanceof Error ? e.message : 'Save failed.'
+  } finally {
+    emailSaving.value = false
+  }
+}
+
+async function disconnectEmail() {
+  await api.integrations.email.disconnect()
+  await loadEmailConfig()
+}
+
+function connectEmail() {
+  window.location.href = '/api/integrations/email/connect'
 }
 
 // ── Account ───────────────────────────────────────────────────────────────────
@@ -218,8 +264,128 @@ async function logout() {
       <!-- Integrations -->
       <div v-else-if="activeTab === 'integrations'" class="tab-content">
         <h2>Integrations</h2>
-        <section>
-          <p class="empty">No integrations available yet.</p>
+
+        <!-- Microsoft 365 card -->
+        <section class="integration-card">
+          <div class="integration-header">
+            <div class="integration-identity">
+              <!-- Microsoft "four squares" logo -->
+              <svg width="20" height="20" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+              </svg>
+              <div>
+                <div class="integration-name">Microsoft 365</div>
+                <div class="integration-sub">Work / School account via Entra ID</div>
+              </div>
+            </div>
+            <div v-if="emailConfig.connected" class="badge badge-connected">
+              <span class="badge-dot"></span>
+              {{ emailConfig.connected_email ?? 'Connected' }}
+            </div>
+            <div v-else-if="emailConfig.configured" class="badge badge-configured">
+              Credentials saved
+            </div>
+            <div v-else class="badge badge-none">
+              Not configured
+            </div>
+          </div>
+
+          <!-- Setup instructions -->
+          <details class="instructions">
+            <summary>Setup instructions</summary>
+            <ol class="steps">
+              <li>
+                Sign in to <strong>portal.azure.com</strong> with your Microsoft 365 admin account.
+              </li>
+              <li>
+                Go to <strong>Microsoft Entra ID → App registrations → New registration</strong>.
+              </li>
+              <li>
+                Set a name (e.g. <em>Episteme</em>), and for <em>Supported account types</em> choose
+                <strong>"Accounts in any organizational directory (Any Microsoft Entra ID tenant)"</strong>.
+              </li>
+              <li>
+                Under <em>Redirect URI</em>, select platform <strong>Web</strong> and enter:
+                <code class="uri">{{ callbackUri }}</code>
+              </li>
+              <li>
+                Click <strong>Register</strong>. From the overview page copy:
+                <ul>
+                  <li><strong>Application (client) ID</strong> → paste into <em>Client ID</em> below</li>
+                  <li><strong>Directory (tenant) ID</strong> → paste into <em>Tenant ID</em> below</li>
+                </ul>
+              </li>
+              <li>
+                Go to <strong>Certificates &amp; secrets → Client secrets → New client secret</strong>.
+                Set a description and expiry, then copy the <strong>Value</strong> (not the Secret ID)
+                → paste into <em>Client Secret</em> below.
+              </li>
+              <li>
+                Go to <strong>API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
+                and add:
+                <ul>
+                  <li><code>Mail.Read</code></li>
+                  <li><code>Mail.ReadWrite</code></li>
+                  <li><code>Mail.Send</code></li>
+                  <li><code>User.Read</code></li>
+                </ul>
+              </li>
+              <li>
+                Click <strong>Grant admin consent</strong> for your organisation (requires admin role),
+                or ask your tenant administrator to do so.
+              </li>
+            </ol>
+          </details>
+
+          <!-- Credentials form -->
+          <form class="form" @submit.prevent="saveEmailConfig">
+            <label>
+              Tenant ID (Directory ID)
+              <input v-model="emailForm.tenant_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
+            </label>
+            <label>
+              Client ID (Application ID)
+              <input v-model="emailForm.client_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
+            </label>
+            <label>
+              Client Secret
+              <input
+                v-model="emailForm.client_secret"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="emailConfig.configured ? 'Leave blank to keep existing secret' : 'Paste secret value here'"
+              />
+            </label>
+            <p v-if="emailMsg" class="msg">{{ emailMsg }}</p>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary" :disabled="emailSaving">
+                {{ emailSaving ? 'Saving…' : 'Save credentials' }}
+              </button>
+              <button
+                v-if="emailConfig.configured && !emailConfig.connected"
+                type="button"
+                class="btn-connect"
+                @click="connectEmail"
+              >
+                Connect Microsoft 365 →
+              </button>
+              <button
+                v-if="emailConfig.connected"
+                type="button"
+                class="btn-danger"
+                @click="disconnectEmail"
+              >
+                Disconnect
+              </button>
+            </div>
+            <p v-if="emailConfig.configured && !emailConfig.connected" class="hint">
+              After saving credentials, click <em>Connect</em> to authorise via Microsoft login.
+              You'll be redirected back here when done.
+            </p>
+          </form>
         </section>
       </div>
 
@@ -485,4 +651,159 @@ input:focus, select:focus {
 .empty { color: #484848; font-size: 0.8125rem; }
 .msg { font-size: 0.775rem; color: #888; }
 .section-danger { border-top: 1px solid #222; padding-top: 1.25rem; }
+
+/* ── Integration cards ── */
+.integration-card {
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 0.5rem;
+  padding: 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.integration-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.integration-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.integration-name { font-size: 0.8125rem; color: #d0d0d0; font-weight: 500; }
+.integration-sub  { font-size: 0.72rem; color: #585858; margin-top: 0.1rem; }
+
+/* Status badges */
+.badge {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.badge-connected {
+  background: #0d2a1a;
+  color: #4ec97a;
+  border: 1px solid #1a4030;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.badge-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #4ec97a;
+  flex-shrink: 0;
+}
+.badge-configured {
+  background: #1a1a0d;
+  color: #b0a030;
+  border: 1px solid #3a3010;
+}
+.badge-none {
+  background: #1a1a1a;
+  color: #484848;
+  border: 1px solid #282828;
+}
+
+/* Setup instructions */
+.instructions {
+  border: 1px solid #222;
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.instructions summary {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.775rem;
+  color: #707070;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.instructions summary::-webkit-details-marker { display: none; }
+.instructions summary::before {
+  content: '▶ ';
+  font-size: 0.6rem;
+  opacity: 0.5;
+}
+details[open] .instructions summary::before,
+.instructions[open] summary::before {
+  content: '▼ ';
+}
+.instructions summary:hover { color: #a0a0a0; }
+
+.steps {
+  padding: 0.75rem 0.875rem 0.875rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.775rem;
+  color: #909090;
+  line-height: 1.5;
+  border-top: 1px solid #1e1e1e;
+}
+.steps li { padding-left: 0.25rem; }
+.steps strong { color: #c0c0c0; }
+.steps em { color: #a0a0a0; font-style: normal; }
+.steps ul {
+  margin-top: 0.35rem;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  list-style: disc;
+}
+.steps code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  background: #1a1a1a;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.2rem;
+  color: #a0c8ff;
+}
+.uri {
+  display: block;
+  margin-top: 0.3rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  background: #1a1a1a;
+  padding: 0.3rem 0.5rem;
+  border-radius: 0.25rem;
+  color: #a0c8ff;
+  word-break: break-all;
+}
+
+/* form-actions row */
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-connect {
+  background: #0d2a1a;
+  color: #4ec97a;
+  border: 1px solid #1a4030;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+  transition: background 0.12s;
+}
+.btn-connect:hover { background: #122e1e; }
+
+.hint {
+  font-size: 0.72rem;
+  color: #585858;
+  line-height: 1.5;
+}
 </style>
