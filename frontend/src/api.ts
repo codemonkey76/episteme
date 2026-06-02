@@ -47,7 +47,14 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
   })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`
+    try {
+      const body = await res.json()
+      if (body?.error) msg = body.error
+    } catch {}
+    throw new Error(msg)
+  }
   return res.json() as Promise<T>
 }
 
@@ -161,6 +168,11 @@ export interface MessageDetail extends MessageSummary {
   body: { contentType: 'Text' | 'HTML'; content: string }
 }
 
+export interface SearchResult {
+  value: MessageSummary[]
+  next_link: string | null
+}
+
 export interface SendEmailPayload {
   to: string[]
   subject?: string
@@ -177,6 +189,11 @@ export const email = {
     json<MessageDetail>(`/email/messages/${messageId}`),
   markRead: (messageId: string) =>
     fetch(BASE + `/email/messages/${messageId}/read`, { method: 'PATCH' }),
+  search: (q: string, nextLink?: string | null) => {
+    const params = new URLSearchParams({ q })
+    if (nextLink) params.set('next_link', nextLink)
+    return json<SearchResult>(`/email/search?${params}`)
+  },
   send: (payload: SendEmailPayload) =>
     fetch(BASE + '/email/send', {
       method: 'POST',
@@ -226,6 +243,8 @@ export const auth = {
 // Settings
 export const settings = {
   listProviders: () => json<{ providers: ProviderConfig[] }>('/settings/providers'),
+  listOllamaModels: (baseUrl: string) =>
+    json<{ models: string[] }>(`/settings/ollama/models?base_url=${encodeURIComponent(baseUrl)}`),
   upsertProvider: (p: ProviderConfig) =>
     fetch(BASE + '/settings/providers', {
       method: 'POST',

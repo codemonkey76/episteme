@@ -56,18 +56,16 @@ impl ModelRouter {
     /// Stream a completion for the given provider. Emits text `StreamChunk`s and a final
     /// done chunk that may carry tool calls if the model requested them.
     pub async fn stream(
-        &self,
-        provider_name: &str,
+        provider: &ProviderConfig,
         history: Vec<ChatMessage>,
         tools: Vec<Value>,
         tx: mpsc::Sender<StreamChunk>,
     ) -> Result<()> {
-        let provider = self
-            .get_provider(provider_name)
-            .ok_or_else(|| anyhow::anyhow!("provider '{provider_name}' not found"))?
-            .clone();
+        if provider.provider == "ollama" {
+            return stream_ollama(provider, history, tx).await;
+        }
 
-        let client = build_client(&provider);
+        let client = build_client(provider);
 
         let genai_messages = history_to_genai(history);
         let genai_tools = schemas_to_tools(tools);
@@ -103,6 +101,81 @@ impl ModelRouter {
 
         Ok(())
     }
+}
+
+async fn stream_ollama(
+    provider: &ProviderConfig,
+    history: Vec<ChatMessage>,
+    tx: mpsc::Sender<StreamChunk>,
+) -> Result<()> {
+    let base_url = provider.base_url.as_deref().unwrap_or("http://localhost:11434");
+    let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+
+    let messages: Vec<Value> = history
+        .into_iter()
+        .map(|m| {
+            let content = match m.content {
+                Value::String(s) => s,
+                other => serde_json::to_string(&other).unwrap_or_default(),
+            };
+            serde_json::json!({ "role": m.role, "content": content })
+        })
+        .collect();
+
+    let body = serde_json::json!({
+        "model": provider.model_id,
+        "messages": messages,
+        "stream": true,
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Ollama connection error: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let err: Value = response.json().await.unwrap_or(Value::Null);
+        anyhow::bail!("Ollama {status}: {}", err["error"].as_str().unwrap_or("unknown error"));
+    }
+
+    let mut byte_stream = response.bytes_stream();
+    let mut buf = String::new();
+
+    while let Some(chunk) = byte_stream.next().await {
+        buf.push_str(&String::from_utf8_lossy(&chunk?));
+
+        while let Some(newline) = buf.find('\n') {
+            let line = buf[..newline].trim().to_string();
+            buf = buf[newline + 1..].to_string();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let Ok(data) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+
+            if let Some(content) = data["message"]["content"].as_str() {
+                if !content.is_empty() {
+                    tx.send(StreamChunk { text: content.to_string(), done: false, tool_calls: None })
+                        .await?;
+                }
+            }
+
+            if data["done"].as_bool().unwrap_or(false) {
+                tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None }).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None }).await?;
+    Ok(())
 }
 
 fn build_client(provider: &ProviderConfig) -> Client {

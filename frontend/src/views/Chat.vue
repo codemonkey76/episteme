@@ -8,7 +8,8 @@ const store = useSessionsStore()
 const approvalsStore = useApprovalsStore()
 
 const input = ref('')
-const provider = ref('default')
+const providers = ref<api.ProviderConfig[]>([])
+const provider = ref('')
 const sending = ref(false)
 const error = ref<string | null>(null)
 const messagesEl = ref<HTMLElement>()
@@ -16,7 +17,13 @@ const messagesEl = ref<HTMLElement>()
 let abortController: AbortController | null = null
 
 onMounted(async () => {
-  await store.fetchSessions()
+  const [, pRes] = await Promise.all([
+    store.fetchSessions(),
+    api.settings.listProviders(),
+  ])
+  providers.value = pRes.providers
+  if (pRes.providers.length > 0) provider.value = pRes.providers[0].name
+
   if (store.sessions.length === 0) {
     const s = await store.createSession()
     await store.loadSession(s.id)
@@ -99,12 +106,15 @@ function onKeydown(e: KeyboardEvent) {
     </div>
     <div v-if="error" class="error-bar">{{ error }}</div>
     <div class="input-bar">
-      <input
+      <select
+        v-if="providers.length"
         v-model="provider"
-        class="provider-input"
-        placeholder="provider name"
+        class="provider-select"
         :disabled="sending"
-      />
+      >
+        <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+      </select>
+      <span v-else class="no-provider">No providers configured</span>
       <textarea
         v-model="input"
         @keydown="onKeydown"
@@ -132,7 +142,8 @@ function onKeydown(e: KeyboardEvent) {
 .message.assistant .content { background: #1a1a1a; padding: 0.6rem 0.8rem; border-radius: 0.5rem; }
 .error-bar { background: #5a2a2a; color: #e0c0c0; font-size: 0.8rem; padding: 0.4rem 1rem; }
 .input-bar { display: flex; gap: 0.5rem; padding: 0.75rem; border-top: 1px solid #2a2a2a; align-items: flex-end; }
-.provider-input { width: 8rem; background: #1a1a1a; color: inherit; border: 1px solid #2a2a2a; border-radius: 0.375rem; padding: 0.5rem; font-size: 0.8rem; }
+.provider-select { background: #1a1a1a; color: inherit; border: 1px solid #2a2a2a; border-radius: 0.375rem; padding: 0.5rem; font-size: 0.8rem; cursor: pointer; }
+.no-provider { font-size: 0.75rem; color: #585858; white-space: nowrap; }
 textarea { flex: 1; background: #1a1a1a; color: inherit; border: 1px solid #2a2a2a; border-radius: 0.375rem; padding: 0.5rem; font-family: inherit; font-size: 0.9rem; resize: none; }
 .btn-group { display: flex; flex-direction: column; gap: 0.25rem; }
 button { background: #2a4a7a; color: #e0e0e0; border: none; border-radius: 0.375rem; padding: 0.5rem 1rem; cursor: pointer; white-space: nowrap; }

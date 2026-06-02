@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::db;
-use crate::model_router::ChatMessage;
+use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::state::AppState;
 
 pub mod approval;
@@ -20,7 +20,7 @@ pub enum AgentEvent {
 pub async fn run_turn(
     state: Arc<AppState>,
     session_id: String,
-    provider_name: String,
+    provider: ProviderConfig,
     tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
     let raw_messages = db::messages::list_for_session(&state.db, &session_id).await?;
@@ -52,12 +52,11 @@ pub async fn run_turn(
         let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel(64);
 
         {
-            let state2 = Arc::clone(&state);
-            let provider = provider_name.clone();
+            let provider2 = provider.clone();
             let hist = history.clone();
             let schemas = tool_schemas.clone();
             tokio::spawn(async move {
-                if let Err(e) = state2.model_router.stream(&provider, hist, schemas, chunk_tx).await {
+                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, chunk_tx).await {
                     tracing::error!("model_router error: {e}");
                 }
             });

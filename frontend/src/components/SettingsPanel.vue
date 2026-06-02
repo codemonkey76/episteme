@@ -13,6 +13,35 @@ const mcpServers = ref<api.McpServerConfig[]>([])
 const newProvider = ref<api.ProviderConfig>({
   name: '', provider: 'anthropic', model_id: '', base_url: '', api_key: '',
 })
+const ollamaModels = ref<string[]>([])
+const ollamaFetching = ref(false)
+const ollamaFetchError = ref('')
+
+async function fetchOllamaModels() {
+  if (!newProvider.value.base_url) return
+  ollamaFetching.value = true
+  ollamaFetchError.value = ''
+  ollamaModels.value = []
+  try {
+    const res = await api.settings.listOllamaModels(newProvider.value.base_url)
+    ollamaModels.value = res.models
+    if (res.models.length > 0 && !newProvider.value.model_id) {
+      newProvider.value.model_id = res.models[0]
+    }
+  } catch (e: unknown) {
+    ollamaFetchError.value = e instanceof Error ? e.message : 'Could not reach Ollama'
+  } finally {
+    ollamaFetching.value = false
+  }
+}
+
+function onProviderTypeChange() {
+  ollamaModels.value = []
+  ollamaFetchError.value = ''
+  newProvider.value.model_id = ''
+  newProvider.value.base_url = ''
+  newProvider.value.api_key = ''
+}
 
 onMounted(async () => {
   const [pRes, mRes] = await Promise.all([
@@ -226,20 +255,56 @@ async function logout() {
         <section>
           <h3>Add / update provider</h3>
           <form class="form" @submit.prevent="saveProvider">
-            <label>Name <input v-model="newProvider.name" required /></label>
+            <label>Name <input v-model="newProvider.name" placeholder="e.g. my-ollama" required /></label>
             <label>
               Provider
-              <select v-model="newProvider.provider">
+              <select v-model="newProvider.provider" @change="onProviderTypeChange">
                 <option>anthropic</option>
                 <option>openai</option>
                 <option>ollama</option>
                 <option>openai_compatible</option>
+                <option>gemini</option>
+                <option>groq</option>
+                <option>deepseek</option>
               </select>
             </label>
-            <label>Model ID <input v-model="newProvider.model_id" required /></label>
-            <label>Base URL <input v-model="newProvider.base_url" /></label>
-            <label>API Key <input v-model="newProvider.api_key" type="password" /></label>
-            <button type="submit" class="btn-primary">Save</button>
+
+            <!-- Ollama: URL + discover -->
+            <template v-if="newProvider.provider === 'ollama'">
+              <label>
+                Ollama URL
+                <div class="input-row">
+                  <input v-model="newProvider.base_url" placeholder="http://192.168.1.x:11434" />
+                  <button type="button" class="btn-fetch" :disabled="!newProvider.base_url || ollamaFetching" @click="fetchOllamaModels">
+                    {{ ollamaFetching ? '…' : 'Fetch models' }}
+                  </button>
+                </div>
+              </label>
+              <p v-if="ollamaFetchError" class="msg error">{{ ollamaFetchError }}</p>
+              <label v-if="ollamaModels.length">
+                Model
+                <select v-model="newProvider.model_id">
+                  <option v-for="m in ollamaModels" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </label>
+              <label v-else-if="!ollamaFetching">
+                Model ID
+                <input v-model="newProvider.model_id" placeholder="Fetch models above, or type manually" />
+              </label>
+            </template>
+
+            <!-- All other providers -->
+            <template v-else>
+              <label>Model ID <input v-model="newProvider.model_id" required /></label>
+              <label v-if="newProvider.provider === 'openai_compatible'">
+                Base URL <input v-model="newProvider.base_url" placeholder="https://…/v1" />
+              </label>
+              <label v-if="newProvider.provider !== 'ollama'">
+                API Key <input v-model="newProvider.api_key" type="password" />
+              </label>
+            </template>
+
+            <button type="submit" class="btn-primary" :disabled="!newProvider.name || !newProvider.model_id">Save</button>
           </form>
         </section>
       </div>
@@ -650,6 +715,29 @@ input:focus, select:focus {
 /* ── Misc ── */
 .empty { color: #484848; font-size: 0.8125rem; }
 .msg { font-size: 0.775rem; color: #888; }
+.msg.error { color: #c06060; }
+
+.input-row {
+  display: flex;
+  gap: 0.375rem;
+}
+.input-row input { flex: 1; }
+
+.btn-fetch {
+  background: #1a1a2a;
+  color: #7090d0;
+  border: 1px solid #2a2a4a;
+  border-radius: 0.25rem;
+  padding: 0.375rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.775rem;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+.btn-fetch:hover:not(:disabled) { background: #222240; }
+.btn-fetch:disabled { opacity: 0.4; cursor: default; }
 .section-danger { border-top: 1px solid #222; padding-top: 1.25rem; }
 
 /* ── Integration cards ── */

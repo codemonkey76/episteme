@@ -5,7 +5,7 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 COPY frontend/ .
 # Output goes to ../backend/static relative to /app/frontend → /app/backend/static

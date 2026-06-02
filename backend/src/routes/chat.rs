@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::agent::{self, AgentEvent};
 use crate::db;
 use crate::error::{AppError, AppResult};
+use crate::model_router::ProviderConfig;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -40,12 +41,21 @@ pub async fn stream(
         .await
         .map_err(AppError::Internal)?;
 
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == req.provider)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", req.provider)))?;
+
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
     tokio::spawn(agent::run_turn(
         Arc::clone(&state),
         session_id,
-        req.provider,
+        provider,
         tx,
     ));
 

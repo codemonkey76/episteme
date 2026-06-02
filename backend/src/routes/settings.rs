@@ -1,8 +1,9 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::db;
@@ -58,6 +59,42 @@ pub async fn delete_provider(
         .await
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Ollama model discovery ---
+
+#[derive(Deserialize)]
+pub struct OllamaModelsQuery {
+    base_url: String,
+}
+
+pub async fn list_ollama_models(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<OllamaModelsQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let url = format!("{}/api/tags", params.base_url.trim_end_matches('/'));
+    let response = state
+        .http_client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Ollama returned {}",
+            response.status()
+        )));
+    }
+
+    let body: serde_json::Value = response.json().await.map_err(|e| AppError::Internal(e.into()))?;
+    let names: Vec<&str> = body["models"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|m| m["name"].as_str()).collect())
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::json!({ "models": names })))
 }
 
 // --- MCP Servers ---

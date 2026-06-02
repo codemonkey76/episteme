@@ -63,6 +63,66 @@ pub async fn list_folders(State(state): State<Arc<AppState>>) -> AppResult<Json<
     Ok(Json(res))
 }
 
+// GET /api/email/search?q=...&next_link=...&top=30
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    q: Option<String>,
+    next_link: Option<String>,
+    top: Option<u32>,
+}
+
+pub async fn search_messages(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchQuery>,
+) -> AppResult<Json<Value>> {
+    let token = microsoft::get_valid_token(&state)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let url = if let Some(ref next_link) = params.next_link {
+        if !next_link.starts_with("https://graph.microsoft.com/") {
+            return Err(AppError::Internal(anyhow::anyhow!("invalid next_link")));
+        }
+        next_link.clone()
+    } else {
+        let q = params.q.as_deref().unwrap_or("").replace('"', "");
+        let top = params.top.unwrap_or(30).min(50);
+        format!(
+            "{GRAPH}/me/messages?$search=%22{}%22&$select=id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments&$top={top}",
+            q
+        )
+    };
+
+    let response = state
+        .http_client
+        .get(&url)
+        .bearer_auth(&token)
+        .header("ConsistencyLevel", "eventual")
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+
+    let status = response.status();
+    let body: Value = response.json().await.map_err(|e| AppError::Internal(e.into()))?;
+
+    if !status.is_success() {
+        let msg = body["error"]["message"]
+            .as_str()
+            .unwrap_or("Graph API error")
+            .to_string();
+        tracing::error!("Graph search {status}: {msg}");
+        return Err(AppError::Internal(anyhow::anyhow!("Graph search {status}: {msg}")));
+    }
+
+    tracing::debug!("Graph search returned {} results", body["value"].as_array().map_or(0, |a| a.len()));
+
+    let next_link = body["@odata.nextLink"].as_str().map(|s| s.to_string());
+    Ok(Json(serde_json::json!({
+        "value": body["value"].as_array().cloned().unwrap_or_default(),
+        "next_link": next_link,
+    })))
+}
+
 // GET /api/email/folders/:id/messages?skip=0&top=30
 #[derive(Deserialize)]
 pub struct MessagesQuery {

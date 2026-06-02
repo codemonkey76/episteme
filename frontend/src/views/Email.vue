@@ -50,6 +50,9 @@ async function selectFolder(folder: api.MailFolder) {
   selectedFolder.value = folder
   selectedMessage.value = null
   view.value = 'none'
+  searchQuery.value = ''
+  searchResults.value = []
+  searchNextLink.value = null
   await loadMessages(folder.id)
 }
 
@@ -82,7 +85,9 @@ async function loadMessages(folderId: string, skip = 0) {
 }
 
 async function loadMore() {
-  if (selectedFolder.value) {
+  if (isSearching.value) {
+    await runSearch(searchQuery.value.trim(), searchNextLink.value)
+  } else if (selectedFolder.value) {
     await loadMessages(selectedFolder.value.id, messagesSkip.value)
   }
 }
@@ -228,6 +233,49 @@ onUnmounted(() => {
   document.body.style.userSelect = ''
 })
 
+// ── Search ────────────────────────────────────────────────────────────────────
+const searchQuery = ref('')
+const searchResults = ref<api.MessageSummary[]>([])
+const searchNextLink = ref<string | null>(null)
+const searchLoading = ref(false)
+const searchError = ref('')
+
+const isSearching = computed(() => searchQuery.value.trim().length > 0)
+const displayedMessages = computed(() => isSearching.value ? searchResults.value : messages.value)
+const displayedHasMore = computed(() => isSearching.value ? searchNextLink.value !== null : messagesHasMore.value)
+const displayedLoading = computed(() => isSearching.value ? searchLoading.value : loadingMessages.value)
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(searchQuery, (q) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!q.trim()) {
+    searchResults.value = []
+    searchNextLink.value = null
+    searchError.value = ''
+    return
+  }
+  searchTimer = setTimeout(() => runSearch(q.trim()), 350)
+})
+
+async function runSearch(q: string, nextLink?: string | null) {
+  searchLoading.value = true
+  searchError.value = ''
+  try {
+    const res = await api.email.search(q, nextLink)
+    if (nextLink) {
+      searchResults.value.push(...res.value)
+    } else {
+      searchResults.value = res.value
+    }
+    searchNextLink.value = res.next_link
+  } catch (e: unknown) {
+    searchError.value = e instanceof Error ? e.message : 'Search failed'
+  } finally {
+    searchLoading.value = false
+  }
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function formatDate(iso: string): string {
   const d = new Date(iso)
@@ -306,17 +354,30 @@ const replyBody = computed(() => {
     <div class="list-pane" :style="{ width: listPaneWidth + 'px' }">
       <div class="list-header">
         <span class="list-title">{{ selectedFolder?.displayName ?? '' }}</span>
+        <div class="search-wrap">
+          <svg class="search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            v-model="searchQuery"
+            class="search-input"
+            placeholder="Search"
+            autocomplete="off"
+          />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</button>
+        </div>
       </div>
-      <div v-if="messagesError" class="list-error">{{ messagesError }}</div>
-      <div v-else-if="loadingMessages && messages.length === 0" class="list-loading">
+      <div v-if="searchError" class="list-error">{{ searchError }}</div>
+      <div v-else-if="messagesError" class="list-error">{{ messagesError }}</div>
+      <div v-else-if="displayedLoading && displayedMessages.length === 0" class="list-loading">
         <span class="spinner" />
       </div>
-      <div v-else-if="messages.length === 0 && !loadingMessages" class="list-empty">
-        No messages.
+      <div v-else-if="displayedMessages.length === 0 && !displayedLoading" class="list-empty">
+        {{ isSearching ? 'No results.' : 'No messages.' }}
       </div>
       <div v-else class="message-list">
         <button
-          v-for="m in messages"
+          v-for="m in displayedMessages"
           :key="m.id"
           :class="['message-row', { unread: !m.isRead, selected: selectedMessage?.id === m.id }]"
           @click="selectMessage(m)"
@@ -328,8 +389,8 @@ const replyBody = computed(() => {
           <div class="msg-subject">{{ m.subject || '(no subject)' }}</div>
           <div class="msg-preview">{{ m.bodyPreview }}</div>
         </button>
-        <button v-if="messagesHasMore" class="load-more" :disabled="loadingMessages" @click="loadMore">
-          {{ loadingMessages ? 'Loading…' : 'Load more' }}
+        <button v-if="displayedHasMore" class="load-more" :disabled="displayedLoading" @click="loadMore">
+          {{ displayedLoading ? 'Loading…' : 'Load more' }}
         </button>
       </div>
     </div>
@@ -577,11 +638,48 @@ const replyBody = computed(() => {
 }
 
 .list-header {
-  padding: 0.6rem 0.875rem;
+  padding: 0.5rem 0.875rem;
   border-bottom: 1px solid #1e1e1e;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 .list-title { font-size: 0.8125rem; font-weight: 600; color: #c0c0c0; }
+
+.search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: #1a1a1a;
+  border: 1px solid #252525;
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.5rem;
+}
+.search-icon { color: #484848; flex-shrink: 0; }
+.search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: #c0c0c0;
+  font-size: 0.775rem;
+  font-family: inherit;
+  outline: none;
+  min-width: 0;
+}
+.search-input::placeholder { color: #404040; }
+.search-clear {
+  background: none;
+  border: none;
+  color: #484848;
+  cursor: pointer;
+  font-size: 0.65rem;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.1s;
+}
+.search-clear:hover { color: #909090; }
 
 .list-loading, .list-empty {
   flex: 1;
