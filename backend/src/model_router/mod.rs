@@ -155,6 +155,40 @@ async fn stream_ollama(
                     .unwrap_or_default();
                 return serde_json::json!({ "role": "user", "content": text, "images": images });
             }
+            // The assistant's own tool calls — replayed so the model knows it
+            // already acted (omitting these makes models repeat the call).
+            if m.role == "tool_call" {
+                let tool_calls: Vec<Value> = m
+                    .content
+                    .as_array()
+                    .map(|calls| {
+                        calls
+                            .iter()
+                            .map(|c| {
+                                serde_json::json!({
+                                    "function": {
+                                        "name": c["fn_name"],
+                                        "arguments": c["fn_arguments"],
+                                    }
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return serde_json::json!({ "role": "assistant", "content": "", "tool_calls": tool_calls });
+            }
+            // A tool result ({call_id, name?, content}) → Ollama's role:"tool".
+            if m.role == "tool" {
+                let content = match &m.content["content"] {
+                    Value::String(s) => s.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
+                let mut msg = serde_json::json!({ "role": "tool", "content": content });
+                if let Some(name) = m.content["name"].as_str() {
+                    msg["tool_name"] = Value::String(name.to_string());
+                }
+                return msg;
+            }
             let content = match m.content {
                 Value::String(s) => s,
                 other => serde_json::to_string(&other).unwrap_or_default(),
@@ -320,6 +354,25 @@ fn history_to_genai(history: Vec<ChatMessage>) -> Vec<GenaiMessage> {
                     return Some(GenaiMessage::user(MessageContent::from_parts(parts)));
                 }
             }
+            // The assistant's own tool calls — replayed so the model knows it
+            // already acted (omitting these makes models repeat the call).
+            if m.role == "tool_call" {
+                let calls: Vec<genai::chat::ToolCall> =
+                    serde_json::from_value(m.content).unwrap_or_default();
+                if calls.is_empty() {
+                    return None;
+                }
+                return Some(GenaiMessage::from(calls));
+            }
+            // A tool result ({call_id, name?, content}).
+            if m.role == "tool" {
+                let call_id = m.content["call_id"].as_str().unwrap_or_default().to_string();
+                let content = match &m.content["content"] {
+                    Value::String(s) => s.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
+                return Some(GenaiMessage::from(genai::chat::ToolResponse::new(call_id, content)));
+            }
             let text = match m.content {
                 Value::String(s) => s,
                 other => serde_json::to_string(&other).unwrap_or_default(),
@@ -328,7 +381,6 @@ fn history_to_genai(history: Vec<ChatMessage>) -> Vec<GenaiMessage> {
                 "user" => Some(GenaiMessage::user(text)),
                 "assistant" => Some(GenaiMessage::assistant(text)),
                 "system" => Some(GenaiMessage::system(text)),
-                // Tool result messages are deferred until agent loop is fully wired.
                 _ => None,
             }
         })

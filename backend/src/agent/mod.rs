@@ -28,9 +28,20 @@ pub async fn run_turn(
     let raw_messages = db::messages::list_for_session(&state.db, &session_id).await?;
     let mut history: Vec<ChatMessage> = raw_messages
         .into_iter()
-        .map(|m| ChatMessage {
-            role: m.role,
-            content: serde_json::from_str(&m.content).unwrap_or(Value::String(m.content)),
+        .map(|m| {
+            let content = serde_json::from_str(&m.content).unwrap_or(Value::String(m.content));
+            // Tool-result rows store the bare result; rewrap with the call id
+            // so resumed sessions replay the same shape the live loop builds.
+            if m.role == "tool" {
+                return ChatMessage {
+                    role: "tool".to_string(),
+                    content: serde_json::json!({
+                        "call_id": m.tool_call_id.unwrap_or_default(),
+                        "content": content,
+                    }),
+                };
+            }
+            ChatMessage { role: m.role, content }
         })
         .collect();
 
@@ -110,12 +121,16 @@ pub async fn run_turn(
         }
 
         let mut tool_calls_from_model = None;
+        // Text emitted this iteration — replayed into history alongside any
+        // tool calls so the next iteration has the model's full prior turn.
+        let mut iter_text = String::new();
 
         while let Some(chunk) = chunk_rx.recv().await {
             if chunk.done {
                 tool_calls_from_model = chunk.tool_calls;
             } else {
                 assistant_text.push_str(&chunk.text);
+                iter_text.push_str(&chunk.text);
                 tx.send(AgentEvent::Token(chunk.text)).await?;
             }
         }
@@ -148,63 +163,64 @@ pub async fn run_turn(
                 return Ok(());
             }
             Some(calls) => {
-                for call in calls {
-                    // Native tools run inline (no approval), and their result is
-                    // appended to the in-memory history so the model can use it on
-                    // the next iteration to compose its final answer.
-                    if crate::tools::is_native(&call.fn_name) {
-                        // Tell the UI a tool is running.
-                        let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
-                        let result =
-                            crate::tools::execute(&state, &call.fn_name, call.fn_arguments.clone()).await;
-                        let result_str = match result {
-                            Ok(v) => v.to_string(),
-                            Err(e) => format!("error: {e}"),
-                        };
-                        db::messages::insert(
-                            &state.db,
-                            &session_id,
-                            "tool",
-                            &serde_json::to_string(&result_str).unwrap_or_default(),
-                            None,
-                            Some(&call.call_id),
-                        )
-                        .await?;
-                        history.push(ChatMessage {
-                            role: "user".to_string(),
-                            content: Value::String(format!(
-                                "[tool result] {}: {}",
-                                call.fn_name, result_str
-                            )),
-                        });
-                        continue;
-                    }
+                // Keep any text the model emitted alongside the calls.
+                if !iter_text.trim().is_empty() {
+                    history.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: Value::String(iter_text.clone()),
+                    });
+                }
+                // Record the assistant's tool calls in history (and DB) so the
+                // next iteration sees that the model already acted — without
+                // this, models re-issue the same call and duplicate the action.
+                let calls_value = serde_json::to_value(&calls).unwrap_or_default();
+                db::messages::insert(
+                    &state.db,
+                    &session_id,
+                    "tool_call",
+                    &serde_json::to_string(&calls_value).unwrap_or_default(),
+                    None,
+                    None,
+                )
+                .await?;
+                history.push(ChatMessage { role: "tool_call".to_string(), content: calls_value });
 
-                    // MCP tools currently auto-execute like native ones — the
-                    // approval pause/resume path is a future feature (the
-                    // requires_approval flag on McpTool is already derived
-                    // from server annotations, ready for it).
+                for call in calls {
+                    // Tell the UI a tool is running.
                     let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
-                    // Resolve the peer under the lock, but run the (possibly
-                    // slow) tool call without holding it.
-                    let peer = {
-                        let mcp = state.mcp_host.lock().await;
-                        mcp.peer_for(&call.fn_name)
-                    };
-                    let result = match peer {
-                        Ok((peer, tool)) => {
-                            crate::mcp_host::call_on_peer(&peer, &tool, call.fn_arguments.clone())
-                                .await
+                    // Native tools run inline; MCP tools currently auto-execute
+                    // the same way — the approval pause/resume path is a future
+                    // feature (requires_approval on McpTool is already derived
+                    // from server annotations, ready for it).
+                    let result = if crate::tools::is_native(&call.fn_name) {
+                        crate::tools::execute(&state, &call.fn_name, call.fn_arguments.clone()).await
+                    } else {
+                        // Resolve the peer under the lock, but run the (possibly
+                        // slow) tool call without holding it.
+                        let peer = {
+                            let mcp = state.mcp_host.lock().await;
+                            mcp.peer_for(&call.fn_name)
+                        };
+                        match peer {
+                            Ok((peer, tool)) => {
+                                crate::mcp_host::call_on_peer(&peer, &tool, call.fn_arguments.clone())
+                                    .await
+                            }
+                            Err(e) => Err(e),
                         }
-                        Err(e) => Err(e),
                     };
 
                     let result_str = match result {
-                        Ok(v) => v.to_string(),
+                        Ok(v) => {
+                            state
+                                .log("tools", "info", format!("{} {}", call.fn_name, call.fn_arguments))
+                                .await;
+                            v.to_string()
+                        }
                         Err(e) => {
                             state
-                                .log("mcp", "error", format!("tool '{}' failed: {e}", call.fn_name))
+                                .log("tools", "error", format!("{} failed: {e}", call.fn_name))
                                 .await;
                             format!("error: {e}")
                         }
@@ -219,15 +235,15 @@ pub async fn run_turn(
                         Some(&call.call_id),
                     )
                     .await?;
-                    // Feed the result back into the in-memory history so the
-                    // model can use it on the next iteration (mirrors the
-                    // native-tool path above).
+                    // Feed the result back as a proper tool message so the model
+                    // can use it on the next iteration.
                     history.push(ChatMessage {
-                        role: "user".to_string(),
-                        content: Value::String(format!(
-                            "[tool result] {}: {}",
-                            call.fn_name, result_str
-                        )),
+                        role: "tool".to_string(),
+                        content: serde_json::json!({
+                            "call_id": call.call_id,
+                            "name": call.fn_name,
+                            "content": result_str,
+                        }),
                     });
                 }
                 // Loop again with the tool results appended.

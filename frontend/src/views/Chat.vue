@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, computed } from 'vue'
+import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
@@ -14,8 +14,10 @@ const approvalsStore = useApprovalsStore()
 const calStore = useCalendarStore()
 const tasksStore = useTasksStore()
 
-// Tool-result messages are model context, not user-facing — hide them.
-const visibleMessages = computed(() => store.messages.filter(m => m.role !== 'tool'))
+// Tool-call/result messages are model context, not user-facing — hide them.
+const visibleMessages = computed(() =>
+  store.messages.filter(m => m.role !== 'tool' && m.role !== 'tool_call'),
+)
 
 async function newSession() {
   const s = await store.createSession()
@@ -38,7 +40,14 @@ onMounted(async () => {
     api.settings.listProviders(),
   ])
   providers.value = pRes.providers
-  if (pRes.providers.length > 0) provider.value = pRes.providers[0].name
+  // Restore the last-used provider if it still exists; else first in list.
+  const saved = localStorage.getItem('chat-provider')
+  if (saved && pRes.providers.some(p => p.name === saved)) {
+    provider.value = saved
+  } else if (pRes.providers.length > 0) {
+    provider.value = pRes.providers[0].name
+  }
+  watch(provider, (v) => { if (v) localStorage.setItem('chat-provider', v) })
 
   // Keep a session set by a handoff (e.g. "Ask AI" from email); otherwise pick up
   // the most recent session, or start a fresh one.

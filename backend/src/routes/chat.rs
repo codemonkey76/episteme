@@ -53,12 +53,17 @@ pub async fn stream(
 
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
 
-    tokio::spawn(agent::run_turn(
-        Arc::clone(&state),
-        session_id,
-        provider,
-        tx,
-    ));
+    {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            // Surface failures — a silently dropped Err here looks like a dead
+            // stream to the client with no trace anywhere.
+            if let Err(e) = agent::run_turn(Arc::clone(&state), session_id, provider, tx).await {
+                tracing::error!("agent turn failed: {e}");
+                state.log("agent", "error", format!("turn failed: {e}")).await;
+            }
+        });
+    }
 
     let event_stream = stream::unfold(rx, |mut rx| async move {
         let event = match rx.recv().await? {
