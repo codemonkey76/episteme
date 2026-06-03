@@ -5,7 +5,9 @@ import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
 import { useCalendarStore } from '../stores/calendar'
 import { useTasksStore } from '../stores/tasks'
+import { useNotesStore } from '../stores/notes'
 import * as api from '../api'
+import { renderMarkdown } from '../lib/markdown'
 
 const logs = useLogsStore()
 
@@ -13,10 +15,11 @@ const store = useSessionsStore()
 const approvalsStore = useApprovalsStore()
 const calStore = useCalendarStore()
 const tasksStore = useTasksStore()
+const notesStore = useNotesStore()
 
 // Tool-call/result messages are model context, not user-facing — hide them.
 const visibleMessages = computed(() =>
-  store.messages.filter(m => m.role !== 'tool' && m.role !== 'tool_call'),
+  store.messages.filter(m => m.role !== 'tool'),
 )
 
 async function newSession() {
@@ -72,6 +75,7 @@ async function send() {
   if (!input.value.trim() || sending.value || !store.activeSession) return
   let calendarTouched = false
   let tasksTouched = false
+  let notesTouched = false
   const text = input.value.trim()
   input.value = ''
   sending.value = true
@@ -102,6 +106,7 @@ async function send() {
         // If a calendar/task tool ran this turn, refresh any open window.
         if (calendarTouched) { calStore.notifyChanged(); calendarTouched = false }
         if (tasksTouched) { tasksStore.notifyChanged(); tasksTouched = false }
+        if (notesTouched) { notesStore.notifyChanged(); notesTouched = false }
       },
       (actionId, toolName, toolArgs) => {
         logs.warn('Chat', `Tool approval required: ${toolName}`)
@@ -119,6 +124,7 @@ async function send() {
         scrollToBottom()
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
         if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
+        if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
       },
       abortController.signal,
     )
@@ -147,49 +153,6 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
 }
 
-// ── Minimal, XSS-safe markdown rendering for assistant messages ──────────────
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-function inlineMd(s: string): string {
-  const codes: string[] = []
-  s = s.replace(/`([^`]+)`/g, (_m, c) => { codes.push(c); return `${codes.length - 1}` })
-  s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
-  s = s.replace(/__([^_]+?)__/g, '<strong>$1</strong>')
-  s = s.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)\*/g, '$1<em>$2</em>')
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-  s = s.replace(/(\d+)/g, (_m, n) => `<code>${codes[+n]}</code>`)
-  return s
-}
-function renderMarkdown(src: string): string {
-  const lines = escapeHtml(src).split('\n')
-  const out: string[] = []
-  let i = 0
-  let list: 'ul' | 'ol' | null = null
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null } }
-  while (i < lines.length) {
-    const line = lines[i]
-    if (/^\s*```/.test(line)) {
-      closeList(); i++
-      const code: string[] = []
-      while (i < lines.length && !/^\s*```/.test(lines[i])) { code.push(lines[i]); i++ }
-      i++
-      out.push(`<pre class="md-pre"><code>${code.join('\n')}</code></pre>`)
-      continue
-    }
-    const h = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (h) { closeList(); out.push(`<div class="md-h md-h${Math.min(h[1].length, 3)}">${inlineMd(h[2])}</div>`); i++; continue }
-    const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
-    if (ul) { if (list !== 'ul') { closeList(); out.push('<ul class="md-ul">'); list = 'ul' } out.push(`<li>${inlineMd(ul[1])}</li>`); i++; continue }
-    const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
-    if (ol) { if (list !== 'ol') { closeList(); out.push('<ol class="md-ol">'); list = 'ol' } out.push(`<li>${inlineMd(ol[1])}</li>`); i++; continue }
-    if (/^\s*$/.test(line)) { closeList(); out.push('<br>'); i++; continue }
-    closeList(); out.push(`<div>${inlineMd(line)}</div>`); i++
-  }
-  closeList()
-  return out.join('\n')
-}
-
 // DB-stored content is JSON-encoded (a quoted string, or a multimodal object);
 // live-streamed content is plain text. Normalize both for display.
 function displayContent(c: string): string {
@@ -205,9 +168,31 @@ const TOOL_LABELS: Record<string, string> = {
   create_calendar_event: 'Creating calendar event',
   list_calendar_events: 'Checking the calendar',
   delete_calendar_event: 'Deleting calendar event',
+  list_tasks: 'Checking the to-do list',
+  create_task: 'Adding task',
+  update_task: 'Updating task',
+  complete_task: 'Completing task',
+  delete_task: 'Deleting task',
+  list_notes: 'Searching notes',
+  get_note: 'Reading note',
+  create_note: 'Saving note',
+  update_note: 'Updating note',
+  delete_note: 'Deleting note',
 }
 function toolLabel(name: string): string {
   return TOOL_LABELS[name] ?? `Using ${name}`
+}
+
+// A tool_call message is either a live chip (content = tool name) or a
+// DB-persisted row (JSON-encoded array of call objects). Label both.
+function toolCallLabels(content: string): string[] {
+  try {
+    const v = JSON.parse(content)
+    if (Array.isArray(v)) {
+      return v.map((c) => toolLabel(typeof c?.fn_name === 'string' ? c.fn_name : ''))
+    }
+  } catch { /* live chip: plain tool name */ }
+  return [toolLabel(content)]
 }
 </script>
 
@@ -220,7 +205,7 @@ function toolLabel(name: string): string {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
           </svg>
-          <span>{{ toolLabel(msg.content) }}…</span>
+          <span>{{ toolCallLabels(msg.content).join(', ') }}…</span>
         </div>
         <!-- Normal message -->
         <div v-else :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']">

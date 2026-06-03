@@ -15,6 +15,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Email (Microsoft 365)** — folders, message list with search, reading pane, flagged / replied-to indicators, attachment viewer, AI-drafted replies/forwards, and **AI auto-sort** that files low-priority mail into folders and flags what needs attention
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Tasks** — a to-do window (priorities, due dates, search) the AI can also drive: "remind me to buy milk tomorrow" creates a task via the task tools, and the window refreshes live when chat changes the list
+- **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
 - **Logs** — a live, filterable log window fed by both frontend and backend events
 - **Authentication** — a single admin account gates the whole app: a first-run setup screen creates the account (password hashed with argon2), and an HttpOnly session cookie protects every API route. Change your password or sign out from **Settings → Account**
@@ -25,7 +26,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 - **Approval resumption** — the approval framework exists but the resume-a-paused-turn path is stubbed, so native and MCP tools currently auto-execute (see Security). A tokio channel to resume a paused turn would re-enable human-in-the-loop gating; MCP tools already carry a `requires_approval` flag derived from their server's `readOnlyHint` annotation, ready for it
 - **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval would scale to large stores
-- **Notes** — placeholder window, not yet implemented
 
 ## Stack
 

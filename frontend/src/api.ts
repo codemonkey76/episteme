@@ -434,6 +434,35 @@ export const tasks = {
   remove: (id: string) => fetch(BASE + `/tasks/${id}`, { method: 'DELETE' }),
 }
 
+// Notes
+export interface Note {
+  id: string
+  title: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export const notes = {
+  list: (params?: { q?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.q) p.set('q', params.q)
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    return json<{ notes: Note[] }>(`/notes?${p}`)
+  },
+  create: (title: string, content: string) =>
+    json<{ note: Note }>('/notes', {
+      method: 'POST',
+      body: JSON.stringify({ title, content }),
+    }),
+  update: (id: string, patch: Partial<{ title: string; content: string }>) =>
+    json<{ note: Note }>(`/notes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) => fetch(BASE + `/notes/${id}`, { method: 'DELETE' }),
+}
+
 // Email auto-categorizer
 export interface CategorizerConfig {
   enabled: boolean
