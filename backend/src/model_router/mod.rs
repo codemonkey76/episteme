@@ -63,7 +63,7 @@ impl ModelRouter {
         tx: mpsc::Sender<StreamChunk>,
     ) -> Result<()> {
         if provider.provider == "ollama" {
-            return stream_ollama(provider, history, think, tx).await;
+            return stream_ollama(provider, history, tools, think, tx).await;
         }
 
         let client = build_client(provider);
@@ -102,11 +102,31 @@ impl ModelRouter {
 
         Ok(())
     }
+
+    /// Run a completion to the end and return the full text, discarding tool
+    /// calls. For one-shot uses (e.g. JSON classification) where streaming the
+    /// tokens to a client isn't needed.
+    pub async fn complete(provider: &ProviderConfig, history: Vec<ChatMessage>) -> Result<String> {
+        let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
+        let provider = provider.clone();
+        let task = tokio::spawn(async move {
+            Self::stream(&provider, history, Vec::new(), false, tx).await
+        });
+
+        let mut out = String::new();
+        while let Some(chunk) = rx.recv().await {
+            out.push_str(&chunk.text);
+        }
+        // Surface a model/transport error rather than silently returning a partial string.
+        task.await??;
+        Ok(out)
+    }
 }
 
 async fn stream_ollama(
     provider: &ProviderConfig,
     history: Vec<ChatMessage>,
+    tools: Vec<Value>,
     think: bool,
     tx: mpsc::Sender<StreamChunk>,
 ) -> Result<()> {
@@ -135,6 +155,25 @@ async fn stream_ollama(
     if !think {
         body["think"] = serde_json::json!(false);
     }
+    // Advertise tools in Ollama's format ({type, function:{name,description,parameters}}).
+    // Without this the model can't call tools and tends to hallucinate that it did.
+    let ollama_tools: Vec<Value> = tools
+        .iter()
+        .filter_map(|t| {
+            let name = t.get("name")?.as_str()?;
+            Some(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": t.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                    "parameters": t.get("input_schema").cloned().unwrap_or(serde_json::json!({ "type": "object" })),
+                }
+            }))
+        })
+        .collect();
+    if !ollama_tools.is_empty() {
+        body["tools"] = serde_json::json!(ollama_tools);
+    }
 
     let client = reqwest::Client::new();
     let response = client
@@ -152,6 +191,8 @@ async fn stream_ollama(
 
     let mut byte_stream = response.bytes_stream();
     let mut buf = String::new();
+    // Tool calls may arrive across chunks; accumulate and emit on the done chunk.
+    let mut pending_tool_calls: Vec<genai::chat::ToolCall> = Vec::new();
 
     while let Some(chunk) = byte_stream.next().await {
         buf.push_str(&String::from_utf8_lossy(&chunk?));
@@ -175,8 +216,27 @@ async fn stream_ollama(
                 }
             }
 
+            // Collect any tool calls the model requested.
+            if let Some(calls) = data["message"]["tool_calls"].as_array() {
+                for tc in calls {
+                    let func = &tc["function"];
+                    if let Some(name) = func["name"].as_str() {
+                        pending_tool_calls.push(genai::chat::ToolCall {
+                            call_id: format!("ollama_call_{}", pending_tool_calls.len()),
+                            fn_name: name.to_string(),
+                            fn_arguments: func["arguments"].clone(),
+                        });
+                    }
+                }
+            }
+
             if data["done"].as_bool().unwrap_or(false) {
-                tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None }).await?;
+                let tool_calls = if pending_tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(std::mem::take(&mut pending_tool_calls))
+                };
+                tx.send(StreamChunk { text: String::new(), done: true, tool_calls }).await?;
                 return Ok(());
             }
         }

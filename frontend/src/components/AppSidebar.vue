@@ -1,90 +1,47 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useWindowsStore } from '../stores/windows'
-import SettingsPanel from './SettingsPanel.vue'
-import Email from '../views/Email.vue'
-import Logs from '../views/Logs.vue'
-import Chat from '../views/Chat.vue'
-import Chats from '../views/Chats.vue'
-import Notes from '../views/Notes.vue'
-import Tasks from '../views/Tasks.vue'
-import Calendar from '../views/Calendar.vue'
 
 const winStore = useWindowsStore()
 const collapsed = ref(false)
+const sidebarEl = ref<HTMLElement>()
+
+let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   const saved = localStorage.getItem('sidebar-collapsed')
   if (saved !== null) collapsed.value = saved === 'true'
+
+  // Reflow docked windows whenever the sidebar's width changes (including
+  // smoothly through the collapse/expand transition) so they track the edge.
+  if (sidebarEl.value) {
+    resizeObserver = new ResizeObserver(() => winStore.reflow())
+    resizeObserver.observe(sidebarEl.value)
+  }
 })
+
+onUnmounted(() => resizeObserver?.disconnect())
 
 function toggle() {
   collapsed.value = !collapsed.value
   localStorage.setItem('sidebar-collapsed', String(collapsed.value))
 }
 
-function openEmail() {
-  winStore.open({
-    key: 'email',
-    title: 'Email',
-    component: Email,
-    width: 1100,
-    height: 660,
-  })
-}
-
-function openChats() {
-  winStore.open({ key: 'chats', title: 'History', component: Chats, width: 520, height: 480 })
-}
-
-function openChat() {
-  winStore.open({
-    key: 'chat',
-    title: 'Chat',
-    component: Chat,
-    width: 740,
-    height: 560,
-  })
-}
-
-function openNotes() {
-  winStore.open({ key: 'notes', title: 'Notes', component: Notes, width: 680, height: 520 })
-}
-
-function openTasks() {
-  winStore.open({ key: 'tasks', title: 'Tasks', component: Tasks, width: 620, height: 480 })
-}
-
-function openCalendar() {
-  winStore.open({ key: 'calendar', title: 'Calendar', component: Calendar, width: 800, height: 560 })
-}
-
-function openLogs() {
-  winStore.open({
-    key: 'logs',
-    title: 'Logs',
-    component: Logs,
-    width: 900,
-    height: 520,
-  })
-}
-
-function openSettings(tab: string) {
-  winStore.open({
-    key: 'settings',
-    title: 'Settings',
-    component: SettingsPanel,
-    props: { initialTab: tab },
-    width: 680,
-  })
-}
-
+const openEmail = () => winStore.openKey('email')
+const openChats = () => winStore.openKey('chats')
+const openChat = () => winStore.openKey('chat')
+const openNotes = () => winStore.openKey('notes')
+const openTasks = () => winStore.openKey('tasks')
+const openMemories = () => winStore.openKey('memories')
+const openCalendar = () => winStore.openKey('calendar')
+const openLogs = () => winStore.openKey('logs')
+const openSettings = (tab: string) => winStore.openKey('settings', { initialTab: tab })
 
 </script>
 
 <template>
   <!-- `sidebar` is a marker class queried by stores/windows.ts to measure the dock area -->
-  <aside :class="['sidebar flex flex-col bg-[#161616] border-r border-raised h-full transition-[width,min-width] duration-200 ease-[ease] overflow-hidden shrink-0', collapsed ? 'w-[52px] min-w-[52px]' : 'w-[200px] min-w-[200px]']">
+  <aside ref="sidebarEl" :class="['sidebar flex flex-col bg-[#161616] border-r border-raised h-full transition-[width,min-width] duration-200 ease-[ease] overflow-hidden shrink-0', collapsed ? 'w-[52px] min-w-[52px]' : 'w-[200px] min-w-[200px]']">
     <div class="flex items-center gap-2.5 px-3.5 py-3 border-b border-raised min-h-[48px] shrink-0">
       <button class="flex items-center justify-center bg-none border-none cursor-pointer text-[#707070] p-1 rounded shrink-0 transition-colors duration-150 hover:text-fg" title="Toggle sidebar" @click="toggle">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -166,6 +123,15 @@ function openSettings(tab: string) {
           <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
         </svg>
         <span v-if="!collapsed">Tasks</span>
+      </button>
+
+      <!-- Memories -->
+      <button class="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[#808080] no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg" :title="collapsed ? 'Memories' : ''" @click="openMemories">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a4.5 4.5 0 0 0-4.5 4.5c0 .5.08.98.23 1.42A3.5 3.5 0 0 0 6 14.5a3.5 3.5 0 0 0 1.5 2.87V18a2.5 2.5 0 0 0 5 0V4.5A2.5 2.5 0 0 0 12 2z"/>
+          <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5c0 .5-.08.98-.23 1.42A3.5 3.5 0 0 1 18 14.5a3.5 3.5 0 0 1-1.5 2.87V18a2.5 2.5 0 0 1-5 0"/>
+        </svg>
+        <span v-if="!collapsed">Memories</span>
       </button>
     </nav>
 

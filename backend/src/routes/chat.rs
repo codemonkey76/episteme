@@ -1,12 +1,13 @@
 use axum::{
     extract::{Path, State},
-    response::sse::{Event, Sse},
+    response::sse::{Event, KeepAlive, Sse},
     Json,
 };
 use futures::stream;
 use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::agent::{self, AgentEvent};
@@ -63,6 +64,8 @@ pub async fn stream(
         let event = match rx.recv().await? {
             AgentEvent::Token(text) => Event::default()
                 .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
+            AgentEvent::ToolCall { name } => Event::default()
+                .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
             AgentEvent::Done => {
                 Event::default().data(serde_json::json!({ "type": "done" }).to_string())
             }
@@ -81,5 +84,8 @@ pub async fn stream(
         Some((Ok::<Event, Infallible>(event), rx))
     });
 
-    Ok(Sse::new(event_stream))
+    // Keep-alive comments hold the connection open while a slow/thinking model
+    // produces no visible tokens; without them the idle stream gets reset
+    // ("NetworkError when attempting to fetch resource").
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }

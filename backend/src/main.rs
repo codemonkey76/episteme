@@ -2,10 +2,14 @@ use anyhow::Result;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod calendar;
+mod categorizer;
 mod db;
 mod error;
 mod integrations;
+mod memory;
 mod model_router;
+mod tools;
 mod mcp_host;
 mod agent;
 mod routes;
@@ -31,6 +35,7 @@ async fn main() -> Result<()> {
     let pool = db::init(&db_url).await?;
 
     let state = Arc::new(AppState::new(pool));
+    categorizer::spawn_worker(state.clone());
     let app = routes::router(state);
 
     let addr = std::env::var("BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());

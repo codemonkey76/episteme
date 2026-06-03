@@ -31,6 +31,17 @@ export const useSessionsStore = defineStore('sessions', () => {
     messages.value.push(msg)
   }
 
+  // Display-only indicator that the AI ran a tool (not persisted).
+  function appendToolCall(name: string) {
+    messages.value.push({
+      id: crypto.randomUUID(),
+      session_id: activeSession.value?.id ?? '',
+      role: 'tool_call',
+      content: name,
+      created_at: new Date().toISOString(),
+    })
+  }
+
   function appendToken(text: string) {
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
@@ -46,5 +57,5 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  return { sessions, activeSession, messages, fetchSessions, createSession, loadSession, appendMessage, appendToken }
+  return { sessions, activeSession, messages, fetchSessions, createSession, loadSession, appendMessage, appendToolCall, appendToken }
 })

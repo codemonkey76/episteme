@@ -4,20 +4,15 @@ import { useWindowsStore } from './stores/windows'
 import { useLogsStore } from './stores/logs'
 import AppSidebar from './components/AppSidebar.vue'
 import AppWindow from './components/AppWindow.vue'
-import Chat from './views/Chat.vue'
 
 const winStore = useWindowsStore()
 useLogsStore().init()
 
 onMounted(() => {
-  winStore.open({
-    key: 'chat',
-    title: 'Chat',
-    component: Chat,
-    width: 740,
-    height: 560,
-    initialDock: 'fill',
-  })
+  // Restore the previous session's window layout; on first run, open Chat filled.
+  if (!winStore.hydrate()) {
+    winStore.openKey('chat', undefined, 'fill')
+  }
 })
 </script>
 

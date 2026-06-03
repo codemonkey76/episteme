@@ -10,10 +10,12 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
 mod approvals;
+mod calendar;
 mod chat;
-mod email;
+pub(crate) mod email;
 mod integrations;
 mod logs;
+mod memories;
 mod sessions;
 mod settings;
 
@@ -56,9 +58,21 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/folders/:id/messages", get(email::list_messages))
         .route("/api/email/search", get(email::search_messages))
         .route("/api/email/messages/:id", get(email::get_message))
+        .route("/api/email/messages/:id/attachments", get(email::list_attachments))
+        .route("/api/email/messages/:id/attachments/:att_id/raw", get(email::get_attachment_raw))
         .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
         .route("/api/email/send", post(email::send_email))
         .route("/api/email/ai-draft", post(email::ai_draft))
+        .route("/api/email/categorizer", get(email::get_categorizer))
+        .route("/api/email/categorizer", put(email::put_categorizer))
+        .route("/api/email/categorizer/run", post(email::run_categorizer))
+        .route("/api/memories", get(memories::list))
+        .route("/api/memories", post(memories::create))
+        .route("/api/memories/:id", put(memories::update))
+        .route("/api/memories/:id", delete(memories::delete))
+        .route("/api/calendar/events", get(calendar::list_events))
+        .route("/api/calendar/events", post(calendar::create_event))
+        .route("/api/calendar/events/:id", delete(calendar::delete_event))
         .layer(cors)
         .with_state(state)
         .fallback_service(

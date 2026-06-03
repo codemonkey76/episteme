@@ -6,19 +6,24 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 ## What's built
 
-- **Streaming chat** — server-sent token streaming over a persistent axum/SSE backend
+- **Streaming chat** — server-sent token streaming over a persistent axum/SSE backend, with keep-alive so slow local models don't drop the connection; assistant replies are persisted and survive a refresh
 - **Sessions** — conversations persisted to SQLite; resume any past session
-- **Model router** — route to Anthropic, OpenAI, Ollama, vLLM, or any OpenAI-compatible endpoint from a single UI; switching is choosing a name from a list
-- **Agent loop** — the model can call tools, inspect results, and loop until it reaches a final answer
-- **Approvals** — mutating tool calls are paused and surfaced for explicit user confirmation before they execute; read-only tools run immediately
-- **Settings** — manage model providers and MCP servers through the UI (no recompile required)
+- **Model router** — route to Anthropic, OpenAI, Ollama, Gemini, Groq, DeepSeek, or any OpenAI-compatible endpoint from a single UI; switching is choosing a name from a list
+- **Agent loop with native tools** — the model can call built-in tools (e.g. calendar management), inspect the result, and loop until it reaches a final answer; tool activity is surfaced live in the chat. Works with Ollama function-calling too
+- **Persistent memory** — durable facts and preferences are auto-extracted from conversations (and addable by hand) and injected into future chats, so the assistant improves over time. The **Memories** window lets you view, filter, edit, and delete them
+- **Email (Microsoft 365)** — folders, message list with search, reading pane, flagged / replied-to indicators, attachment viewer, AI-drafted replies/forwards, and **AI auto-sort** that files low-priority mail into folders and flags what needs attention
+- **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
+- **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
+- **Logs** — a live, filterable log window fed by both frontend and backend events
+- **Settings** — manage model providers, MCP servers, the Microsoft 365 connection, and auto-sort through the UI (no recompile required)
 - **Docker** — multi-stage build produces a single static binary + assets; `docker compose up` for a self-contained deployment
 
 ## What's next
 
-- **MCP host** — the `rmcp` subprocess transport is stubbed; wiring it completes the tool-use path (Phase 3)
-- **Email integration** — read + draft MCP server, inbox triage and reply drafting (Phase 4)
-- **Approval resumption** — tokio channel to resume a paused agent turn seamlessly without a follow-up request (Phase 5)
+- **MCP host** — the `rmcp` subprocess transport is stubbed; native tools work today, wiring MCP adds third-party tool servers
+- **Approval resumption** — the approval framework exists but the resume-a-paused-turn path is stubbed, so native tools currently auto-execute (see Security). A tokio channel to resume a paused turn would re-enable human-in-the-loop gating
+- **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval would scale to large stores
+- **Notes / Tasks** — placeholder windows, not yet implemented
 
 ## Stack
 
@@ -84,16 +89,15 @@ Environment variables (`.env` or shell):
 | `ANTHROPIC_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 | `OPENAI_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 
-Model providers and MCP servers are configured in the UI and stored in SQLite, not in `.env`.
+Model providers, MCP servers, and the Microsoft 365 integration (email + calendar) are configured in the UI and stored in SQLite, not in `.env`. Microsoft 365 uses delegated OAuth — set it up under **Settings → Integrations** (the panel includes the exact Azure app-registration steps and Graph permissions). If you connected before calendar support was added, disconnect and reconnect to grant the `Calendars.ReadWrite` scope.
 
 ## Security
 
 Episteme can hold API tokens and (eventually) execute shell commands. Treat it as a privileged admin tool:
 
 - **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy (Caddy, nginx, Traefik) for anything beyond localhost.
-- **Auth is on by default.** Never disable it.
-- **Mutations require approval.** No tool that changes external state runs without you confirming it first.
-- **Keep secrets out of version control.** API keys belong in `.env` (gitignored), not committed.
+- **Native tools currently auto-execute.** The approval/resume flow is not yet wired, so when you ask the AI to create a calendar event (or auto-sort runs), it acts immediately. Every action is recorded in the Logs window, which is the audit surface for now. Re-enabling approval gating is on the roadmap.
+- **Keep secrets out of version control.** API keys and OAuth client secrets belong in `.env`/the SQLite DB (both gitignored), not committed.
 
 ## Architecture
 

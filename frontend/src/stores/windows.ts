@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref, markRaw } from 'vue'
+import { ref, markRaw, watch } from 'vue'
 import type { Component } from 'vue'
+import { windowRegistry } from '../windows/registry'
 
 export type DockAnchor = 'left' | 'right' | 'top' | 'bottom' | 'fill'
 
@@ -166,6 +167,54 @@ export function snapPreviewForMouse(
   return null
 }
 
+// ── Layout persistence ─────────────────────────────────────────────────────────
+const STORAGE_KEY = 'window-layout'
+
+// Serializable subset of a window. The `component` is rebuilt from the registry
+// by `key` on load, so it (and the title) are intentionally not stored.
+interface SavedWindow {
+  key: string
+  props: Record<string, unknown>
+  x: number
+  y: number
+  width: number
+  height: number | null
+  defaultWidth: number
+  zIndex: number
+  snapped: boolean
+  dockAnchor: DockAnchor | null
+  dockOrder: number
+}
+
+function toSaved(wins: WinState[]): SavedWindow[] {
+  return wins
+    .filter(w => w.key && windowRegistry[w.key])
+    .map(w => ({
+      key: w.key as string,
+      props: w.props,
+      x: w.x,
+      y: w.y,
+      width: w.width,
+      height: w.height,
+      defaultWidth: w.defaultWidth,
+      zIndex: w.zIndex,
+      snapped: w.snapped,
+      dockAnchor: w.dockAnchor,
+      dockOrder: w.dockOrder,
+    }))
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+function persist(wins: WinState[]) {
+  // Debounced: drags/resizes mutate state rapidly; one write per idle frame is plenty.
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSaved(wins)))
+    } catch { /* storage full / unavailable — layout just won't persist */ }
+  }, 200)
+}
+
 export const useWindowsStore = defineStore('windows', () => {
   const windows = ref<WinState[]>([])
   const snapPreview = ref<SnapPreview | null>(null)
@@ -213,6 +262,23 @@ export const useWindowsStore = defineStore('windows', () => {
       win.dockOrder  = Date.now()
       relayout(windows.value)
     }
+  }
+
+  // Open a registered window by key, pulling its title/component/defaults from
+  // the registry. `propsOverride` varies props (e.g. Settings tab); `dock`
+  // overrides the registry's initial dock (used to fill Chat on first run).
+  function openKey(key: string, propsOverride?: Record<string, unknown>, dock?: DockAnchor) {
+    const def = windowRegistry[key]
+    if (!def) return
+    open({
+      key,
+      title: def.title,
+      component: def.component,
+      props: propsOverride ?? def.props,
+      width: def.width,
+      height: def.height,
+      initialDock: dock ?? def.initialDock,
+    })
   }
 
   function close(id: string) {
@@ -271,5 +337,75 @@ export const useWindowsStore = defineStore('windows', () => {
     snapPreview.value = preview
   }
 
-  return { windows, snapPreview, open, close, focus, move, snap, unsnap, setSize, setSnapPreview }
+  // Re-derive docked window geometry from the current content area. Call after
+  // anything that changes the available space without firing a window resize —
+  // e.g. the sidebar collapsing/expanding.
+  function reflow() {
+    relayout(windows.value)
+  }
+
+  // Rebuild the saved window layout from localStorage. Returns true when a saved
+  // layout exists (even an empty one), so the caller only falls back to the
+  // default Chat on a genuine first run.
+  function hydrate(): boolean {
+    let saved: SavedWindow[]
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw === null) return false           // nothing ever saved → first run
+      saved = JSON.parse(raw)
+      if (!Array.isArray(saved)) return false  // corrupt → treat as first run
+    } catch {
+      return false
+    }
+
+    const restored: WinState[] = []
+    for (const s of saved) {
+      const def = windowRegistry[s.key]
+      if (!def) continue // window type no longer exists — skip it
+      restored.push({
+        id: String(++nextId),
+        key: s.key,
+        title: def.title,
+        component: markRaw(def.component),
+        props: s.props ?? def.props ?? {},
+        x: s.x,
+        y: s.y,
+        width: s.width,
+        height: s.height,
+        defaultWidth: s.defaultWidth || def.width || s.width,
+        zIndex: s.zIndex,
+        snapped: s.snapped,
+        dockAnchor: s.dockAnchor,
+        dockOrder: s.dockOrder,
+      })
+    }
+    // A present-but-empty layout means every window was closed last session —
+    // honor that blank state instead of falling back to the default Chat.
+    nextZ = restored.reduce((m, w) => Math.max(m, w.zIndex), nextZ) + 1
+    windows.value = restored
+
+    // Docked windows re-derive their geometry from the current viewport;
+    // floating ones are clamped so a smaller screen doesn't push them off-edge.
+    relayout(windows.value)
+    for (const w of windows.value) {
+      if (w.snapped) continue
+      w.x = Math.max(0, Math.min(w.x, window.innerWidth - 80))
+      w.y = Math.max(0, Math.min(w.y, window.innerHeight - 60))
+      if (w.height !== null) w.height = Math.min(w.height, window.innerHeight - 8)
+    }
+    return true
+  }
+
+  // Reflow docked windows when the viewport changes (e.g. moving the app to a
+  // shorter monitor). Without this a `fill`/`left`/`right` window keeps the
+  // height derived from the old viewport and spills below the visible area,
+  // hiding its bottom content.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', () => relayout(windows.value))
+  }
+
+  // Persist the layout whenever windows change (open/close/move/resize/dock).
+  watch(windows, (wins) => persist(wins), { deep: true })
+
+  return { windows, snapPreview, open, openKey, close, focus, move, snap, unsnap, setSize, setSnapPreview, hydrate, reflow }
 })

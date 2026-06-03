@@ -2,7 +2,6 @@
 import { onMounted } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import { useWindowsStore } from '../stores/windows'
-import Chat from './Chat.vue'
 import * as api from '../api'
 
 const store = useSessionsStore()
@@ -12,7 +11,7 @@ onMounted(() => store.fetchSessions())
 
 async function open(id: string) {
   await store.loadSession(id)
-  winStore.open({ key: 'chat', title: 'Chat', component: Chat, width: 740, height: 560, initialDock: 'fill' })
+  winStore.openKey('chat', undefined, 'fill')
 }
 
 async function remove(id: string) {

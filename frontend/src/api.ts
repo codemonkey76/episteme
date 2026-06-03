@@ -10,7 +10,8 @@ export interface Session {
 export interface Message {
   id: string
   session_id: string
-  role: 'user' | 'assistant' | 'tool'
+  // 'tool_call' is a client-only, display-only indicator (not persisted).
+  role: 'user' | 'assistant' | 'tool' | 'tool_call'
   content: string
   tool_calls?: string
   tool_call_id?: string
@@ -86,6 +87,7 @@ export async function streamChat(
   onToken: (text: string) => void,
   onDone: () => void,
   onApproval: (actionId: string, toolName: string, toolArgs: unknown) => void,
+  onTool: (name: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${BASE}/sessions/${sessionId}/chat`, {
@@ -114,11 +116,13 @@ export async function streamChat(
       const raw = line.slice(6).trim()
       if (!raw || raw === '[DONE]') continue
 
-      let data: { type: string; text?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
+      let data: { type: string; text?: string; name?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
       try { data = JSON.parse(raw) } catch { continue }
 
       if (data.type === 'token' && data.text != null) {
         onToken(data.text)
+      } else if (data.type === 'tool' && data.name) {
+        onTool(data.name)
       } else if (data.type === 'done') {
         onDone()
         return
@@ -161,6 +165,10 @@ export interface MessageSummary {
   receivedDateTime: string
   isRead: boolean
   hasAttachments: boolean
+  // "notFlagged" | "flagged" | "complete" (present when `flag` was selected)
+  flag?: { flagStatus?: string }
+  // PidTagLastVerbExecuted (0x1081): "102"=reply, "103"=reply-all, "104"=forward
+  singleValueExtendedProperties?: { id: string; value: string }[]
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -182,9 +190,22 @@ export interface SendEmailPayload {
   action?: 'reply' | 'replyAll' | 'forward'
 }
 
+export interface Attachment {
+  id: string
+  name: string
+  contentType: string
+  size: number
+  isInline: boolean
+}
+
 export const email = {
   listFolders: () =>
     json<{ value: MailFolder[] }>('/email/folders'),
+  listAttachments: (messageId: string) =>
+    json<{ value: Attachment[] }>(`/email/messages/${encodeURIComponent(messageId)}/attachments`),
+  // Direct URL for an attachment's bytes — usable as an <img>/<iframe> src or a download link.
+  attachmentUrl: (messageId: string, attId: string) =>
+    `${BASE}/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/raw`,
   listMessages: (folderId: string, skip = 0, top = 30) =>
     json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}`),
   getMessage: (messageId: string) =>
@@ -243,6 +264,103 @@ export async function streamAiDraft(
       else if (data.type === 'error') throw new Error(data.message || 'draft failed')
     }
   }
+}
+
+// Calendar (Microsoft Graph)
+export interface CalendarEvent {
+  id: string
+  subject: string
+  start: string // RFC3339 UTC
+  end: string
+  location: string
+  is_all_day: boolean
+  web_link: string
+}
+
+export interface NewCalendarEvent {
+  subject: string
+  start: string // RFC3339 (with offset)
+  end?: string
+  is_all_day?: boolean
+  location?: string
+  body?: string
+  reminder_minutes_before?: number
+}
+
+export const calendar = {
+  list: (params?: { start?: string; end?: string }) => {
+    const p = new URLSearchParams()
+    if (params?.start) p.set('start', params.start)
+    if (params?.end) p.set('end', params.end)
+    return json<{ events: CalendarEvent[] }>(`/calendar/events?${p}`)
+  },
+  create: (payload: NewCalendarEvent) =>
+    json<{ event: CalendarEvent }>('/calendar/events', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  remove: (id: string) =>
+    fetch(BASE + `/calendar/events/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+// Memories
+export interface Memory {
+  id: string
+  content: string
+  category: string
+  source: string
+  session_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export const memories = {
+  list: (params?: { category?: string; q?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.category && params.category !== 'All') p.set('category', params.category)
+    if (params?.q) p.set('q', params.q)
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    return json<{ memories: Memory[] }>(`/memories?${p}`)
+  },
+  create: (content: string, category: string) =>
+    json<{ memory: Memory }>('/memories', {
+      method: 'POST',
+      body: JSON.stringify({ content, category }),
+    }),
+  update: (id: string, content: string, category: string) =>
+    fetch(BASE + `/memories/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, category }),
+    }),
+  remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
+}
+
+// Email auto-categorizer
+export interface CategorizerConfig {
+  enabled: boolean
+  provider: string
+  interval_secs: number
+  batch_limit: number
+}
+
+export interface CategorizerRunSummary {
+  scanned: number
+  moved: number
+  flagged: number
+  skipped: number
+  message: string
+}
+
+export const emailCategorizer = {
+  getConfig: () => json<CategorizerConfig>('/email/categorizer'),
+  saveConfig: (cfg: CategorizerConfig) =>
+    json<CategorizerConfig>('/email/categorizer', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
+  runNow: () =>
+    json<CategorizerRunSummary>('/email/categorizer/run', { method: 'POST' }),
 }
 
 // Integrations

@@ -2,8 +2,11 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
+import { useWindowsStore } from '../stores/windows'
+import AttachmentViewer from '../components/AttachmentViewer.vue'
 
 const logs = useLogsStore()
+const windows = useWindowsStore()
 
 // ── Connection state ──────────────────────────────────────────────────────────
 const connected = ref(false)
@@ -49,8 +52,10 @@ async function loadFolders() {
       return ai - bi
     })
     logs.info('Email', `Loaded ${folders.value.length} folders`)
-    const inbox = folders.value.find(f => f.displayName === 'Inbox') ?? folders.value[0] ?? null
-    if (inbox) selectFolder(inbox)
+    // Preserve the current selection across a refresh; fall back to Inbox on first load.
+    const current = selectedFolder.value && folders.value.find(f => f.id === selectedFolder.value!.id)
+    const target = current ?? folders.value.find(f => f.displayName === 'Inbox') ?? folders.value[0] ?? null
+    if (target) selectFolder(target)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Failed to load folders'
     folderError.value = msg
@@ -119,6 +124,37 @@ const selectedMessage = ref<api.MessageDetail | null>(null)
 const loadingMessage = ref(false)
 const showReply = ref(false)
 const iframeEl = ref<HTMLIFrameElement | null>(null)
+// Hides the HTML body until its height has been measured, so the user doesn't
+// see the iframe render at the placeholder height and then jump to full size.
+const bodyReady = ref(false)
+
+// Attachments for the open message. Inline ones are embedded in the HTML body,
+// so only non-inline attachments are surfaced as chips.
+const attachments = ref<api.Attachment[]>([])
+const visibleAttachments = computed(() => attachments.value.filter(a => !a.isInline))
+
+function openAttachment(att: api.Attachment) {
+  const m = selectedMessage.value
+  if (!m) return
+  windows.open({
+    key: `attachment:${att.id}`,
+    title: att.name,
+    component: AttachmentViewer,
+    props: {
+      url: api.email.attachmentUrl(m.id, att.id),
+      name: att.name,
+      contentType: att.contentType,
+    },
+    width: 760,
+    height: 620,
+  })
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
 
 // Microsoft Graph returns body.contentType lowercase ("html"/"text"), so
 // compare case-insensitively rather than against a fixed-case literal.
@@ -130,9 +166,17 @@ async function selectMessage(summary: api.MessageSummary) {
   showReply.value = false
   view.value = 'message'
   loadingMessage.value = true
+  attachments.value = []
   try {
     const detail = await api.email.getMessage(summary.id)
     selectedMessage.value = detail
+    // Fetch attachment metadata in the background so the body renders right away.
+    if (summary.hasAttachments) {
+      api.email
+        .listAttachments(summary.id)
+        .then(r => { if (selectedMessage.value?.id === summary.id) attachments.value = r.value })
+        .catch(() => { /* attachments are non-critical */ })
+    }
     if (!summary.isRead) {
       api.email.markRead(summary.id)
       const idx = messages.value.findIndex(m => m.id === summary.id)
@@ -157,11 +201,14 @@ function onIframeLoad() {
       el.style.height = h + 16 + 'px'
     }
   } catch {}
+  bodyReady.value = true
 }
 
 watch(selectedMessage, () => {
-  // Reset to a small placeholder before the new body loads so the previous
-  // (possibly tall) email's height doesn't linger; onIframeLoad re-measures.
+  // Hide and reset to a small placeholder before the new body loads so the
+  // previous (possibly tall) email's height doesn't linger; onIframeLoad
+  // re-measures and reveals it at the correct height.
+  bodyReady.value = false
   nextTick(() => {
     if (iframeEl.value) iframeEl.value.style.height = '200px'
   })
@@ -283,6 +330,14 @@ async function sendEmail() {
     if (!showReply.value) {
       view.value = 'none'
     } else {
+      // Optimistically mark the original as replied/forwarded so the list icon
+      // updates immediately (Graph sets the real value server-side).
+      const verb = replyMode.value === 'forward' ? '104' : '103'
+      const id = selectedMessage.value?.id
+      for (const list of [messages.value, searchResults.value]) {
+        const item = list.find(x => x.id === id)
+        if (item) item.singleValueExtendedProperties = [{ id: 'Integer 0x1081', value: verb }]
+      }
       showReply.value = false
     }
     composeForm.value = { to: '', subject: '', body: '' }
@@ -396,6 +451,20 @@ function displayName(ea: api.GraphEmailAddress): string {
   return ea.name || ea.address
 }
 
+function isFlagged(m: api.MessageSummary): boolean {
+  return m.flag?.flagStatus === 'flagged'
+}
+
+// Last action taken on the message, from PidTagLastVerbExecuted (0x1081):
+// 102 = reply, 103 = reply-all (both shown as "reply"), 104 = forward.
+function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
+  const p = m.singleValueExtendedProperties?.find(x => x.id?.includes('0x1081'))
+  const v = p ? parseInt(p.value, 10) : NaN
+  if (v === 102 || v === 103) return 'reply'
+  if (v === 104) return 'forward'
+  return null
+}
+
 const replyBody = computed(() => {
   const m = selectedMessage.value
   if (!m) return ''
@@ -425,12 +494,24 @@ const replyBody = computed(() => {
 
     <!-- Left: folder list -->
     <aside class="min-w-[120px] flex-shrink-0 bg-[#141414] border-r border-[#1e1e1e] flex flex-col p-2 gap-1 overflow-y-auto" :style="{ width: folderPaneWidth + 'px' }">
-      <button class="flex items-center gap-[0.4rem] py-[0.45rem] px-3 mb-1 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8125rem] font-[inherit] transition-colors duration-[0.12s] w-full justify-center hover:bg-[#254880]" @click="openCompose">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        Compose
-      </button>
+      <div class="flex gap-1 mb-1">
+        <button class="flex flex-1 items-center gap-[0.4rem] py-[0.45rem] px-3 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8125rem] font-[inherit] transition-colors duration-[0.12s] justify-center hover:bg-[#254880]" @click="openCompose">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Compose
+        </button>
+        <button
+          class="flex items-center justify-center px-2 bg-surface text-[#808080] border border-raised rounded-md cursor-pointer transition-colors duration-[0.12s] hover:bg-[#222] hover:text-[#c0c0c0] disabled:opacity-50"
+          title="Refresh folders"
+          :disabled="loadingFolders"
+          @click="loadFolders"
+        >
+          <svg :class="loadingFolders ? 'animate-[spin_0.7s_linear_infinite]' : ''" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
+      </div>
       <div v-if="folderError" class="text-[0.72rem] text-danger py-1 px-2 cursor-default" :title="folderError">⚠ Load failed</div>
 
       <nav class="flex flex-col gap-[0.125rem]">
@@ -489,7 +570,20 @@ const replyBody = computed(() => {
         >
           <div class="flex justify-between items-baseline gap-2">
             <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[#a0a0a0]']">{{ displayName(m.from.emailAddress) }}</span>
-            <span class="text-[0.7rem] text-[#505050] flex-shrink-0">{{ formatDate(m.receivedDateTime) }}</span>
+            <span class="flex items-center gap-1 flex-shrink-0">
+              <!-- replied / forwarded -->
+              <svg v-if="replyState(m) === 'reply'" class="text-[#5a9ad0]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Replied">
+                <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+              </svg>
+              <svg v-else-if="replyState(m) === 'forward'" class="text-[#5a9ad0]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Forwarded">
+                <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
+              </svg>
+              <!-- flagged -->
+              <svg v-if="isFlagged(m)" width="11" height="11" viewBox="0 0 24 24" fill="#d0823a" stroke="#d0823a" stroke-width="1.5" stroke-linejoin="round" title="Flagged">
+                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15" stroke-linecap="round"/>
+              </svg>
+              <span class="text-[0.7rem] text-[#505050]">{{ formatDate(m.receivedDateTime) }}</span>
+            </span>
           </div>
           <div :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-[#d0d0d0] font-medium' : 'text-muted']">{{ m.subject || '(no subject)' }}</div>
           <div class="text-[0.75rem] text-[#505050] overflow-hidden text-ellipsis whitespace-nowrap">{{ m.bodyPreview }}</div>
@@ -572,6 +666,25 @@ const replyBody = computed(() => {
             </div>
           </div>
 
+          <!-- Attachments -->
+          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[#1e1e1e] flex-shrink-0">
+            <button
+              v-for="att in visibleAttachments"
+              :key="att.id"
+              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[#222] hover:border-[#3a3a3a]"
+              :title="`Open ${att.name}`"
+              @click="openAttachment(att)"
+            >
+              <svg class="text-[#7ab0ff] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+              <span class="flex flex-col min-w-0">
+                <span class="text-[0.78rem] text-[#d0d0d0] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
+                <span class="text-[0.68rem] text-[#585858]">{{ formatSize(att.size) }}</span>
+              </span>
+            </button>
+          </div>
+
           <!-- Body -->
           <div class="py-[0.875rem] px-5 flex-shrink-0">
             <!-- allow-same-origin (without allow-scripts) lets us measure the content
@@ -581,7 +694,8 @@ const replyBody = computed(() => {
               ref="iframeEl"
               :srcdoc="selectedMessage.body.content"
               sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-              class="w-full min-h-[200px] border-none bg-white rounded-md block"
+              class="w-full min-h-[200px] border-none bg-white rounded-md block transition-opacity duration-150"
+              :class="bodyReady ? 'opacity-100' : 'opacity-0'"
               @load="onIframeLoad"
             />
             <pre v-else class="text-[0.8125rem] text-[#c0c0c0] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>

@@ -58,6 +58,7 @@ onMounted(async () => {
   providers.value = pRes.providers
   mcpServers.value = mRes.mcp_servers
   await loadEmailConfig()
+  await loadCategorizer()
 })
 
 async function saveProvider() {
@@ -116,6 +117,58 @@ async function disconnectEmail() {
 
 function connectEmail() {
   window.location.href = '/api/integrations/email/connect'
+}
+
+// ── Email auto-sort (categorizer) ───────────────────────────────────────────────
+const catConfig = ref<api.CategorizerConfig>({
+  enabled: false, provider: '', interval_secs: 300, batch_limit: 25,
+})
+const catMsg = ref('')
+const catSaving = ref(false)
+const catRunning = ref(false)
+
+const CATEGORY_FOLDERS = [
+  { label: 'Promotions', desc: 'marketing, newsletters, offers' },
+  { label: 'Invoices', desc: 'bills, receipts, statements' },
+  { label: 'Notifications', desc: 'alerts, Sentry errors, CI, monitoring' },
+  { label: 'Deliveries', desc: 'shipping & order tracking' },
+]
+
+async function loadCategorizer() {
+  try {
+    catConfig.value = await api.emailCategorizer.getConfig()
+  } catch { /* not configured yet; keep defaults */ }
+}
+
+async function saveCategorizer() {
+  catSaving.value = true
+  catMsg.value = ''
+  try {
+    catConfig.value = await api.emailCategorizer.saveConfig(catConfig.value)
+    catMsg.value = 'Saved.'
+    logs.info('Categorizer', `Auto-sort ${catConfig.value.enabled ? 'enabled' : 'disabled'} (every ${catConfig.value.interval_secs}s)`)
+  } catch (e: unknown) {
+    catMsg.value = e instanceof Error ? e.message : 'Save failed.'
+  } finally {
+    catSaving.value = false
+  }
+}
+
+async function runCategorizer() {
+  catRunning.value = true
+  catMsg.value = ''
+  logs.info('Categorizer', 'Manual run started')
+  try {
+    const s = await api.emailCategorizer.runNow()
+    catMsg.value = s.message
+    logs.info('Categorizer', s.message)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Run failed.'
+    catMsg.value = msg
+    logs.error('Categorizer', `Run failed: ${msg}`)
+  } finally {
+    catRunning.value = false
+  }
 }
 
 // ── Account ───────────────────────────────────────────────────────────────────
@@ -461,6 +514,79 @@ async function logout() {
               You'll be redirected back here when done.
             </p>
           </form>
+        </section>
+
+        <!-- AI auto-sort card -->
+        <section class="bg-[#111] border border-[#222] rounded-lg p-3.5 flex flex-col gap-3.5">
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-2.5">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7ab0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+              </svg>
+              <div>
+                <div class="text-[0.8125rem] text-[#d0d0d0] font-medium">AI auto-sort</div>
+                <div class="text-[0.72rem] text-[#585858] mt-[0.1rem]">Sort low-priority inbox mail into folders; flag what needs you</div>
+              </div>
+            </div>
+            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', catConfig.enabled ? 'bg-[#0d2a1a] text-success border-[#1a4030]' : 'bg-surface text-[#484848] border-[#282828]']">
+              <span v-if="catConfig.enabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
+              {{ catConfig.enabled ? 'Active' : 'Off' }}
+            </div>
+          </div>
+
+          <p v-if="!emailConfig.connected" class="text-[0.775rem] text-[#b0a030]">
+            Connect a Microsoft 365 account above to use auto-sort.
+          </p>
+
+          <template v-else>
+            <!-- Category → folder reference -->
+            <ul class="list-none flex flex-col gap-1">
+              <li v-for="c in CATEGORY_FOLDERS" :key="c.label" class="flex items-baseline gap-2 text-[0.75rem]">
+                <span class="text-[#a0c8ff] font-medium min-w-[5.5rem]">{{ c.label }}</span>
+                <span class="text-[#585858]">{{ c.desc }}</span>
+              </li>
+              <li class="flex items-baseline gap-2 text-[0.75rem]">
+                <span class="text-[#d0a030] font-medium min-w-[5.5rem]">⚑ Flagged</span>
+                <span class="text-[#585858]">anything needing your attention (stays in Inbox)</span>
+              </li>
+            </ul>
+
+            <div class="flex flex-col gap-2.5 bg-[#0d0d0d] border border-[#1e1e1e] rounded-md p-3">
+              <label class="flex items-center justify-between gap-4 text-[0.8125rem] text-[#d0d0d0] cursor-pointer">
+                <span>Run automatically in the background</span>
+                <input type="checkbox" v-model="catConfig.enabled" class="w-4 h-4 accent-[#3a6adf] cursor-pointer" />
+              </label>
+              <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
+                <span>AI provider</span>
+                <select v-model="catConfig.provider" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] min-w-[10rem]">
+                  <option value="">First configured</option>
+                  <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+                </select>
+              </label>
+              <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
+                <span>Check interval (seconds)</span>
+                <input type="number" min="60" v-model.number="catConfig.interval_secs" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] w-[6rem]" />
+              </label>
+              <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
+                <span>Max emails per run</span>
+                <input type="number" min="1" max="50" v-model.number="catConfig.batch_limit" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] w-[6rem]" />
+              </label>
+            </div>
+
+            <p v-if="catMsg" class="text-[0.775rem] text-[#888]">{{ catMsg }}</p>
+
+            <div class="flex items-center gap-2 flex-wrap">
+              <button type="button" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="catSaving" @click="saveCategorizer">
+                {{ catSaving ? 'Saving…' : 'Save settings' }}
+              </button>
+              <button type="button" class="bg-[#1e1e1e] text-[#c0c0c0] border border-[#303030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[#282828] disabled:opacity-50" :disabled="catRunning" @click="runCategorizer">
+                {{ catRunning ? 'Sorting…' : 'Run now' }}
+              </button>
+            </div>
+            <p class="text-[0.72rem] text-[#585858] leading-[1.5]">
+              Auto-sort moves and flags mail in your live mailbox. Every action is recorded in the Logs window.
+            </p>
+          </template>
         </section>
       </div>
 

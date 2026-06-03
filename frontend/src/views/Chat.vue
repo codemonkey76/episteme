@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
@@ -9,6 +9,9 @@ const logs = useLogsStore()
 
 const store = useSessionsStore()
 const approvalsStore = useApprovalsStore()
+
+// Tool-result messages are model context, not user-facing — hide them.
+const visibleMessages = computed(() => store.messages.filter(m => m.role !== 'tool'))
 
 async function newSession() {
   const s = await store.createSession()
@@ -78,6 +81,7 @@ async function send() {
           created_at: new Date().toISOString(),
         })
       },
+      (name) => { store.appendToolCall(name); scrollToBottom() },
       abortController.signal,
     )
   } catch (e) {
@@ -104,21 +108,36 @@ async function scrollToBottom() {
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
 }
+
+const TOOL_LABELS: Record<string, string> = {
+  create_calendar_event: 'Creating calendar event',
+  list_calendar_events: 'Checking the calendar',
+  delete_calendar_event: 'Deleting calendar event',
+}
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? `Using ${name}`
+}
 </script>
 
 <template>
   <div class="flex flex-col h-full">
     <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" ref="messagesEl">
-      <div
-        v-for="msg in store.messages"
-        :key="msg.id"
-        :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']"
-      >
-        <span class="text-[0.7rem] uppercase text-[#606060]">{{ msg.role }}</span>
-        <pre
-          :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : msg.role === 'assistant' ? 'bg-surface py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
-        >{{ msg.content }}</pre>
-      </div>
+      <template v-for="msg in visibleMessages" :key="msg.id">
+        <!-- Tool activity indicator -->
+        <div v-if="msg.role === 'tool_call'" class="self-start flex items-center gap-2 text-[0.78rem] text-[#7a9ec0] py-0.5">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
+          </svg>
+          <span>{{ toolLabel(msg.content) }}…</span>
+        </div>
+        <!-- Normal message -->
+        <div v-else :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']">
+          <span class="text-[0.7rem] uppercase text-[#606060]">{{ msg.role }}</span>
+          <pre
+            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : msg.role === 'assistant' ? 'bg-surface py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
+          >{{ msg.content }}</pre>
+        </div>
+      </template>
     </div>
     <div v-if="error" class="bg-[#5a2a2a] text-[#e0c0c0] text-[0.8rem] py-[0.4rem] px-4">{{ error }}</div>
     <div class="flex gap-2 p-3 border-t border-raised items-end">
