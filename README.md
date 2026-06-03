@@ -76,6 +76,32 @@ docker compose up
 
 Data is persisted to a named Docker volume (`episteme_data`). The container exposes port 3000.
 
+### Deploying with HTTPS
+
+The Compose file includes a [Caddy](https://caddyserver.com/) reverse proxy that terminates TLS and obtains/renews a Let's Encrypt certificate automatically. The `episteme` service is internal-only; Caddy owns ports 80 and 443.
+
+**Prerequisites:**
+
+1. A domain you control (Let's Encrypt won't issue for a bare IP).
+2. A DNS `A`/`AAAA` record pointing that domain at the server's public IP.
+3. Ports **80** and **443** open to the internet — port 80 is required for the ACME challenge, not just a redirect.
+
+**Configure and deploy:**
+
+```sh
+# In .env (gitignored — your domain is never committed):
+echo "EPISTEME_DOMAIN=episteme.example.com" >> .env
+
+docker compose up -d --build
+
+# Watch the certificate get issued on first boot:
+docker compose logs -f caddy
+```
+
+Issued certs are persisted in the `caddy_data` volume, so restarts reuse them (and don't hit Let's Encrypt rate limits). Caddy auto-renews from there.
+
+> **Debugging tip:** Let's Encrypt limits failed validations to 5/hour per hostname. Confirm DNS resolves and ports 80/443 are reachable *before* the first `up`. If you get rate-limited while troubleshooting, temporarily prepend `{ acme_ca https://acme-staging-v02.api.letsencrypt.org/directory }` to the `Caddyfile` to use the staging CA (untrusted cert, unlimited retries), then remove it once it works.
+
 ## Configuration
 
 Environment variables (`.env` or shell):
@@ -86,6 +112,7 @@ Environment variables (`.env` or shell):
 | `DATA_DIR` | `data` | Directory for SQLite database and uploads |
 | `STATIC_DIR` | `static` | Directory for compiled frontend assets |
 | `RUST_LOG` | `episteme=debug,...` | Log filter (tracing-subscriber syntax) |
+| `EPISTEME_DOMAIN` | — | Public domain for the Caddy reverse proxy / Let's Encrypt cert (Docker HTTPS deploy only) |
 | `ANTHROPIC_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 | `OPENAI_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 
@@ -95,7 +122,7 @@ Model providers, MCP servers, and the Microsoft 365 integration (email + calenda
 
 Episteme can hold API tokens and (eventually) execute shell commands. Treat it as a privileged admin tool:
 
-- **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy (Caddy, nginx, Traefik) for anything beyond localhost.
+- **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy for anything beyond localhost — the bundled Caddy service (see [Deploying with HTTPS](#deploying-with-https)) does this for you.
 - **Native tools currently auto-execute.** The approval/resume flow is not yet wired, so when you ask the AI to create a calendar event (or auto-sort runs), it acts immediately. Every action is recorded in the Logs window, which is the audit surface for now. Re-enabling approval gating is on the roadmap.
 - **Keep secrets out of version control.** API keys and OAuth client secrets belong in `.env`/the SQLite DB (both gitignored), not committed.
 

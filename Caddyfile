@@ -1,0 +1,3 @@
+{$EPISTEME_DOMAIN} {
+	reverse_proxy episteme:3000
+}

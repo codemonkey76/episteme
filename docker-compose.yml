@@ -1,8 +1,8 @@
 services:
   episteme:
     build: .
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     volumes:
       - episteme_data:/data
     environment:
@@ -14,5 +14,22 @@ services:
       - path: .env
         required: false
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      EPISTEME_DOMAIN: "${EPISTEME_DOMAIN:?set EPISTEME_DOMAIN in .env}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - episteme
+
 volumes:
   episteme_data:
+  caddy_data:
+  caddy_config:
