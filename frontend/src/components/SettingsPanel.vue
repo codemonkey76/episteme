@@ -59,6 +59,8 @@ onMounted(async () => {
   ])
   providers.value = pRes.providers
   mcpServers.value = mRes.mcp_servers
+  await refreshMcpStatus()
+  await loadTimezone()
   await loadEmailConfig()
   await loadCategorizer()
 })
@@ -74,6 +76,90 @@ async function deleteProvider(name: string) {
   await api.settings.deleteProvider(name)
   logs.info('Settings', `Deleted provider "${name}"`)
   providers.value = providers.value.filter((p) => p.name !== name)
+}
+
+// ── MCP servers ───────────────────────────────────────────────────────────────
+const mcpStatuses = ref<api.McpServerStatus[]>([])
+const newMcp = ref({ name: '', type: 'stdio' as 'stdio' | 'http', command: '', args: '', url: '' })
+const mcpSaving = ref(false)
+const mcpMsg = ref('')
+
+function mcpStatusFor(name: string) {
+  return mcpStatuses.value.find((s) => s.name === name)
+}
+
+async function refreshMcpStatus() {
+  try {
+    mcpStatuses.value = (await api.settings.mcpServerStatus()).statuses
+  } catch {
+    // Status is cosmetic — never break the settings panel over it.
+  }
+}
+
+async function saveMcpServer() {
+  mcpSaving.value = true
+  mcpMsg.value = ''
+  const cfg: api.McpServerConfig = {
+    name: newMcp.value.name.trim(),
+    transport:
+      newMcp.value.type === 'stdio'
+        ? { type: 'stdio', command: newMcp.value.command.trim(), args: newMcp.value.args.split(/\s+/).filter(Boolean) }
+        : { type: 'http', url: newMcp.value.url.trim() },
+  }
+  try {
+    // The backend connects before responding, so this reports live status.
+    const res = await api.settings.upsertMcpServer(cfg)
+    if (res.status.connected) {
+      mcpMsg.value = `Connected — ${res.status.tool_count} tool${res.status.tool_count === 1 ? '' : 's'} available.`
+      newMcp.value = { name: '', type: 'stdio', command: '', args: '', url: '' }
+    } else {
+      mcpMsg.value = res.status.error ?? 'Connection failed.'
+    }
+    mcpServers.value = (await api.settings.listMcpServers()).mcp_servers
+    await refreshMcpStatus()
+  } catch (e: unknown) {
+    mcpMsg.value = e instanceof Error ? e.message : 'Save failed.'
+  } finally {
+    mcpSaving.value = false
+  }
+}
+
+async function deleteMcpServer(name: string) {
+  await api.settings.deleteMcpServer(name)
+  mcpServers.value = mcpServers.value.filter((s) => s.name !== name)
+  await refreshMcpStatus()
+}
+
+// ── Timezone ──────────────────────────────────────────────────────────────────
+const timezone = ref('')
+const timezones = ref<string[]>([])
+const tzSaving = ref(false)
+const tzMsg = ref('')
+
+async function loadTimezone() {
+  timezones.value = Intl.supportedValuesOf('timeZone')
+  try {
+    timezone.value = (await api.settings.getTimezone()).timezone
+  } catch {
+    timezone.value = ''
+  }
+  // Unconfigured backends report UTC — preselect the browser's zone instead.
+  if (!timezone.value || timezone.value === 'UTC') {
+    timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone
+  }
+}
+
+async function saveTimezone() {
+  tzSaving.value = true
+  tzMsg.value = ''
+  try {
+    await api.settings.setTimezone(timezone.value)
+    tzMsg.value = 'Saved.'
+  } catch (e: unknown) {
+    tzMsg.value = e instanceof Error ? e.message : 'Save failed.'
+  } finally {
+    tzSaving.value = false
+  }
 }
 
 // ── Integrations ──────────────────────────────────────────────────────────────
@@ -375,18 +461,64 @@ async function logout() {
 
       <!-- MCP Servers -->
       <div v-else-if="activeTab === 'mcp'" class="px-6 py-5 flex flex-col gap-6">
-        <h2 class="text-[0.9375rem] font-semibold text-fg">MCP Servers</h2>
+        <div class="flex items-center justify-between">
+          <h2 class="text-[0.9375rem] font-semibold text-fg">MCP Servers</h2>
+          <button class="bg-[#1e1e1e] text-[#c0c0c0] border border-[#303030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#282828]" @click="refreshMcpStatus">Refresh</button>
+        </div>
 
         <section class="flex flex-col gap-3">
           <ul v-if="mcpServers.length" class="list-none flex flex-col gap-1.5">
             <li v-for="s in mcpServers" :key="s.name" class="flex justify-between items-center bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
               <div class="flex flex-col gap-[0.1rem] min-w-0">
-                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ s.name }}</span>
-                <span class="text-[0.75rem] text-[#585858]">{{ s.transport.type }}</span>
+                <span class="text-[0.8125rem] text-[#d0d0d0] flex items-center gap-1.5">
+                  <span
+                    class="inline-block w-2 h-2 rounded-full shrink-0"
+                    :class="mcpStatusFor(s.name)?.connected ? 'bg-[#4caf6e]' : 'bg-[#c05050]'"
+                  ></span>
+                  {{ s.name }}
+                </span>
+                <span class="text-[0.75rem] text-[#585858]">
+                  {{ s.transport.type === 'stdio' ? `stdio · ${s.transport.command} ${s.transport.args.join(' ')}` : `http · ${s.transport.url}` }}
+                </span>
+                <span v-if="mcpStatusFor(s.name)?.connected" class="text-[0.75rem] text-[#4caf6e]">
+                  {{ mcpStatusFor(s.name)?.tool_count }} tool{{ mcpStatusFor(s.name)?.tool_count === 1 ? '' : 's' }}
+                </span>
+                <span v-else-if="mcpStatusFor(s.name)?.error" class="text-[0.75rem] text-[#c06060] break-all">
+                  {{ mcpStatusFor(s.name)?.error }}
+                </span>
               </div>
+              <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] shrink-0 hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteMcpServer(s.name)">Remove</button>
             </li>
           </ul>
           <p v-else class="text-[#484848] text-[0.8125rem]">No MCP servers configured.</p>
+        </section>
+
+        <section class="flex flex-col gap-3">
+          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Add / update server</h3>
+          <form class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveMcpServer">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Name <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.name" placeholder="e.g. filesystem" required /></label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Transport
+              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.type">
+                <option value="stdio">stdio (local command)</option>
+                <option value="http">http (remote server)</option>
+              </select>
+            </label>
+
+            <template v-if="newMcp.type === 'stdio'">
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Command <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.command" placeholder="e.g. npx" required /></label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Arguments <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.args" placeholder="e.g. -y @modelcontextprotocol/server-everything" /></label>
+            </template>
+            <template v-else>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">URL <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.url" placeholder="https://example.com/mcp" required /></label>
+            </template>
+
+            <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:opacity-40 disabled:cursor-default" :disabled="mcpSaving || !newMcp.name || (newMcp.type === 'stdio' ? !newMcp.command : !newMcp.url)">
+              {{ mcpSaving ? 'Connecting…' : 'Save & connect' }}
+            </button>
+            <p v-if="mcpMsg" class="text-[0.775rem]" :class="mcpMsg.startsWith('Connected') ? 'text-[#4caf6e]' : 'text-[#c06060]'">{{ mcpMsg }}</p>
+          </form>
+          <p class="text-[0.75rem] text-[#585858]">Tools from connected servers are offered to the model in every chat. They currently run without approval prompts — only add servers you trust.</p>
         </section>
       </div>
 
@@ -612,7 +744,20 @@ async function logout() {
       <div v-else-if="activeTab === 'system'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">System</h2>
         <section class="flex flex-col gap-3">
-          <p class="text-[#484848] text-[0.8125rem]">System information coming soon.</p>
+          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Timezone</h3>
+          <div class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Home timezone
+              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="timezone">
+                <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
+              </select>
+            </label>
+            <p class="text-[0.75rem] text-[#585858]">The AI resolves "today", "tomorrow at 3pm" and presents all calendar times in this timezone.</p>
+            <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:opacity-40 disabled:cursor-default" :disabled="tzSaving || !timezone" @click="saveTimezone">
+              {{ tzSaving ? 'Saving…' : 'Save' }}
+            </button>
+            <p v-if="tzMsg" class="text-[0.775rem]" :class="tzMsg === 'Saved.' ? 'text-[#4caf6e]' : 'text-[#c06060]'">{{ tzMsg }}</p>
+          </div>
         </section>
       </div>
 

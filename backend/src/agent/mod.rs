@@ -48,7 +48,7 @@ pub async fn run_turn(
     // Prepend stored memories so the model has cross-session context.
     crate::memory::inject(&mut history, &state.db).await;
     // Then the tool/date preamble at the very front.
-    history.insert(0, crate::tools::system_preamble());
+    history.insert(0, crate::tools::system_preamble(&state).await);
 
     // Accumulates the model's visible reply across the turn for extraction.
     let mut assistant_text = String::new();
@@ -180,38 +180,34 @@ pub async fn run_turn(
                         continue;
                     }
 
-                    let tool_def = tools.iter().find(|t| t.name == call.fn_name);
-                    let needs_approval =
-                        tool_def.map(|t| t.requires_approval).unwrap_or(true);
+                    // MCP tools currently auto-execute like native ones — the
+                    // approval pause/resume path is a future feature (the
+                    // requires_approval flag on McpTool is already derived
+                    // from server annotations, ready for it).
+                    let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
-                    if needs_approval {
-                        let action = db::pending_actions::insert(
-                            &state.db,
-                            &session_id,
-                            &call.fn_name,
-                            &call.fn_arguments.to_string(),
-                        )
-                        .await?;
-
-                        tx.send(AgentEvent::AwaitingApproval {
-                            action_id: action.id,
-                            tool_name: call.fn_name,
-                            tool_args: call.fn_arguments,
-                        })
-                        .await?;
-
-                        // Pause the turn; it resumes when the approval endpoint is hit.
-                        return Ok(());
-                    }
-
-                    let result = {
+                    // Resolve the peer under the lock, but run the (possibly
+                    // slow) tool call without holding it.
+                    let peer = {
                         let mcp = state.mcp_host.lock().await;
-                        mcp.execute(&call.fn_name, call.fn_arguments.clone()).await
+                        mcp.peer_for(&call.fn_name)
+                    };
+                    let result = match peer {
+                        Ok((peer, tool)) => {
+                            crate::mcp_host::call_on_peer(&peer, &tool, call.fn_arguments.clone())
+                                .await
+                        }
+                        Err(e) => Err(e),
                     };
 
                     let result_str = match result {
                         Ok(v) => v.to_string(),
-                        Err(e) => format!("error: {e}"),
+                        Err(e) => {
+                            state
+                                .log("mcp", "error", format!("tool '{}' failed: {e}", call.fn_name))
+                                .await;
+                            format!("error: {e}")
+                        }
                     };
 
                     db::messages::insert(
@@ -223,6 +219,16 @@ pub async fn run_turn(
                         Some(&call.call_id),
                     )
                     .await?;
+                    // Feed the result back into the in-memory history so the
+                    // model can use it on the next iteration (mirrors the
+                    // native-tool path above).
+                    history.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: Value::String(format!(
+                            "[tool result] {}: {}",
+                            call.fn_name, result_str
+                        )),
+                    });
                 }
                 // Loop again with the tool results appended.
                 continue;

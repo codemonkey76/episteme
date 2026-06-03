@@ -112,20 +112,36 @@ pub async fn list_mcp_servers(
 pub async fn upsert_mcp_server(
     State(state): State<Arc<AppState>>,
     Json(server): Json<McpServerConfig>,
-) -> AppResult<StatusCode> {
+) -> AppResult<Json<serde_json::Value>> {
     let mut servers: Vec<McpServerConfig> = db::settings::get(&state.db, KEY_MCP_SERVERS)
         .await
         .map_err(AppError::Internal)?
         .unwrap_or_default();
     if let Some(existing) = servers.iter_mut().find(|s| s.name == server.name) {
-        *existing = server;
+        *existing = server.clone();
     } else {
-        servers.push(server);
+        servers.push(server.clone());
     }
     db::settings::set(&state.db, KEY_MCP_SERVERS, &servers)
         .await
         .map_err(AppError::Internal)?;
-    Ok(StatusCode::NO_CONTENT)
+
+    // Connect (or re-connect) right away so the caller gets live status back.
+    let status = {
+        let mut mcp = state.mcp_host.lock().await;
+        mcp.reconnect(server).await
+    };
+    if status.connected {
+        state
+            .log("mcp", "info", format!("connected to '{}' ({} tools)", status.name, status.tool_count))
+            .await;
+    } else {
+        let err = status.error.clone().unwrap_or_else(|| "unknown error".into());
+        state
+            .log("mcp", "error", format!("failed to connect to '{}': {err}", status.name))
+            .await;
+    }
+    Ok(Json(serde_json::json!({ "status": status })))
 }
 
 pub async fn delete_mcp_server(
@@ -138,6 +154,53 @@ pub async fn delete_mcp_server(
         .unwrap_or_default();
     servers.retain(|s| s.name != name);
     db::settings::set(&state.db, KEY_MCP_SERVERS, &servers)
+        .await
+        .map_err(AppError::Internal)?;
+
+    {
+        let mut mcp = state.mcp_host.lock().await;
+        mcp.disconnect(&name).await;
+    }
+    state.log("mcp", "info", format!("disconnected '{name}'")).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn mcp_server_status(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let statuses = {
+        let mcp = state.mcp_host.lock().await;
+        mcp.status()
+    };
+    Ok(Json(serde_json::json!({ "statuses": statuses })))
+}
+
+// --- Timezone ---
+
+pub async fn get_timezone(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let tz = state.home_tz().await;
+    Ok(Json(serde_json::json!({ "timezone": tz.name() })))
+}
+
+#[derive(Deserialize)]
+pub struct TimezoneBody {
+    timezone: String,
+}
+
+pub async fn set_timezone(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<TimezoneBody>,
+) -> AppResult<StatusCode> {
+    // Validate before storing — an unparseable zone would silently fall back to UTC.
+    if body.timezone.parse::<chrono_tz::Tz>().is_err() {
+        return Err(AppError::BadRequest(format!(
+            "'{}' is not a valid IANA timezone",
+            body.timezone
+        )));
+    }
+    db::settings::set(&state.db, "timezone", &body.timezone)
         .await
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)

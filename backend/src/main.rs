@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState::new(pool));
     categorizer::spawn_worker(state.clone());
+    spawn_mcp_connect(state.clone());
     let app = routes::router(state);
 
     let addr = std::env::var("BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
@@ -44,4 +45,40 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Connect to configured MCP servers in the background so a slow or hung
+/// server can never stall app startup.
+fn spawn_mcp_connect(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let configs: Vec<mcp_host::McpServerConfig> =
+            match db::settings::get(&state.db, "mcp_servers").await {
+                Ok(Some(servers)) => servers,
+                Ok(None) => return,
+                Err(e) => {
+                    tracing::error!("failed to load mcp_servers setting: {e}");
+                    return;
+                }
+            };
+        if configs.is_empty() {
+            return;
+        }
+
+        let statuses = {
+            let mut mcp = state.mcp_host.lock().await;
+            mcp.connect_all(configs).await
+        };
+        for s in statuses {
+            if s.connected {
+                state
+                    .log("mcp", "info", format!("connected to '{}' ({} tools)", s.name, s.tool_count))
+                    .await;
+            } else {
+                let err = s.error.unwrap_or_else(|| "unknown error".into());
+                state
+                    .log("mcp", "error", format!("failed to connect to '{}': {err}", s.name))
+                    .await;
+            }
+        }
+    });
 }

@@ -43,6 +43,13 @@ export interface McpServerConfig {
     | { type: 'http'; url: string }
 }
 
+export interface McpServerStatus {
+  name: string
+  connected: boolean
+  tool_count: number
+  error?: string
+}
+
 // Invoked whenever an API call comes back 401, so the app can drop to the login
 // screen no matter which request tripped it. Registered by the auth store.
 let onUnauthorized: (() => void) | null = null
@@ -522,11 +529,28 @@ export const settings = {
   listMcpServers: () =>
     json<{ mcp_servers: McpServerConfig[] }>('/settings/mcp-servers'),
   upsertMcpServer: (s: McpServerConfig) =>
-    fetch(BASE + '/settings/mcp-servers', {
+    json<{ status: McpServerStatus }>('/settings/mcp-servers', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(s),
     }),
   deleteMcpServer: (name: string) =>
     fetch(BASE + `/settings/mcp-servers/${name}`, { method: 'DELETE' }),
+  mcpServerStatus: () =>
+    json<{ statuses: McpServerStatus[] }>('/settings/mcp-servers/status'),
+  getTimezone: () => json<{ timezone: string }>('/settings/timezone'),
+  setTimezone: async (timezone: string) => {
+    const res = await fetch(BASE + '/settings/timezone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone }),
+    })
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`
+      try {
+        const body = await res.json()
+        if (body?.error) msg = body.error
+      } catch {}
+      throw new Error(msg)
+    }
+  },
 }
