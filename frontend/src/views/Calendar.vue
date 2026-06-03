@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
+import { useCalendarStore } from '../stores/calendar'
 
 const logs = useLogsStore()
+const calStore = useCalendarStore()
 
 const connected = ref(false)
 const checking = ref(true)
@@ -11,24 +13,84 @@ const events = ref<api.CalendarEvent[]>([])
 const loading = ref(false)
 const error = ref('')
 
-onMounted(async () => {
-  try {
-    const cfg = await api.integrations.email.getConfig()
-    connected.value = cfg.connected
-  } finally {
-    checking.value = false
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// ── Date helpers ─────────────────────────────────────────────────────────────
+function startOfMonth(d: Date) { return new Date(d.getFullYear(), d.getMonth(), 1) }
+function stripTime(d: Date) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()) }
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+const viewDate = ref(startOfMonth(new Date())) // first day of the viewed month
+const selectedDay = ref(stripTime(new Date()))
+
+const monthLabel = computed(() => viewDate.value.toLocaleDateString([], { month: 'long', year: 'numeric' }))
+
+// 6-week grid starting on the Sunday on/before the 1st.
+const gridStart = computed(() => {
+  const s = startOfMonth(viewDate.value)
+  const g = new Date(s)
+  g.setDate(1 - s.getDay())
+  return stripTime(g)
+})
+const gridDays = computed(() => {
+  const days: Date[] = []
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart.value)
+    d.setDate(gridStart.value.getDate() + i)
+    days.push(d)
   }
-  if (connected.value) await load()
+  return days
 })
 
+// Group events by the day they fall on (all-day anchored to its UTC date).
+function eventDayKey(ev: api.CalendarEvent): string {
+  return ev.is_all_day ? ev.start.slice(0, 10) : ymd(new Date(ev.start))
+}
+const eventsByDay = computed(() => {
+  const map = new Map<string, api.CalendarEvent[]>()
+  for (const ev of events.value) {
+    const k = eventDayKey(ev)
+    const arr = map.get(k)
+    if (arr) arr.push(ev)
+    else map.set(k, [ev])
+  }
+  for (const arr of map.values()) arr.sort((a, b) => a.start.localeCompare(b.start))
+  return map
+})
+function dayEvents(d: Date): api.CalendarEvent[] {
+  return eventsByDay.value.get(ymd(d)) ?? []
+}
+const selectedDayEvents = computed(() => dayEvents(selectedDay.value))
+
+function isToday(d: Date) { return ymd(d) === ymd(new Date()) }
+function inMonth(d: Date) { return d.getMonth() === viewDate.value.getMonth() }
+function isSelected(d: Date) { return ymd(d) === ymd(selectedDay.value) }
+
+function startTime(ev: api.CalendarEvent) {
+  return ev.is_all_day ? 'All day' : new Date(ev.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+function timeRange(ev: api.CalendarEvent) {
+  if (ev.is_all_day) return 'All day'
+  const s = new Date(ev.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const e = new Date(ev.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return `${s} – ${e}`
+}
+const selectedDayLabel = computed(() =>
+  selectedDay.value.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }),
+)
+
+// ── Data ─────────────────────────────────────────────────────────────────────
 async function load() {
+  if (!connected.value) return
   loading.value = true
   error.value = ''
   try {
-    // Now .. +30 days.
-    const start = new Date().toISOString()
-    const end = new Date(Date.now() + 30 * 86400000).toISOString()
-    const res = await api.calendar.list({ start, end })
+    const start = new Date(gridStart.value).toISOString()
+    const endD = new Date(gridStart.value)
+    endD.setDate(endD.getDate() + 42)
+    const res = await api.calendar.list({ start, end: endD.toISOString() })
     events.value = res.events
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to load events'
@@ -37,40 +99,27 @@ async function load() {
   }
 }
 
-// Group sorted events by local calendar day.
-const grouped = computed(() => {
-  const groups: { key: string; label: string; items: api.CalendarEvent[] }[] = []
-  const byKey = new Map<string, { key: string; label: string; items: api.CalendarEvent[] }>()
-  for (const ev of [...events.value].sort((a, b) => a.start.localeCompare(b.start))) {
-    const d = new Date(ev.start)
-    const key = d.toDateString()
-    let g = byKey.get(key)
-    if (!g) {
-      g = { key, label: dayLabel(d), items: [] }
-      byKey.set(key, g)
-      groups.push(g)
-    }
-    g.items.push(ev)
+let pollTimer: number | undefined
+onMounted(async () => {
+  try {
+    connected.value = (await api.integrations.email.getConfig()).connected
+  } finally {
+    checking.value = false
   }
-  return groups
+  if (connected.value) await load()
+  // Gentle poll catches changes made elsewhere (e.g. Outlook) without a manual refresh.
+  pollTimer = window.setInterval(() => { if (connected.value && !adding.value) load() }, 45000)
 })
+onUnmounted(() => { if (pollTimer) clearInterval(pollTimer) })
 
-function dayLabel(d: Date): string {
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const target = new Date(d); target.setHours(0, 0, 0, 0)
-  const diff = Math.round((target.getTime() - today.getTime()) / 86400000)
-  const base = d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
-  if (diff === 0) return `Today · ${base}`
-  if (diff === 1) return `Tomorrow · ${base}`
-  return base
-}
+watch(viewDate, load)
+// Live refresh when the chat AI creates/deletes an event.
+watch(() => calStore.changeToken, () => { if (connected.value) load() })
 
-function timeLabel(ev: api.CalendarEvent): string {
-  if (ev.is_all_day) return 'All day'
-  const s = new Date(ev.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  const e = new Date(ev.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  return `${s} – ${e}`
-}
+function prevMonth() { const d = new Date(viewDate.value); d.setMonth(d.getMonth() - 1); viewDate.value = startOfMonth(d) }
+function nextMonth() { const d = new Date(viewDate.value); d.setMonth(d.getMonth() + 1); viewDate.value = startOfMonth(d) }
+function goToday() { viewDate.value = startOfMonth(new Date()); selectedDay.value = stripTime(new Date()) }
+function selectDay(d: Date) { selectedDay.value = stripTime(d); if (!inMonth(d)) viewDate.value = startOfMonth(d); adding.value = false }
 
 async function remove(ev: api.CalendarEvent) {
   try {
@@ -84,19 +133,15 @@ async function remove(ev: api.CalendarEvent) {
 
 // ── New event form ───────────────────────────────────────────────────────────
 const adding = ref(false)
-const todayStr = new Date().toISOString().slice(0, 10)
-const form = ref({
-  subject: '', date: todayStr, start: '09:00', end: '10:00',
-  allDay: false, location: '', reminder: 15,
-})
+const form = ref({ subject: '', date: ymd(new Date()), start: '09:00', end: '10:00', allDay: false, location: '', reminder: 15 })
 const saving = ref(false)
 
 function startAdd() {
   adding.value = true
-  form.value = { subject: '', date: todayStr, start: '09:00', end: '10:00', allDay: false, location: '', reminder: 15 }
+  form.value = { subject: '', date: ymd(selectedDay.value), start: '09:00', end: '10:00', allDay: false, location: '', reminder: 15 }
 }
 
-function nextDay(dateStr: string): string {
+function nextDayStr(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + 1)
   return d.toISOString().slice(0, 10)
@@ -108,24 +153,19 @@ async function saveEvent() {
   error.value = ''
   try {
     const f = form.value
-    // All-day: anchor to UTC midnight of the chosen date, end at next day's midnight.
-    // Timed: convert local date+time to a UTC instant.
     const times = f.allDay
-      ? { start: `${f.date}T00:00:00Z`, end: `${nextDay(f.date)}T00:00:00Z` }
-      : {
-          start: new Date(`${f.date}T${f.start}`).toISOString(),
-          end: new Date(`${f.date}T${f.end}`).toISOString(),
-        }
-    const payload: api.NewCalendarEvent = {
+      ? { start: `${f.date}T00:00:00Z`, end: `${nextDayStr(f.date)}T00:00:00Z` }
+      : { start: new Date(`${f.date}T${f.start}`).toISOString(), end: new Date(`${f.date}T${f.end}`).toISOString() }
+    await api.calendar.create({
       subject: f.subject.trim(),
       is_all_day: f.allDay,
       location: f.location || undefined,
       reminder_minutes_before: f.reminder >= 0 ? f.reminder : undefined,
       ...times,
-    }
-    await api.calendar.create(payload)
-    logs.info('Calendar', `Created event "${payload.subject}"`)
+    })
+    logs.info('Calendar', `Created event "${f.subject}"`)
     adding.value = false
+    selectedDay.value = stripTime(new Date(`${f.date}T00:00:00`))
     await load()
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to create event'
@@ -148,10 +188,14 @@ async function saveEvent() {
     <p class="text-[0.8125rem] text-center max-w-[24rem] leading-normal">Connect your Microsoft 365 account in Settings → Integrations (re-connect if you set it up before calendar support).</p>
   </div>
 
-  <!-- Agenda -->
+  <!-- Month grid -->
   <div v-else class="flex flex-col h-full bg-bg overflow-hidden">
-    <div class="flex items-center gap-2 px-4 py-2.5 border-b border-[#1e1e1e] shrink-0">
-      <span class="text-[0.875rem] font-semibold text-[#c0c0c0]">Upcoming</span>
+    <!-- Toolbar -->
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0">
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[#808080] hover:bg-[#222] hover:text-[#c0c0c0]" title="Previous month" @click="prevMonth">‹</button>
+      <span class="text-[0.875rem] font-semibold text-[#d0d0d0] min-w-[9rem] text-center tabular-nums">{{ monthLabel }}</span>
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[#808080] hover:bg-[#222] hover:text-[#c0c0c0]" title="Next month" @click="nextMonth">›</button>
+      <button class="ml-1 text-[0.75rem] text-[#808080] border border-raised rounded px-2 py-1 hover:bg-[#222] hover:text-[#c0c0c0]" @click="goToday">Today</button>
       <div class="ml-auto flex items-center gap-1.5">
         <button class="flex items-center gap-[0.35rem] bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254880]" @click="startAdd">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -165,51 +209,78 @@ async function saveEvent() {
       </div>
     </div>
 
-    <!-- New event form -->
-    <div v-if="adding" class="flex flex-col gap-2 px-4 py-3 border-b border-[#1e1e1e] bg-[#111] shrink-0">
-      <input v-model="form.subject" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Event title" />
-      <div class="flex flex-wrap items-center gap-2 text-[0.775rem] text-muted">
-        <input v-model="form.date" type="date" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
-        <template v-if="!form.allDay">
-          <input v-model="form.start" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
-          <span class="text-[#585858]">–</span>
-          <input v-model="form.end" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
-        </template>
-        <label class="flex items-center gap-1.5 cursor-pointer"><input v-model="form.allDay" type="checkbox" class="accent-[#3a6adf]" /> All day</label>
-        <label class="flex items-center gap-1.5">Remind <input v-model.number="form.reminder" type="number" min="-1" class="w-[4rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" /> min before</label>
-      </div>
-      <input v-model="form.location" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Location (optional)" />
-      <div class="flex items-center gap-2">
-        <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="saving || !form.subject.trim()" @click="saveEvent">{{ saving ? 'Saving…' : 'Create' }}</button>
-        <button class="bg-transparent text-[#585858] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
-      </div>
+    <!-- Weekday header -->
+    <div class="grid grid-cols-7 shrink-0 border-b border-[#1e1e1e]">
+      <div v-for="w in WEEKDAYS" :key="w" class="px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.05em] text-[#585858] text-center">{{ w }}</div>
     </div>
 
-    <div v-if="error" class="px-4 py-2 text-danger text-[0.775rem] border-b border-[#1e1e1e] shrink-0">{{ error }}</div>
-
-    <!-- Events -->
-    <div class="flex-1 overflow-y-auto">
-      <div v-if="loading && events.length === 0" class="flex items-center justify-center h-full text-[#484848]">
-        <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" />
-      </div>
-      <div v-else-if="grouped.length === 0" class="flex items-center justify-center h-full text-[#383838] text-[0.8125rem]">No upcoming events.</div>
-      <div v-else class="py-2">
-        <div v-for="g in grouped" :key="g.key" class="mb-1">
-          <div class="px-4 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.05em] text-[#6a6a6a] sticky top-0 bg-bg">{{ g.label }}</div>
-          <div
-            v-for="ev in g.items"
+    <!-- Grid -->
+    <div class="flex-1 min-h-0 grid grid-cols-7 grid-rows-6 gap-px bg-[#1a1a1a]">
+      <button
+        v-for="d in gridDays"
+        :key="d.toISOString()"
+        :class="['flex flex-col items-stretch text-left p-1 overflow-hidden transition-colors duration-100',
+                 inMonth(d) ? 'bg-bg' : 'bg-[#101010]',
+                 isSelected(d) ? 'ring-1 ring-inset ring-[#3a6adf]' : '']"
+        @click="selectDay(d)"
+      >
+        <span :class="['self-end text-[0.7rem] leading-none mb-1 w-[1.3rem] h-[1.3rem] flex items-center justify-center rounded-full',
+                       isToday(d) ? 'bg-[#3a6adf] text-white font-semibold' : inMonth(d) ? 'text-[#b0b0b0]' : 'text-[#454545]']">{{ d.getDate() }}</span>
+        <div class="flex flex-col gap-[0.1rem] overflow-hidden">
+          <span
+            v-for="ev in dayEvents(d).slice(0, 2)"
             :key="ev.id"
-            class="group flex items-start gap-3 px-4 py-2 border-b border-[#161616] hover:bg-[#131313]"
+            class="text-[0.62rem] leading-[1.2] line-clamp-2 break-words rounded px-1 py-[0.1rem] bg-[#1c2a3a] text-[#9cc0f0]"
+            :title="`${timeRange(ev)} — ${ev.subject}`"
           >
-            <span class="text-[0.72rem] text-[#7ab0ff] min-w-[5.5rem] shrink-0 pt-[0.1rem] tabular-nums">{{ timeLabel(ev) }}</span>
-            <div class="flex-1 min-w-0">
-              <p class="text-[0.8125rem] text-[#d0d0d0] break-words">{{ ev.subject }}</p>
-              <p v-if="ev.location" class="text-[0.72rem] text-[#585858] mt-[0.1rem]">📍 {{ ev.location }}</p>
-            </div>
-            <button class="text-[#606060] hover:text-[#d08080] p-1 cursor-pointer bg-none border-none opacity-0 group-hover:opacity-100 transition-opacity duration-100" title="Delete" @click="remove(ev)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            </button>
+            <span v-if="!ev.is_all_day" class="text-[#6a8ec0]">{{ startTime(ev) }} </span>{{ ev.subject }}
+          </span>
+          <span v-if="dayEvents(d).length > 2" class="text-[0.6rem] text-[#585858] px-1">+{{ dayEvents(d).length - 2 }} more</span>
+        </div>
+      </button>
+    </div>
+
+    <div v-if="error" class="px-4 py-1.5 text-danger text-[0.75rem] border-t border-[#1e1e1e] shrink-0">{{ error }}</div>
+
+    <!-- Selected day detail -->
+    <div class="shrink-0 border-t border-[#1e1e1e] bg-[#0f0f0f] h-[160px] flex flex-col">
+      <div class="flex items-center justify-between px-4 py-2 shrink-0">
+        <span class="text-[0.8rem] font-semibold text-[#c0c0c0]">{{ selectedDayLabel }}</span>
+        <button v-if="!adding" class="text-[0.72rem] text-[#7ab0ff] hover:underline" @click="startAdd">+ Add</button>
+      </div>
+
+      <!-- Add form -->
+      <div v-if="adding" class="flex flex-col gap-2 px-4 pb-3 overflow-y-auto">
+        <input v-model="form.subject" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Event title" />
+        <div class="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted">
+          <input v-model="form.date" type="date" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
+          <template v-if="!form.allDay">
+            <input v-model="form.start" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
+            <span class="text-[#585858]">–</span>
+            <input v-model="form.end" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
+          </template>
+          <label class="flex items-center gap-1.5 cursor-pointer"><input v-model="form.allDay" type="checkbox" class="accent-[#3a6adf]" /> All day</label>
+          <label class="flex items-center gap-1.5">Remind <input v-model.number="form.reminder" type="number" min="-1" class="w-[3.5rem] bg-surface text-fg border border-raised rounded px-1.5 py-1 text-xs font-[inherit]" /> min</label>
+          <input v-model="form.location" class="flex-1 min-w-[8rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Location (optional)" />
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="saving || !form.subject.trim()" @click="saveEvent">{{ saving ? 'Saving…' : 'Create' }}</button>
+          <button class="bg-transparent text-[#585858] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Event list for the day -->
+      <div v-else class="flex-1 overflow-y-auto px-4 pb-3">
+        <div v-if="selectedDayEvents.length === 0" class="text-[0.78rem] text-[#484848] py-1">No events.</div>
+        <div v-for="ev in selectedDayEvents" :key="ev.id" class="group flex items-start gap-3 py-1.5 border-b border-[#161616] last:border-0">
+          <span class="text-[0.72rem] text-[#7ab0ff] min-w-[5.5rem] shrink-0 pt-[0.1rem] tabular-nums">{{ timeRange(ev) }}</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-[0.8125rem] text-[#d0d0d0] break-words">{{ ev.subject }}</p>
+            <p v-if="ev.location" class="text-[0.7rem] text-[#585858]">📍 {{ ev.location }}</p>
           </div>
+          <button class="text-[#606060] hover:text-[#d08080] p-1 cursor-pointer bg-none border-none opacity-0 group-hover:opacity-100 transition-opacity duration-100" title="Delete" @click="remove(ev)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
         </div>
       </div>
     </div>

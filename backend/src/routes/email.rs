@@ -13,6 +13,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent::{self, AgentEvent};
 use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::integrations::microsoft;
@@ -302,6 +303,10 @@ pub async fn list_attachments(
     State(state): State<Arc<AppState>>,
     Path(message_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    // Only base `attachment` fields: `contentId` lives on the fileAttachment
+    // subtype (selecting it 400s) and the default response includes the heavy
+    // `contentBytes`. The frontend resolves inline `cid:` references by matching
+    // the attachment name (Outlook's `cid:image001.png@…` ↔ name `image001.png`).
     let res = graph_get(
         &state,
         &format!("{GRAPH}/me/messages/{message_id}/attachments"),
@@ -525,6 +530,181 @@ email asks.";
     });
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
+}
+
+// ── Ask AI about this email (multimodal chat handoff) ───────────────────────────
+
+#[derive(Deserialize)]
+pub struct AdviseBody {
+    session_id: String,
+    provider: String,
+    instruction: Option<String>,
+}
+
+/// Cap on inline images forwarded to the model, and per-image base64 size.
+const MAX_ADVISE_IMAGES: usize = 4;
+const MAX_IMAGE_B64: usize = 5_000_000;
+
+// POST /api/email/messages/:id/advise — seed a chat session with the email
+// (body text + inline images) and stream the agent's advice.
+pub async fn advise(
+    State(state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+    Json(payload): Json<AdviseBody>,
+) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == payload.provider)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider)))?;
+
+    // Message metadata + body.
+    let msg = graph_get(
+        &state,
+        &format!("{GRAPH}/me/messages/{message_id}"),
+        &[("$select", "subject,from,body")],
+    )
+    .await?;
+    let subject = msg["subject"].as_str().unwrap_or("(no subject)");
+    let from_name = msg["from"]["emailAddress"]["name"].as_str().unwrap_or("");
+    let from_addr = msg["from"]["emailAddress"]["address"].as_str().unwrap_or("");
+    let body_raw = msg["body"]["content"].as_str().unwrap_or("");
+    let body_text = if msg["body"]["contentType"].as_str().map(|c| c.eq_ignore_ascii_case("html")).unwrap_or(false) {
+        html_to_text(body_raw)
+    } else {
+        body_raw.to_string()
+    };
+
+    // Inline images → base64 (Graph's contentBytes is already base64).
+    let attachments = graph_get(
+        &state,
+        &format!("{GRAPH}/me/messages/{message_id}/attachments"),
+        &[("$select", "id,name,contentType,size,isInline")],
+    )
+    .await?;
+    let mut images: Vec<Value> = Vec::new();
+    if let Some(arr) = attachments["value"].as_array() {
+        for att in arr {
+            if images.len() >= MAX_ADVISE_IMAGES {
+                break;
+            }
+            let ctype = att["contentType"].as_str().unwrap_or("");
+            if !ctype.starts_with("image/") {
+                continue;
+            }
+            let Some(att_id) = att["id"].as_str() else { continue };
+            let full = graph_get(
+                &state,
+                &format!("{GRAPH}/me/messages/{message_id}/attachments/{att_id}"),
+                &[("$select", "contentBytes,contentType")],
+            )
+            .await?;
+            if let Some(b64) = full["contentBytes"].as_str() {
+                if b64.len() <= MAX_IMAGE_B64 {
+                    images.push(serde_json::json!({ "mime": ctype, "b64": b64 }));
+                }
+            }
+        }
+    }
+
+    let instruction = payload
+        .instruction
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Help me understand this email and tell me what I should do about it.".to_string());
+    let text = format!(
+        "{instruction}\n\n--- Email ---\nFrom: {from_name} <{from_addr}>\nSubject: {subject}\n\n{body_text}"
+    );
+
+    let content = serde_json::json!({ "type": "multimodal", "text": text, "images": images });
+    db::messages::insert(
+        &state.db,
+        &payload.session_id,
+        "user",
+        &serde_json::to_string(&content).unwrap_or_default(),
+        None,
+        None,
+    )
+    .await
+    .map_err(AppError::Internal)?;
+    db::sessions::touch(&state.db, &payload.session_id)
+        .await
+        .map_err(AppError::Internal)?;
+
+    // Stream the agent's reply, mirroring routes::chat::stream.
+    let (tx, rx) = mpsc::channel::<AgentEvent>(64);
+    tokio::spawn(agent::run_turn(Arc::clone(&state), payload.session_id, provider, tx));
+
+    let event_stream = stream::unfold(rx, |mut rx| async move {
+        let event = match rx.recv().await? {
+            AgentEvent::Token(text) => Event::default()
+                .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
+            AgentEvent::ToolCall { name } => Event::default()
+                .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
+            AgentEvent::Done => Event::default().data(serde_json::json!({ "type": "done" }).to_string()),
+            AgentEvent::AwaitingApproval { action_id, tool_name, tool_args } => Event::default().data(
+                serde_json::json!({
+                    "type": "awaiting_approval",
+                    "action_id": action_id,
+                    "tool_name": tool_name,
+                    "tool_args": tool_args,
+                })
+                .to_string(),
+            ),
+        };
+        Some((Ok::<Event, Infallible>(event), rx))
+    });
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
+}
+
+/// Minimal HTML→text: block tags to newlines, drop script/style, strip tags,
+/// decode a few entities, tidy whitespace. Good enough to give the model context.
+fn html_to_text(html: &str) -> String {
+    let mut s = html.to_string();
+    for tag in ["</p>", "<br>", "<br/>", "<br />", "</div>", "</tr>", "</li>", "</h1>", "</h2>", "</h3>"] {
+        s = s.replace(tag, "\n");
+    }
+    // Drop <script>/<style> blocks.
+    for (open, close) in [("<script", "</script>"), ("<style", "</style>")] {
+        loop {
+            let lower = s.to_lowercase();
+            match (lower.find(open), lower.find(close)) {
+                (Some(a), Some(b)) if b > a => s.replace_range(a..b + close.len(), " "),
+                _ => break,
+            }
+        }
+    }
+    // Strip remaining tags.
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    // Collapse runs of blank lines / trailing spaces.
+    out.lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split("\n\n\n")
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string()
 }
 
 // ── Auto-categorizer config / manual run ───────────────────────────────────────

@@ -63,6 +63,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
         .route("/api/email/send", post(email::send_email))
         .route("/api/email/ai-draft", post(email::ai_draft))
+        .route("/api/email/messages/:id/advise", post(email::advise))
         .route("/api/email/categorizer", get(email::get_categorizer))
         .route("/api/email/categorizer", put(email::put_categorizer))
         .route("/api/email/categorizer/run", post(email::run_categorizer))

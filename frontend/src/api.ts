@@ -133,6 +133,46 @@ export async function streamChat(
   }
 }
 
+// Ask AI about an email — seeds a chat session server-side, then streams advice.
+export async function streamAdvise(
+  messageId: string,
+  opts: { sessionId: string; provider: string; instruction?: string },
+  onToken: (text: string) => void,
+  onDone: () => void,
+  onTool: (name: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/advise`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: opts.sessionId, provider: opts.provider, instruction: opts.instruction }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw) continue
+      let data: { type: string; text?: string; name?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'tool' && data.name) onTool(data.name)
+      else if (data.type === 'done') { onDone(); return }
+    }
+  }
+}
+
 // Approvals
 export const approvals = {
   listPending: (sessionId: string) =>
@@ -196,6 +236,8 @@ export interface Attachment {
   contentType: string
   size: number
   isInline: boolean
+  // Content-ID for inline images, referenced in the HTML body as `cid:<contentId>`.
+  contentId?: string
 }
 
 export const email = {

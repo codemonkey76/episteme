@@ -1,7 +1,10 @@
 use anyhow::Result;
 use futures::StreamExt;
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ChatStreamEvent, Tool};
+use genai::chat::{
+    ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart,
+    MessageContent, Tool,
+};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use serde::{Deserialize, Serialize};
@@ -136,6 +139,22 @@ async fn stream_ollama(
     let messages: Vec<Value> = history
         .into_iter()
         .map(|m| {
+            // Multimodal user message → Ollama's {content, images:[b64,...]} form.
+            if m.role == "user" && m.content.get("type").and_then(Value::as_str) == Some("multimodal") {
+                let text = m.content.get("text").and_then(Value::as_str).unwrap_or_default();
+                let images: Vec<Value> = m
+                    .content
+                    .get("images")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|img| img.get("b64").and_then(Value::as_str))
+                            .map(|s| Value::String(s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return serde_json::json!({ "role": "user", "content": text, "images": images });
+            }
             let content = match m.content {
                 Value::String(s) => s,
                 other => serde_json::to_string(&other).unwrap_or_default(),
@@ -291,6 +310,13 @@ fn history_to_genai(history: Vec<ChatMessage>) -> Vec<GenaiMessage> {
     history
         .into_iter()
         .filter_map(|m| {
+            // A multimodal user message ({type:"multimodal", text, images:[...]})
+            // becomes a parts message with text + base64 image parts.
+            if m.role == "user" {
+                if let Some(parts) = multimodal_parts(&m.content) {
+                    return Some(GenaiMessage::user(MessageContent::from_parts(parts)));
+                }
+            }
             let text = match m.content {
                 Value::String(s) => s,
                 other => serde_json::to_string(&other).unwrap_or_default(),
@@ -304,6 +330,33 @@ fn history_to_genai(history: Vec<ChatMessage>) -> Vec<GenaiMessage> {
             }
         })
         .collect()
+}
+
+/// If `content` is a multimodal message object, build genai content parts
+/// (text + base64 images). Returns None for plain-text content.
+fn multimodal_parts(content: &Value) -> Option<Vec<ContentPart>> {
+    if content.get("type").and_then(Value::as_str) != Some("multimodal") {
+        return None;
+    }
+    let mut parts: Vec<ContentPart> = Vec::new();
+    if let Some(text) = content.get("text").and_then(Value::as_str) {
+        if !text.is_empty() {
+            parts.push(ContentPart::from_text(text.to_string()));
+        }
+    }
+    if let Some(images) = content.get("images").and_then(Value::as_array) {
+        for img in images {
+            let mime = img.get("mime").and_then(Value::as_str).unwrap_or("image/png");
+            if let Some(b64) = img.get("b64").and_then(Value::as_str) {
+                parts.push(ContentPart::from_image_base64(mime.to_string(), b64.to_string()));
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts)
+    }
 }
 
 fn schemas_to_tools(schemas: Vec<Value>) -> Vec<Tool> {

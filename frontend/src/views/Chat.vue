@@ -3,12 +3,14 @@ import { ref, onMounted, nextTick, computed } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
 import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
+import { useCalendarStore } from '../stores/calendar'
 import * as api from '../api'
 
 const logs = useLogsStore()
 
 const store = useSessionsStore()
 const approvalsStore = useApprovalsStore()
+const calStore = useCalendarStore()
 
 // Tool-result messages are model context, not user-facing — hide them.
 const visibleMessages = computed(() => store.messages.filter(m => m.role !== 'tool'))
@@ -36,7 +38,11 @@ onMounted(async () => {
   providers.value = pRes.providers
   if (pRes.providers.length > 0) provider.value = pRes.providers[0].name
 
-  if (store.sessions.length === 0) {
+  // Keep a session set by a handoff (e.g. "Ask AI" from email); otherwise pick up
+  // the most recent session, or start a fresh one.
+  if (store.activeSession) {
+    // already loaded by the handoff
+  } else if (store.sessions.length === 0) {
     const s = await store.createSession()
     await store.loadSession(s.id)
   } else {
@@ -46,6 +52,7 @@ onMounted(async () => {
 
 async function send() {
   if (!input.value.trim() || sending.value || !store.activeSession) return
+  let calendarTouched = false
   const text = input.value.trim()
   input.value = ''
   sending.value = true
@@ -69,7 +76,13 @@ async function send() {
       text,
       provider.value,
       (tok) => { store.appendToken(tok); scrollToBottom() },
-      () => { sending.value = false; scrollToBottom(); logs.info('Chat', 'Response complete') },
+      () => {
+        sending.value = false
+        scrollToBottom()
+        logs.info('Chat', 'Response complete')
+        // If a calendar tool ran this turn, refresh any open Calendar window.
+        if (calendarTouched) { calStore.notifyChanged(); calendarTouched = false }
+      },
       (actionId, toolName, toolArgs) => {
         logs.warn('Chat', `Tool approval required: ${toolName}`)
         approvalsStore.addPending({
@@ -81,7 +94,11 @@ async function send() {
           created_at: new Date().toISOString(),
         })
       },
-      (name) => { store.appendToolCall(name); scrollToBottom() },
+      (name) => {
+        store.appendToolCall(name)
+        scrollToBottom()
+        if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
+      },
       abortController.signal,
     )
   } catch (e) {
@@ -107,6 +124,17 @@ async function scrollToBottom() {
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+}
+
+// DB-stored content is JSON-encoded (a quoted string, or a multimodal object);
+// live-streamed content is plain text. Normalize both for display.
+function displayContent(c: string): string {
+  try {
+    const v = JSON.parse(c)
+    if (typeof v === 'string') return v
+    if (v && typeof v === 'object' && v.type === 'multimodal') return v.text ?? ''
+  } catch { /* plain text */ }
+  return c
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -135,7 +163,7 @@ function toolLabel(name: string): string {
           <span class="text-[0.7rem] uppercase text-[#606060]">{{ msg.role }}</span>
           <pre
             :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : msg.role === 'assistant' ? 'bg-surface py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
-          >{{ msg.content }}</pre>
+          >{{ displayContent(msg.content) }}</pre>
         </div>
       </template>
     </div>

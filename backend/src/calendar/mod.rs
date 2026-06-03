@@ -64,9 +64,11 @@ pub async fn list_events(
         .query(&[
             ("startDateTime", start.to_rfc3339()),
             ("endDateTime", end.to_rfc3339()),
-            ("$select", "id,subject,start,end,location,isAllDay,webLink".to_string()),
+            ("$select", "id,subject,start,end,location,isAllDay,webLink,type".to_string()),
             ("$orderby", "start/dateTime".to_string()),
-            ("$top", "100".to_string()),
+            // calendarView expands recurring series into occurrences; allow plenty
+            // so a recurring-heavy month isn't truncated.
+            ("$top", "500".to_string()),
         ])
         .bearer_auth(&token)
         // Ask Graph to return start/end in UTC so we don't have to map Windows tz names.

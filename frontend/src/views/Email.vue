@@ -3,17 +3,20 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useWindowsStore } from '../stores/windows'
+import { useSessionsStore } from '../stores/sessions'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
 
 const logs = useLogsStore()
 const windows = useWindowsStore()
+const sessions = useSessionsStore()
 
 // ── Connection state ──────────────────────────────────────────────────────────
 const connected = ref(false)
 const checkingConnection = ref(true)
 
-// AI provider used for drafting replies (first configured provider).
+// AI provider for drafting replies and "Ask AI" (defaults to first configured).
 const aiProvider = ref('')
+const providersList = ref<api.ProviderConfig[]>([])
 
 onMounted(async () => {
   try {
@@ -25,6 +28,7 @@ onMounted(async () => {
   if (connected.value) await loadFolders()
   try {
     const { providers } = await api.settings.listProviders()
+    providersList.value = providers
     if (providers.length) aiProvider.value = providers[0].name
   } catch { /* no providers configured; AI reply will surface the error */ }
 })
@@ -156,6 +160,27 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+// Rewrite inline `cid:` image references to the attachment proxy URL so embedded
+// images render (browsers can't resolve cid: URLs). Matches each `cid:NAME@host`
+// to the attachment named NAME (Outlook's convention), with a contentId fallback.
+// Updates reactively once the attachment metadata loads.
+const renderedBody = computed(() => {
+  const m = selectedMessage.value
+  if (!m) return ''
+  const html = m.body.content
+  if (!isHtmlBody.value || attachments.value.length === 0) return html
+
+  return html.replace(/cid:([^"'\s)>]+)/gi, (full, cid: string) => {
+    const prefix = cid.split('@')[0]
+    const att = attachments.value.find(a =>
+      (a.contentId && a.contentId.replace(/^<|>$/g, '') === cid) ||
+      a.name === cid ||
+      a.name === prefix,
+    )
+    return att ? api.email.attachmentUrl(m.id, att.id) : full
+  })
+})
+
 // Microsoft Graph returns body.contentType lowercase ("html"/"text"), so
 // compare case-insensitively rather than against a fixed-case literal.
 const isHtmlBody = computed(
@@ -171,7 +196,11 @@ async function selectMessage(summary: api.MessageSummary) {
     const detail = await api.email.getMessage(summary.id)
     selectedMessage.value = detail
     // Fetch attachment metadata in the background so the body renders right away.
-    if (summary.hasAttachments) {
+    // NOTE: Graph's `hasAttachments` is false when a message has ONLY inline
+    // images, so also fetch when the HTML body references `cid:` content.
+    const hasInlineCid =
+      detail.body?.contentType?.toLowerCase() === 'html' && detail.body.content.includes('cid:')
+    if (summary.hasAttachments || hasInlineCid) {
       api.email
         .listAttachments(summary.id)
         .then(r => { if (selectedMessage.value?.id === summary.id) attachments.value = r.value })
@@ -282,6 +311,45 @@ async function aiReply() {
     logs.error('Email', `AI draft failed: ${msg}`)
   } finally {
     aiDrafting.value = false
+  }
+}
+
+// Hand the email (text + inline images) to a new chat session and stream advice
+// on what to do. Continues as a normal conversation for follow-ups.
+const asking = ref(false)
+async function askAi() {
+  const m = selectedMessage.value
+  if (!m || asking.value) return
+  if (!aiProvider.value) {
+    logs.error('Email', 'No AI provider configured — add one in Settings.')
+    return
+  }
+  asking.value = true
+  const subject = m.subject ?? '(no subject)'
+  try {
+    const s = await sessions.createSession(`Email: ${subject}`)
+    await sessions.loadSession(s.id)
+    // Display-only stand-in for the (multimodal) message seeded server-side.
+    sessions.appendMessage({
+      id: crypto.randomUUID(),
+      session_id: s.id,
+      role: 'user',
+      content: `📧 Advise on this email: ${subject}`,
+      created_at: new Date().toISOString(),
+    })
+    windows.openKey('chat', undefined, 'fill')
+    await api.streamAdvise(
+      m.id,
+      { sessionId: s.id, provider: aiProvider.value },
+      (tok) => sessions.appendToken(tok),
+      () => {},
+      () => {},
+    )
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Failed'
+    logs.error('Email', `Ask AI failed: ${msg}`)
+  } finally {
+    asking.value = false
   }
 }
 
@@ -692,7 +760,7 @@ const replyBody = computed(() => {
             <iframe
               v-if="isHtmlBody"
               ref="iframeEl"
-              :srcdoc="selectedMessage.body.content"
+              :srcdoc="renderedBody"
               sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
               class="w-full min-h-[200px] border-none bg-white rounded-md block transition-opacity duration-150"
               :class="bodyReady ? 'opacity-100' : 'opacity-0'"
@@ -702,7 +770,16 @@ const replyBody = computed(() => {
           </div>
 
           <!-- Reply area -->
-          <div v-if="!showReply" class="py-3 px-5 border-t border-[#1e1e1e] flex-shrink-0 flex gap-2">
+          <div v-if="!showReply" class="py-3 px-5 border-t border-[#1e1e1e] flex-shrink-0 flex gap-2 items-center flex-wrap">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#23304a] text-[#a0c8ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#2a3c5c] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              {{ asking ? 'Asking…' : 'Ask AI' }}
+            </button>
+            <select v-if="providersList.length > 1" v-model="aiProvider" class="bg-surface text-[#c0c0c0] border border-raised rounded px-1.5 py-1 text-[0.72rem] font-[inherit] cursor-pointer" title="AI provider (use a vision model to read inline images)">
+              <option v-for="p in providersList" :key="p.name" :value="p.name">{{ p.name }}</option>
+            </select>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#254880]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
