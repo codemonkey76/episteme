@@ -43,12 +43,22 @@ export interface McpServerConfig {
     | { type: 'http'; url: string }
 }
 
+// Invoked whenever an API call comes back 401, so the app can drop to the login
+// screen no matter which request tripped it. Registered by the auth store.
+let onUnauthorized: (() => void) | null = null
+export function setUnauthorizedHandler(fn: () => void) {
+  onUnauthorized = fn
+}
+
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
   })
   if (!res.ok) {
+    // Don't fire the handler for the status probe itself — it's expected to
+    // report "not authenticated" without bouncing the UI.
+    if (res.status === 401 && path !== '/auth/status') onUnauthorized?.()
     let msg = `${res.status} ${res.statusText}`
     try {
       const body = await res.json()
@@ -436,13 +446,35 @@ export const integrations = {
   },
 }
 
-// Auth (stubs — wired once backend auth is implemented)
+// Auth
+export interface AuthStatus {
+  setup_required: boolean
+  authenticated: boolean
+  username: string | null
+}
+
 export const auth = {
-  changePassword: (_current: string, _next: string) =>
-    Promise.reject(new Error('Not implemented yet.')),
+  status: () => json<AuthStatus>('/auth/status'),
+  setup: (username: string, password: string) =>
+    json<{ ok: true; username: string }>('/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  login: (username: string, password: string) =>
+    json<{ ok: true; username: string }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () =>
+    fetch(BASE + '/auth/logout', { method: 'POST' }).then(() => undefined),
+  changePassword: (current: string, next: string) =>
+    json<{ ok: true }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current, next }),
+    }),
+  // Two-factor auth is not implemented yet (the UI toggle is a placeholder).
   toggleTwoFactor: (_enable: boolean) =>
-    Promise.reject(new Error('Not implemented yet.')),
-  logout: () => Promise.resolve(),
+    Promise.reject(new Error('Two-factor authentication is not available yet.')),
 }
 
 // Logs

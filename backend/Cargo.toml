@@ -13,7 +13,7 @@ tokio = { version = "1", features = ["full"] }
 
 # HTTP server + SSE
 axum = { version = "0.7", features = ["ws"] }
-axum-extra = { version = "0.9", features = ["typed-header"] }
+axum-extra = { version = "0.9", features = ["typed-header", "cookie"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 
@@ -34,6 +34,10 @@ futures = "0.3"
 # Error handling
 anyhow = "1"
 thiserror = "1"
+
+# Authentication (password hashing + cookie expiry)
+argon2 = "0.5"
+time = "0.3"
 
 # Model router
 genai = "0.1"

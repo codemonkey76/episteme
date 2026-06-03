@@ -15,6 +15,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
 - **Logs** — a live, filterable log window fed by both frontend and backend events
+- **Authentication** — a single admin account gates the whole app: a first-run setup screen creates the account (password hashed with argon2), and an HttpOnly session cookie protects every API route. Change your password or sign out from **Settings → Account**
 - **Settings** — manage model providers, MCP servers, the Microsoft 365 connection, and auto-sort through the UI (no recompile required)
 - **Docker** — multi-stage build produces a single static binary + assets; `docker compose up` for a self-contained deployment
 
@@ -53,12 +54,14 @@ cd frontend && npm install && npm run build && cd ..
 cargo run --release
 ```
 
-Open `http://localhost:3000`. Add a model provider in Settings (name, endpoint, API key) and start chatting.
+Open `http://localhost:3000`. On first launch you'll be prompted to **create an admin account**; after that, add a model provider in Settings (name, endpoint, API key) and start chatting.
+
+> When running over plain HTTP like this (no TLS), set `AUTH_COOKIE_INSECURE=1` in `.env` — otherwise the `Secure` session cookie is rejected by the browser and you can't stay logged in.
 
 **Dev mode** — run the backend and frontend separately for hot reload:
 
 ```sh
-# Terminal 1: backend
+# Terminal 1: backend (set AUTH_COOKIE_INSECURE=1 in .env for http login)
 cargo run
 
 # Terminal 2: frontend dev server (proxies API calls to :3000)
@@ -113,6 +116,7 @@ Environment variables (`.env` or shell):
 | `STATIC_DIR` | `static` | Directory for compiled frontend assets |
 | `RUST_LOG` | `episteme=debug,...` | Log filter (tracing-subscriber syntax) |
 | `EPISTEME_DOMAIN` | — | Public domain for the Caddy reverse proxy / Let's Encrypt cert (Docker HTTPS deploy only) |
+| `AUTH_COOKIE_INSECURE` | — | Set (e.g. `1`) to allow the session cookie over plain HTTP. Needed for local `cargo run` / Vite dev; leave **unset** in production |
 | `ANTHROPIC_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 | `OPENAI_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 
@@ -122,7 +126,8 @@ Model providers, MCP servers, and the Microsoft 365 integration (email + calenda
 
 Episteme can hold API tokens and (eventually) execute shell commands. Treat it as a privileged admin tool:
 
-- **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy for anything beyond localhost — the bundled Caddy service (see [Deploying with HTTPS](#deploying-with-https)) does this for you.
+- **A single admin account protects the app.** The first-run setup screen creates it; the password is hashed with argon2 and every API route requires a valid HttpOnly session cookie. There is no public sign-up and no password recovery — if you lose the password, delete the `auth_users`/`auth_sessions` rows (or the SQLite DB) to re-trigger setup. Multi-user accounts and 2FA are not yet implemented (the 2FA toggle in Settings is a placeholder).
+- **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy for anything beyond localhost — the bundled Caddy service (see [Deploying with HTTPS](#deploying-with-https)) does this for you. The session cookie is `Secure` by default, so HTTPS is required for login to work (override with `AUTH_COOKIE_INSECURE` only for local http).
 - **Native tools currently auto-execute.** The approval/resume flow is not yet wired, so when you ask the AI to create a calendar event (or auto-sort runs), it acts immediately. Every action is recorded in the Logs window, which is the audit surface for now. Re-enabling approval gating is on the roadmap.
 - **Keep secrets out of version control.** API keys and OAuth client secrets belong in `.env`/the SQLite DB (both gitignored), not committed.
 

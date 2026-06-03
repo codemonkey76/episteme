@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
+    middleware,
     routing::{delete, get, post, put},
     Router,
 };
@@ -10,6 +11,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
 mod approvals;
+pub(crate) mod auth;
 mod calendar;
 mod chat;
 pub(crate) mod email;
@@ -27,7 +29,17 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
 
-    Router::new()
+    // Public auth endpoints — reachable without a session so the user can set
+    // up an account, log in, and check status.
+    let public = Router::new()
+        .route("/api/auth/status", get(auth::status))
+        .route("/api/auth/setup", post(auth::setup))
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout));
+
+    // Everything else requires a valid session cookie.
+    let protected = Router::new()
+        .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/sessions/:id/chat", post(chat::stream))
         .route("/api/sessions", get(sessions::list))
         .route("/api/sessions", post(sessions::create))
@@ -74,6 +86,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+
+    public
+        .merge(protected)
         .layer(cors)
         .with_state(state)
         .fallback_service(

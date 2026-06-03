@@ -2,8 +2,10 @@
 import { ref, onMounted, computed } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
+import { useAuthStore } from '../stores/auth'
 
 const logs = useLogsStore()
+const authStore = useAuthStore()
 
 const props = defineProps<{ initialTab?: string }>()
 
@@ -202,8 +204,8 @@ async function toggleTwoFactor() {
 }
 
 async function logout() {
-  await api.auth.logout()
-  window.location.href = '/login'
+  await authStore.logout()
+  // No /login route — clearing `authenticated` drops the app back to AuthGate.
 }
 </script>
 

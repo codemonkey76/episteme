@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
+pub mod auth;
 pub mod sessions;
 pub mod messages;
 pub mod settings;
