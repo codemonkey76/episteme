@@ -389,6 +389,10 @@ pub async fn mark_read(
 #[derive(Deserialize)]
 pub struct SendBody {
     to: Vec<String>,
+    #[serde(default)]
+    cc: Vec<String>,
+    #[serde(default)]
+    bcc: Vec<String>,
     subject: Option<String>,
     body: String,
     reply_to_message_id: Option<String>,
@@ -396,6 +400,14 @@ pub struct SendBody {
     /// endpoint; reply/replyAll both send via /reply with explicit recipients.
     #[serde(default)]
     action: Option<String>,
+}
+
+/// Map plain addresses to Graph recipient objects.
+fn recipients(addrs: &[String]) -> Vec<Value> {
+    addrs
+        .iter()
+        .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
+        .collect()
 }
 
 pub async fn send_email(
@@ -406,24 +418,30 @@ pub async fn send_email(
         .await
         .map_err(AppError::Internal)?;
 
-    let recipients = payload
-        .to
-        .iter()
-        .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
-        .collect::<Vec<_>>();
+    let to = recipients(&payload.to);
+    let cc = recipients(&payload.cc);
+    let bcc = recipients(&payload.bcc);
 
     if let Some(reply_id) = payload.reply_to_message_id {
         // /forward carries the original message; /reply (used for both reply and
-        // reply-all) takes the recipient list the frontend computed.
+        // reply-all) takes the recipient list the frontend computed. Cc/Bcc go in
+        // the `message` parameter for both actions.
         let (url, body) = if payload.action.as_deref() == Some("forward") {
             (
                 format!("{GRAPH}/me/messages/{reply_id}/forward"),
-                serde_json::json!({ "toRecipients": recipients, "comment": payload.body }),
+                serde_json::json!({
+                    "toRecipients": to,
+                    "message": { "ccRecipients": cc, "bccRecipients": bcc },
+                    "comment": payload.body,
+                }),
             )
         } else {
             (
                 format!("{GRAPH}/me/messages/{reply_id}/reply"),
-                serde_json::json!({ "message": { "toRecipients": recipients }, "comment": payload.body }),
+                serde_json::json!({
+                    "message": { "toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc },
+                    "comment": payload.body,
+                }),
             )
         };
         state
@@ -439,7 +457,9 @@ pub async fn send_email(
             "message": {
                 "subject": payload.subject.unwrap_or_default(),
                 "body": { "contentType": "Text", "content": payload.body },
-                "toRecipients": recipients,
+                "toRecipients": to,
+                "ccRecipients": cc,
+                "bccRecipients": bcc,
             },
         });
         state
@@ -482,8 +502,9 @@ pub async fn ai_draft(
 
     let system = "You draft email replies on behalf of the user. Output only the body of the \
 reply — no subject line, no quoted original message, and no placeholder tokens like [Name]. \
-Keep it clear, polite, and concise in a professional tone, and directly address anything the \
-email asks.";
+If the email contains quoted earlier messages or a reply thread, respond ONLY to the most \
+recent message, not to the quoted history. Keep it clear, polite, and concise in a professional \
+tone, and directly address anything the email asks.";
 
     let user = format!(
         "Draft a reply to this email.\n\nFrom: {}\nSubject: {}\n\n{}",
@@ -596,10 +617,12 @@ pub async fn advise(
                 continue;
             }
             let Some(att_id) = att["id"].as_str() else { continue };
+            // No $select: contentBytes lives on the fileAttachment subtype (selecting
+            // it 400s); the single-attachment GET returns it by default.
             let full = graph_get(
                 &state,
                 &format!("{GRAPH}/me/messages/{message_id}/attachments/{att_id}"),
-                &[("$select", "contentBytes,contentType")],
+                &[],
             )
             .await?;
             if let Some(b64) = full["contentBytes"].as_str() {

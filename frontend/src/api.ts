@@ -224,6 +224,8 @@ export interface SearchResult {
 
 export interface SendEmailPayload {
   to: string[]
+  cc?: string[]
+  bcc?: string[]
   subject?: string
   body: string
   reply_to_message_id?: string

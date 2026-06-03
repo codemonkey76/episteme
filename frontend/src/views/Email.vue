@@ -17,6 +17,7 @@ const checkingConnection = ref(true)
 // AI provider for drafting replies and "Ask AI" (defaults to first configured).
 const aiProvider = ref('')
 const providersList = ref<api.ProviderConfig[]>([])
+const providerMenuOpen = ref(false)
 
 onMounted(async () => {
   try {
@@ -244,7 +245,8 @@ watch(selectedMessage, () => {
 })
 
 // ── Compose / reply ───────────────────────────────────────────────────────────
-const composeForm = ref({ to: '', subject: '', body: '' })
+const composeForm = ref({ to: '', cc: '', bcc: '', subject: '', body: '' })
+const showCcBcc = ref(false)
 const sending = ref(false)
 const sendMsg = ref('')
 
@@ -252,22 +254,18 @@ function openCompose() {
   selectedMessage.value = null
   showReply.value = false
   view.value = 'compose'
-  composeForm.value = { to: '', subject: '', body: '' }
+  composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
+  showCcBcc.value = false
   sendMsg.value = ''
 }
 
 type ReplyMode = 'reply' | 'replyAll' | 'forward'
 const replyMode = ref<ReplyMode>('reply')
 
-// Sender + all To + Cc recipients, de-duplicated (case-insensitive). The field
-// stays editable so the user can drop their own address if it's included.
-function replyAllRecipients(m: api.MessageDetail): string {
+// Comma-join unique addresses (case-insensitive); fields stay editable.
+function dedupAddrs(addrs: string[]): string {
   const seen = new Set<string>()
-  return [
-    m.from.emailAddress.address,
-    ...m.toRecipients.map(r => r.emailAddress.address),
-    ...m.ccRecipients.map(r => r.emailAddress.address),
-  ]
+  return addrs
     .filter(a => {
       const key = a?.toLowerCase()
       if (!key || seen.has(key)) return false
@@ -276,8 +274,66 @@ function replyAllRecipients(m: api.MessageDetail): string {
     })
     .join(', ')
 }
+// Reply-all: sender + original To go to To; original Cc goes to Cc.
+function replyAllTo(m: api.MessageDetail): string {
+  return dedupAddrs([m.from.emailAddress.address, ...m.toRecipients.map(r => r.emailAddress.address)])
+}
+function replyAllCc(m: api.MessageDetail): string {
+  return dedupAddrs(m.ccRecipients.map(r => r.emailAddress.address))
+}
 
 const aiDrafting = ref(false)
+const aiWarming = ref(false)
+
+// Extract just the newest message from an email, dropping quoted thread history
+// so the AI replies to the latest message rather than to quoted prior replies.
+function latestMessageText(m: api.MessageDetail): string {
+  const isHtml = m.body.contentType?.toLowerCase() === 'html'
+  const text = isHtml ? htmlToText(m.body.content) : m.body.content
+  return truncateAtQuote(text)
+}
+
+// HTML → plain text PRESERVING line breaks (block tags / <br> become newlines),
+// so line-anchored quote markers can match. Quoted blockquotes are dropped.
+function htmlToText(html: string): string {
+  let s = html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '\n__QUOTE__\n')
+    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+  // Decode HTML entities safely (no script execution).
+  const ta = document.createElement('textarea')
+  ta.innerHTML = s
+  s = ta.value
+  return s
+    .split('\n')
+    .map(l => l.trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+// Cut text at the first quoted-reply marker (Outlook "From:/Sent:" header,
+// Gmail "On … wrote:", "Original Message", dividers, plain-text ">", or a
+// dropped blockquote). Falls back to the full text if that would remove everything.
+function truncateAtQuote(text: string): string {
+  const markers = [
+    /^From:\s.+\r?\n\s*(Sent|Date):\s/im,
+    /^-{2,}\s*Original Message\s*-{2,}/im,
+    /^On\s[\s\S]{1,200}?\bwrote:\s*$/im,
+    /^_{5,}\s*$/m,
+    /^>{1,}\s/m,
+    /\n__QUOTE__/,
+  ]
+  let cut = text.length
+  for (const re of markers) {
+    const match = re.exec(text)
+    if (match && match.index > 0 && match.index < cut) cut = match.index
+  }
+  const head = text.slice(0, cut).replace(/__QUOTE__/g, '').trim()
+  return head.length >= 2 ? head : text.replace(/__QUOTE__/g, '').trim()
+}
 
 // Open a reply and ask the configured AI provider to draft the body. The draft
 // lands in the editable composer so the user can revise it before sending.
@@ -290,12 +346,15 @@ async function aiReply() {
     return
   }
   aiDrafting.value = true
+  aiWarming.value = false
   composeForm.value.body = ''
+  // If no token arrives within a few seconds, the model is likely cold-loading.
+  let firstToken = false
+  const t0 = Date.now()
+  const warmTimer = setTimeout(() => { if (!firstToken) aiWarming.value = true }, 4000)
+  logs.info('Email', `AI draft requested via "${aiProvider.value}"`)
   try {
-    const bodyText =
-      m.body.contentType?.toLowerCase() === 'html'
-        ? (new DOMParser().parseFromString(m.body.content, 'text/html').body.textContent ?? '').trim()
-        : m.body.content
+    const bodyText = latestMessageText(m)
     await api.streamAiDraft(
       {
         provider: aiProvider.value,
@@ -303,13 +362,22 @@ async function aiReply() {
         subject: m.subject ?? '',
         body: bodyText,
       },
-      (text) => { composeForm.value.body += text },
+      (text) => {
+        if (!firstToken) {
+          firstToken = true
+          aiWarming.value = false
+          logs.info('Email', `AI draft started after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+        }
+        composeForm.value.body += text
+      },
     )
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Draft failed'
     sendMsg.value = `AI draft failed: ${msg}`
     logs.error('Email', `AI draft failed: ${msg}`)
   } finally {
+    clearTimeout(warmTimer)
+    aiWarming.value = false
     aiDrafting.value = false
   }
 }
@@ -359,30 +427,45 @@ function startReply(mode: ReplyMode) {
   replyMode.value = mode
   showReply.value = true
   sendMsg.value = ''
+  showCcBcc.value = false
   const subject = m.subject ?? ''
   if (mode === 'forward') {
     composeForm.value = {
-      to: '',
+      to: '', cc: '', bcc: '',
       subject: subject.startsWith('Fwd:') ? subject : `Fwd: ${subject}`,
       body: '',
     }
+  } else if (mode === 'replyAll') {
+    const cc = replyAllCc(m)
+    composeForm.value = {
+      to: replyAllTo(m), cc, bcc: '',
+      subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
+      body: '',
+    }
+    if (cc) showCcBcc.value = true // reveal Cc so the prefilled recipients are visible
   } else {
     composeForm.value = {
-      to: mode === 'replyAll' ? replyAllRecipients(m) : m.from.emailAddress.address,
+      to: m.from.emailAddress.address, cc: '', bcc: '',
       subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
       body: '',
     }
   }
 }
 
+function parseAddrs(s: string): string[] {
+  return s.split(',').map(a => a.trim()).filter(Boolean)
+}
+
 async function sendEmail() {
   sending.value = true
   sendMsg.value = ''
-  const toList = composeForm.value.to.split(',').map(s => s.trim()).filter(Boolean)
+  const toList = parseAddrs(composeForm.value.to)
   logs.info('Email', `Sending email to ${toList.join(', ')}`)
   try {
     const payload: api.SendEmailPayload = {
-      to: composeForm.value.to.split(',').map(s => s.trim()).filter(Boolean),
+      to: toList,
+      cc: parseAddrs(composeForm.value.cc),
+      bcc: parseAddrs(composeForm.value.bcc),
       body: composeForm.value.body,
     }
     if (showReply.value && selectedMessage.value) {
@@ -408,7 +491,8 @@ async function sendEmail() {
       }
       showReply.value = false
     }
-    composeForm.value = { to: '', subject: '', body: '' }
+    composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
+    showCcBcc.value = false
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Send failed'
     sendMsg.value = `Failed: ${msg}`
@@ -686,7 +770,18 @@ const replyBody = computed(() => {
           <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
             <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">To</span>
             <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="recipient@example.com" required />
+            <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[#5a7da0] hover:text-[#7ab0ff] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
           </label>
+          <template v-if="showCcBcc">
+            <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Cc</span>
+              <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="cc@example.com" />
+            </label>
+            <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Bcc</span>
+              <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="bcc@example.com" />
+            </label>
+          </template>
           <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
             <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Subject</span>
             <input v-model="composeForm.subject" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="Subject" />
@@ -777,9 +872,6 @@ const replyBody = computed(() => {
               </svg>
               {{ asking ? 'Asking…' : 'Ask AI' }}
             </button>
-            <select v-if="providersList.length > 1" v-model="aiProvider" class="bg-surface text-[#c0c0c0] border border-raised rounded px-1.5 py-1 text-[0.72rem] font-[inherit] cursor-pointer" title="AI provider (use a vision model to read inline images)">
-              <option v-for="p in providersList" :key="p.name" :value="p.name">{{ p.name }}</option>
-            </select>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#254880]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
@@ -804,6 +896,38 @@ const replyBody = computed(() => {
               </svg>
               Forward
             </button>
+
+            <!-- AI model picker — compact icon dropdown, right-aligned -->
+            <div v-if="providersList.length > 1" class="relative ml-auto">
+              <button
+                type="button"
+                class="inline-flex items-center gap-[0.2rem] py-[0.35rem] px-2 bg-surface text-[#909090] border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0]"
+                :title="`AI model: ${aiProvider}`"
+                @click="providerMenuOpen = !providerMenuOpen"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                  <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+                </svg>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <template v-if="providerMenuOpen">
+                <div class="fixed inset-0 z-[40]" @click="providerMenuOpen = false" />
+                <div class="absolute right-0 bottom-full mb-1.5 z-[41] min-w-[12rem] bg-[#1c1c1c] border border-[#303030] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
+                  <div class="px-3 py-1 text-[0.62rem] uppercase tracking-[0.06em] text-[#585858]">AI model</div>
+                  <button
+                    v-for="p in providersList"
+                    :key="p.name"
+                    type="button"
+                    class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-[0.78rem] font-[inherit] cursor-pointer hover:bg-[#262626]"
+                    @click="aiProvider = p.name; providerMenuOpen = false"
+                  >
+                    <svg class="flex-shrink-0" :class="p.name === aiProvider ? 'text-[#7ab0ff]' : 'text-transparent'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span :class="p.name === aiProvider ? 'text-[#7ab0ff]' : 'text-[#c0c0c0]'">{{ p.name }}</span>
+                  </button>
+                </div>
+              </template>
+            </div>
           </div>
 
           <form v-else class="flex flex-col gap-2 border-t border-[#1e1e1e] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
@@ -811,13 +935,24 @@ const replyBody = computed(() => {
               <span class="text-[0.8125rem] font-semibold text-[#808080] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
               <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[#7ab0ff]">
                 <span class="inline-block w-[11px] h-[11px] border-2 border-[#2a4a8a] border-t-[#7ab0ff] rounded-full animate-[spin_0.7s_linear_infinite]" />
-                Drafting…
+                {{ aiWarming ? 'Loading model (first use can take a while)…' : 'Drafting…' }}
               </span>
             </div>
             <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
               <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">To</span>
               <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="recipient@example.com" required />
+              <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[#5a7da0] hover:text-[#7ab0ff] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
             </label>
+            <template v-if="showCcBcc">
+              <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Cc</span>
+                <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="cc@example.com" />
+              </label>
+              <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Bcc</span>
+                <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="bcc@example.com" />
+              </label>
+            </template>
             <textarea v-model="composeForm.body" class="flex-1 min-h-[120px] resize-none bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[#404040]" :placeholder="(replyMode === 'forward' ? 'Add a message…' : 'Write your reply…') + replyBody" :required="replyMode !== 'forward'" />
             <div class="flex items-center gap-2 pt-1">
               <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="sending || aiDrafting">{{ sending ? 'Sending…' : replyMode === 'forward' ? 'Send Forward' : 'Send Reply' }}</button>

@@ -167,6 +167,9 @@ async fn stream_ollama(
         "model": provider.model_id,
         "messages": messages,
         "stream": true,
+        // Keep the model resident after a request so the next chat/draft doesn't
+        // pay a full cold-load (Ollama unloads after 5 min idle by default).
+        "keep_alive": "30m",
     });
     // Disable reasoning for thinking-capable models (e.g. qwen3, deepseek-r1) so
     // they emit the answer immediately. Only sent when explicitly disabling —

@@ -48,6 +48,13 @@ onMounted(async () => {
   } else {
     await store.loadSession(store.sessions[0].id)
   }
+
+  // Land at the latest message on (re)load. The extra frame ensures it happens
+  // after the message list (incl. rendered markdown) has its final height.
+  await scrollToBottom()
+  requestAnimationFrame(() => {
+    if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+  })
 })
 
 async function send() {
@@ -126,6 +133,49 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
 }
 
+// ── Minimal, XSS-safe markdown rendering for assistant messages ──────────────
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+function inlineMd(s: string): string {
+  const codes: string[] = []
+  s = s.replace(/`([^`]+)`/g, (_m, c) => { codes.push(c); return `${codes.length - 1}` })
+  s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
+  s = s.replace(/__([^_]+?)__/g, '<strong>$1</strong>')
+  s = s.replace(/(^|[^*\w])\*(?!\s)([^*\n]+?)\*/g, '$1<em>$2</em>')
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+  s = s.replace(/(\d+)/g, (_m, n) => `<code>${codes[+n]}</code>`)
+  return s
+}
+function renderMarkdown(src: string): string {
+  const lines = escapeHtml(src).split('\n')
+  const out: string[] = []
+  let i = 0
+  let list: 'ul' | 'ol' | null = null
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null } }
+  while (i < lines.length) {
+    const line = lines[i]
+    if (/^\s*```/.test(line)) {
+      closeList(); i++
+      const code: string[] = []
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { code.push(lines[i]); i++ }
+      i++
+      out.push(`<pre class="md-pre"><code>${code.join('\n')}</code></pre>`)
+      continue
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line)
+    if (h) { closeList(); out.push(`<div class="md-h md-h${Math.min(h[1].length, 3)}">${inlineMd(h[2])}</div>`); i++; continue }
+    const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
+    if (ul) { if (list !== 'ul') { closeList(); out.push('<ul class="md-ul">'); list = 'ul' } out.push(`<li>${inlineMd(ul[1])}</li>`); i++; continue }
+    const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
+    if (ol) { if (list !== 'ol') { closeList(); out.push('<ol class="md-ol">'); list = 'ol' } out.push(`<li>${inlineMd(ol[1])}</li>`); i++; continue }
+    if (/^\s*$/.test(line)) { closeList(); out.push('<br>'); i++; continue }
+    closeList(); out.push(`<div>${inlineMd(line)}</div>`); i++
+  }
+  closeList()
+  return out.join('\n')
+}
+
 // DB-stored content is JSON-encoded (a quoted string, or a multimodal object);
 // live-streamed content is plain text. Normalize both for display.
 function displayContent(c: string): string {
@@ -161,8 +211,15 @@ function toolLabel(name: string): string {
         <!-- Normal message -->
         <div v-else :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']">
           <span class="text-[0.7rem] uppercase text-[#606060]">{{ msg.role }}</span>
+          <!-- Assistant: rendered markdown. User: plain text. -->
+          <div
+            v-if="msg.role === 'assistant'"
+            class="md-body bg-surface py-[0.6rem] px-[0.8rem] rounded-lg text-[0.9rem] leading-[1.5] break-words"
+            v-html="renderMarkdown(displayContent(msg.content))"
+          />
           <pre
-            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : msg.role === 'assistant' ? 'bg-surface py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
+            v-else
+            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
           >{{ displayContent(msg.content) }}</pre>
         </div>
       </template>
@@ -198,3 +255,29 @@ function toolLabel(name: string): string {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered into assistant messages (v-html → needs :deep). */
+.md-body :deep(strong) { font-weight: 600; color: #e8e8e8; }
+.md-body :deep(em) { font-style: italic; }
+.md-body :deep(a) { color: #7ab0ff; text-decoration: underline; }
+.md-body :deep(code) {
+  background: #0f0f0f; border: 1px solid #262626; border-radius: 4px;
+  padding: 0.05rem 0.3rem; font-size: 0.85em;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+}
+.md-body :deep(pre.md-pre) {
+  background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 6px;
+  padding: 0.6rem 0.8rem; overflow-x: auto; margin: 0.4rem 0;
+}
+.md-body :deep(pre.md-pre code) { background: none; border: none; padding: 0; }
+.md-body :deep(ul.md-ul), .md-body :deep(ol.md-ol) { margin: 0.3rem 0; padding-left: 1.3rem; }
+.md-body :deep(ul.md-ul) { list-style: disc; }
+.md-body :deep(ol.md-ol) { list-style: decimal; }
+.md-body :deep(li) { margin: 0.1rem 0; }
+.md-body :deep(.md-h) { font-weight: 600; color: #e8e8e8; margin: 0.35rem 0 0.15rem; }
+.md-body :deep(.md-h1) { font-size: 1.12em; }
+.md-body :deep(.md-h2) { font-size: 1.06em; }
+/* Collapse the leading/trailing spacer <br>s the renderer can emit. */
+.md-body :deep(br:first-child), .md-body :deep(br:last-child) { display: none; }
+</style>
