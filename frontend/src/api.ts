@@ -619,7 +619,7 @@ export const settings = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, policy }),
     }),
-  getTimezone: () => json<{ timezone: string }>('/settings/timezone'),
+  getTimezone: () => json<{ timezone: string; configured: boolean }>('/settings/timezone'),
   setTimezone: async (timezone: string) => {
     const res = await fetch(BASE + '/settings/timezone', {
       method: 'POST',

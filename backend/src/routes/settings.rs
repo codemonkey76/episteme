@@ -260,8 +260,16 @@ pub async fn set_tool_policy(
 pub async fn get_timezone(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<serde_json::Value>> {
+    // `configured` distinguishes an explicit setting from the TZ-env/UTC
+    // fallback, so the UI can auto-save a detected zone on first run.
+    let stored: Option<String> = db::settings::get(&state.db, "timezone")
+        .await
+        .map_err(AppError::Internal)?;
     let tz = state.home_tz().await;
-    Ok(Json(serde_json::json!({ "timezone": tz.name() })))
+    Ok(Json(serde_json::json!({
+        "timezone": tz.name(),
+        "configured": stored.is_some(),
+    })))
 }
 
 #[derive(Deserialize)]

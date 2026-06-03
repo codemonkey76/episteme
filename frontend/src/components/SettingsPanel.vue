@@ -171,12 +171,16 @@ const tzMsg = ref('')
 async function loadTimezone() {
   timezones.value = Intl.supportedValuesOf('timeZone')
   try {
-    timezone.value = (await api.settings.getTimezone()).timezone
+    const res = await api.settings.getTimezone()
+    timezone.value = res.timezone
+    // First run: nothing saved yet. Adopt the browser's zone and persist it
+    // immediately — a preselected-but-unsaved dropdown looks configured
+    // while the backend silently stays on UTC.
+    if (!res.configured) {
+      timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone
+      await saveTimezone()
+    }
   } catch {
-    timezone.value = ''
-  }
-  // Unconfigured backends report UTC — preselect the browser's zone instead.
-  if (!timezone.value || timezone.value === 'UTC') {
     timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone
   }
 }
