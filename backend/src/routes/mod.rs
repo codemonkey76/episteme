@@ -58,6 +58,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/mcp-servers/status", get(settings::mcp_server_status))
         .route("/api/settings/timezone", get(settings::get_timezone))
         .route("/api/settings/timezone", post(settings::set_timezone))
+        .route("/api/settings/tools", get(settings::list_tools))
+        .route("/api/settings/tools", post(settings::set_tool_policy))
         .route("/api/settings/mcp-servers/:name", delete(settings::delete_mcp_server))
         .route("/api/sessions/:id/approvals", get(approvals::list_pending))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))

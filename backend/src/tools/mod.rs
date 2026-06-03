@@ -26,6 +26,15 @@ pub fn is_native(name: &str) -> bool {
     calendar::handles(name) || tasks::handles(name) || notes::handles(name)
 }
 
+/// Native tools grouped by integration, for the settings Tools page.
+pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
+    vec![
+        ("calendar", calendar::schemas()),
+        ("tasks", tasks::schemas()),
+        ("notes", notes::schemas()),
+    ]
+}
+
 /// Execute a native tool, returning a JSON result for the model.
 pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value> {
     if calendar::handles(name) {

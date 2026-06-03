@@ -23,19 +23,24 @@ pub async fn approve(
     State(state): State<Arc<AppState>>,
     Path(action_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    db::pending_actions::resolve(&state.db, &action_id, true)
-        .await
-        .map_err(AppError::Internal)?;
-    // TODO: signal the paused agent turn to resume
-    Ok(StatusCode::NO_CONTENT)
+    decide(&state, &action_id, true).await
 }
 
 pub async fn reject(
     State(state): State<Arc<AppState>>,
     Path(action_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    db::pending_actions::resolve(&state.db, &action_id, false)
+    decide(&state, &action_id, false).await
+}
+
+async fn decide(state: &Arc<AppState>, action_id: &str, approved: bool) -> AppResult<StatusCode> {
+    db::pending_actions::resolve(&state.db, action_id, approved)
         .await
         .map_err(AppError::Internal)?;
+    // Wake the paused agent turn, if it's still in flight. An absent sender
+    // means the wait already ended (timeout/disconnect/restart) — DB update only.
+    if let Some(tx) = state.pending_approvals.lock().await.remove(action_id) {
+        let _ = tx.send(approved);
+    }
     Ok(StatusCode::NO_CONTENT)
 }

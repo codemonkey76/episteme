@@ -61,6 +61,13 @@ pub async fn run_turn(
     // Then the tool/date preamble at the very front.
     history.insert(0, crate::tools::system_preamble(&state).await);
 
+    // Per-tool approval policies (tool name → "ask"); absent = auto-execute.
+    let policies: std::collections::HashMap<String, String> =
+        db::settings::get(&state.db, "tool_policies")
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default();
+
     // Accumulates the model's visible reply across the turn for extraction.
     let mut assistant_text = String::new();
 
@@ -186,13 +193,37 @@ pub async fn run_turn(
                 history.push(ChatMessage { role: "tool_call".to_string(), content: calls_value });
 
                 for call in calls {
+                    // Per-tool policy: tools marked "ask" in Settings → Tools
+                    // pause the turn here until the user approves or denies.
+                    if policies.get(&call.fn_name).map(String::as_str) == Some("ask") {
+                        let approved =
+                            approval::await_decision(&state, &session_id, &call, &tx).await?;
+                        if !approved {
+                            let declined = "user declined this tool call";
+                            db::messages::insert(
+                                &state.db,
+                                &session_id,
+                                "tool",
+                                &serde_json::to_string(declined).unwrap_or_default(),
+                                None,
+                                Some(&call.call_id),
+                            )
+                            .await?;
+                            history.push(ChatMessage {
+                                role: "tool".to_string(),
+                                content: serde_json::json!({
+                                    "call_id": call.call_id,
+                                    "name": call.fn_name,
+                                    "content": declined,
+                                }),
+                            });
+                            continue;
+                        }
+                    }
+
                     // Tell the UI a tool is running.
                     let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
-                    // Native tools run inline; MCP tools currently auto-execute
-                    // the same way — the approval pause/resume path is a future
-                    // feature (requires_approval on McpTool is already derived
-                    // from server annotations, ready for it).
                     let result = if crate::tools::is_native(&call.fn_name) {
                         crate::tools::execute(&state, &call.fn_name, call.fn_arguments.clone()).await
                     } else {

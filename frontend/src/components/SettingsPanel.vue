@@ -9,7 +9,7 @@ const authStore = useAuthStore()
 
 const props = defineProps<{ initialTab?: string }>()
 
-type Tab = 'account' | 'providers' | 'mcp' | 'integrations' | 'appearance' | 'users' | 'system'
+type Tab = 'account' | 'providers' | 'mcp' | 'tools' | 'integrations' | 'appearance' | 'users' | 'system'
 const activeTab = ref<Tab>((props.initialTab as Tab) ?? 'account')
 
 // ── Providers ─────────────────────────────────────────────────────────────────
@@ -60,6 +60,7 @@ onMounted(async () => {
   providers.value = pRes.providers
   mcpServers.value = mRes.mcp_servers
   await refreshMcpStatus()
+  await loadTools()
   await loadTimezone()
   await loadEmailConfig()
   await loadCategorizer()
@@ -128,6 +129,37 @@ async function deleteMcpServer(name: string) {
   await api.settings.deleteMcpServer(name)
   mcpServers.value = mcpServers.value.filter((s) => s.name !== name)
   await refreshMcpStatus()
+}
+
+// ── Tool approval policies ────────────────────────────────────────────────────
+const tools = ref<api.ToolInfo[]>([])
+const toolsLoading = ref(false)
+
+const toolGroups = computed(() => {
+  const groups = new Map<string, api.ToolInfo[]>()
+  for (const t of tools.value) {
+    const list = groups.get(t.group) ?? []
+    list.push(t)
+    groups.set(t.group, list)
+  }
+  return [...groups.entries()]
+})
+
+async function loadTools() {
+  toolsLoading.value = true
+  try {
+    tools.value = (await api.settings.listTools()).tools
+  } catch {
+    // Panel stays usable without the list.
+  } finally {
+    toolsLoading.value = false
+  }
+}
+
+async function toggleToolPolicy(t: api.ToolInfo) {
+  const policy = t.policy === 'ask' ? 'auto' : 'ask'
+  t.policy = policy // optimistic
+  await api.settings.setToolPolicy(t.name, policy)
 }
 
 // ── Timezone ──────────────────────────────────────────────────────────────────
@@ -316,6 +348,12 @@ async function logout() {
           <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
         MCP Servers
+      </button>
+      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'tools' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'tools'; loadTools()">
+        <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
+        </svg>
+        Tools
       </button>
       <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'integrations' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'integrations'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -518,7 +556,35 @@ async function logout() {
             </button>
             <p v-if="mcpMsg" class="text-[0.775rem]" :class="mcpMsg.startsWith('Connected') ? 'text-[#4caf6e]' : 'text-[#c06060]'">{{ mcpMsg }}</p>
           </form>
-          <p class="text-[0.75rem] text-[#585858]">Tools from connected servers are offered to the model in every chat. They currently run without approval prompts — only add servers you trust.</p>
+          <p class="text-[0.75rem] text-[#585858]">Tools from connected servers are offered to the model in every chat. By default they run without asking — flag individual tools as "ask first" under <b>Settings → Tools</b>.</p>
+        </section>
+      </div>
+
+      <!-- Tools (approval policies) -->
+      <div v-else-if="activeTab === 'tools'" class="px-6 py-5 flex flex-col gap-6">
+        <h2 class="text-[0.9375rem] font-semibold text-fg">Tools</h2>
+        <p class="text-[0.775rem] text-[#787878] -mt-3">Tools marked <b>Ask first</b> pause the chat and wait for your approval before running. Everything else runs automatically.</p>
+
+        <div v-if="toolsLoading && tools.length === 0" class="text-[#484848] text-[0.8125rem]">Loading…</div>
+        <p v-else-if="tools.length === 0" class="text-[#484848] text-[0.8125rem]">No tools available.</p>
+
+        <section v-for="[group, groupTools] in toolGroups" :key="group" class="flex flex-col gap-2">
+          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">{{ group }}</h3>
+          <ul class="list-none flex flex-col gap-1">
+            <li v-for="t in groupTools" :key="t.name" class="flex items-center justify-between bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+              <div class="flex flex-col gap-[0.1rem] min-w-0">
+                <span class="text-[0.8125rem] text-[#d0d0d0] flex items-center gap-2">
+                  {{ t.name }}
+                  <span v-if="t.suggest_ask && t.policy !== 'ask'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[#e0b060] border-[#e0b06055]" title="This tool reports that it modifies external state">ask suggested</span>
+                </span>
+                <span class="text-[0.75rem] text-[#585858] break-words">{{ t.description }}</span>
+              </div>
+              <label class="flex items-center gap-1.5 shrink-0 cursor-pointer text-[0.75rem] select-none" :class="t.policy === 'ask' ? 'text-[#e0b060]' : 'text-[#585858]'">
+                <input type="checkbox" class="accent-[#e0b060] cursor-pointer" :checked="t.policy === 'ask'" @change="toggleToolPolicy(t)" />
+                Ask first
+              </label>
+            </li>
+          </ul>
         </section>
       </div>
 

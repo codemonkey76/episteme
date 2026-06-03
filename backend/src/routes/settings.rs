@@ -175,6 +175,86 @@ pub async fn mcp_server_status(
     Ok(Json(serde_json::json!({ "statuses": statuses })))
 }
 
+// --- Tool approval policies ---
+
+const KEY_TOOL_POLICIES: &str = "tool_policies";
+
+/// All tools (native + MCP) with their approval policy, for the Tools page.
+pub async fn list_tools(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let policies: std::collections::HashMap<String, String> =
+        db::settings::get(&state.db, KEY_TOOL_POLICIES)
+            .await
+            .map_err(AppError::Internal)?
+            .unwrap_or_default();
+    let policy_of =
+        |name: &str| policies.get(name).cloned().unwrap_or_else(|| "auto".to_string());
+
+    let mut tools: Vec<serde_json::Value> = Vec::new();
+    for (group, schemas) in crate::tools::catalog() {
+        for s in schemas {
+            let name = s["name"].as_str().unwrap_or_default();
+            tools.push(serde_json::json!({
+                "name": name,
+                "description": s["description"].as_str().unwrap_or_default(),
+                "group": group,
+                "source": "native",
+                "policy": policy_of(name),
+                "suggest_ask": false,
+            }));
+        }
+    }
+    {
+        let mcp = state.mcp_host.lock().await;
+        for t in mcp.list_tools().await.map_err(AppError::Internal)? {
+            tools.push(serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "group": t.server,
+                "source": "mcp",
+                "policy": policy_of(&t.name),
+                // Non-read-only MCP tools are worth gating.
+                "suggest_ask": t.requires_approval,
+            }));
+        }
+    }
+    Ok(Json(serde_json::json!({ "tools": tools })))
+}
+
+#[derive(Deserialize)]
+pub struct ToolPolicyBody {
+    name: String,
+    policy: String,
+}
+
+pub async fn set_tool_policy(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ToolPolicyBody>,
+) -> AppResult<StatusCode> {
+    if body.policy != "auto" && body.policy != "ask" {
+        return Err(AppError::BadRequest(format!(
+            "invalid policy '{}' — expected 'auto' or 'ask'",
+            body.policy
+        )));
+    }
+    let mut policies: std::collections::HashMap<String, String> =
+        db::settings::get(&state.db, KEY_TOOL_POLICIES)
+            .await
+            .map_err(AppError::Internal)?
+            .unwrap_or_default();
+    if body.policy == "auto" {
+        // auto is the default — keep the stored map minimal.
+        policies.remove(&body.name);
+    } else {
+        policies.insert(body.name, body.policy);
+    }
+    db::settings::set(&state.db, KEY_TOOL_POLICIES, &policies)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- Timezone ---
 
 pub async fn get_timezone(

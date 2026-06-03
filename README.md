@@ -16,6 +16,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Tasks** — a to-do window (priorities, due dates, search) the AI can also drive: "remind me to buy milk tomorrow" creates a task via the task tools, and the window refreshes live when chat changes the list
 - **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
+- **Per-tool approval** — every tool (native and MCP) has an "ask first" toggle in **Settings → Tools**; flagged tools pause the chat with an inline approve/deny card and only run once you allow them. Approvals and denials are logged
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
 - **Logs** — a live, filterable log window fed by both frontend and backend events
 - **Authentication** — a single admin account gates the whole app: a first-run setup screen creates the account (password hashed with argon2), and an HttpOnly session cookie protects every API route. Change your password or sign out from **Settings → Account**
@@ -24,7 +25,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 ## What's next
 
-- **Approval resumption** — the approval framework exists but the resume-a-paused-turn path is stubbed, so native and MCP tools currently auto-execute (see Security). A tokio channel to resume a paused turn would re-enable human-in-the-loop gating; MCP tools already carry a `requires_approval` flag derived from their server's `readOnlyHint` annotation, ready for it
 - **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval would scale to large stores
 
 ## Stack
@@ -129,7 +129,7 @@ Episteme can hold API tokens and (eventually) execute shell commands. Treat it a
 
 - **A single admin account protects the app.** The first-run setup screen creates it; the password is hashed with argon2 and every API route requires a valid HttpOnly session cookie. There is no public sign-up and no password recovery — if you lose the password, delete the `auth_users`/`auth_sessions` rows (or the SQLite DB) to re-trigger setup. Multi-user accounts and 2FA are not yet implemented (the 2FA toggle in Settings is a placeholder).
 - **Do not expose it to a public network without TLS.** Terminate TLS at a reverse proxy for anything beyond localhost — the bundled Caddy service (see [Deploying with HTTPS](#deploying-with-https)) does this for you. The session cookie is `Secure` by default, so HTTPS is required for login to work (override with `AUTH_COOKIE_INSECURE` only for local http).
-- **Native and MCP tools currently auto-execute.** The approval/resume flow is not yet wired, so when you ask the AI to create a calendar event (or auto-sort runs), it acts immediately — and tools from connected MCP servers run the same way. Only add MCP servers you trust: a stdio server is an arbitrary local process. Every action is recorded in the Logs window, which is the audit surface for now. Re-enabling approval gating is on the roadmap.
+- **Tools auto-execute by default.** Flag individual tools as "ask first" under **Settings → Tools** — the chat then pauses with an approve/deny card before that tool runs (non-read-only MCP tools are marked "ask suggested"). Tools you haven't flagged act immediately. Only add MCP servers you trust: a stdio server is an arbitrary local process. Every tool execution, approval, and denial is recorded in the Logs window.
 - **Keep secrets out of version control.** API keys and OAuth client secrets belong in `.env`/the SQLite DB (both gitignored), not committed.
 
 ## Architecture

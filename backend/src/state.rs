@@ -1,6 +1,7 @@
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::mcp_host::McpHost;
 use crate::model_router::ModelRouter;
@@ -14,6 +15,10 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Broadcast channel for real-time log streaming to SSE clients.
     pub log_tx: broadcast::Sender<String>,
+    /// In-flight tool-approval waits: pending_action id → resume channel.
+    /// The agent turn blocks on the receiver; the approve/reject endpoints
+    /// send the decision. Entries die with the process (rows stay "pending").
+    pub pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
 }
 
 impl AppState {
@@ -26,6 +31,7 @@ impl AppState {
             oauth_state: Arc::new(Mutex::new(None)),
             http_client: reqwest::Client::new(),
             log_tx,
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

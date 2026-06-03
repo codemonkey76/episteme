@@ -50,6 +50,15 @@ export interface McpServerStatus {
   error?: string
 }
 
+export interface ToolInfo {
+  name: string
+  description: string
+  group: string
+  source: 'native' | 'mcp'
+  policy: 'auto' | 'ask'
+  suggest_ask: boolean
+}
+
 // Invoked whenever an API call comes back 401, so the app can drop to the login
 // screen no matter which request tripped it. Registered by the auth store.
 let onUnauthorized: (() => void) | null = null
@@ -603,6 +612,13 @@ export const settings = {
     fetch(BASE + `/settings/mcp-servers/${name}`, { method: 'DELETE' }),
   mcpServerStatus: () =>
     json<{ statuses: McpServerStatus[] }>('/settings/mcp-servers/status'),
+  listTools: () => json<{ tools: ToolInfo[] }>('/settings/tools'),
+  setToolPolicy: (name: string, policy: 'auto' | 'ask') =>
+    fetch(BASE + '/settings/tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, policy }),
+    }),
   getTimezone: () => json<{ timezone: string }>('/settings/timezone'),
   setTimezone: async (timezone: string) => {
     const res = await fetch(BASE + '/settings/timezone', {
