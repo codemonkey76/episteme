@@ -34,11 +34,20 @@ COPY backend/ backend/
 RUN touch backend/src/main.rs && cargo build --release
 
 # ── Stage 3: Runtime ────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+# node base (rather than bare debian) so stdio MCP servers launched as
+# `npx -y <package>` work out of the box; uv/uvx covers Python-based ones.
+FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates libssl3 && \
     rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# Keep package caches on the data volume so npx/uvx MCP servers don't
+# re-download their packages every container restart.
+ENV npm_config_cache=/data/npm-cache
+ENV UV_CACHE_DIR=/data/uv-cache
 
 WORKDIR /app
 
