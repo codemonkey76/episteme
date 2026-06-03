@@ -117,6 +117,7 @@ Environment variables (`.env` or shell):
 | `STATIC_DIR` | `static` | Directory for compiled frontend assets |
 | `RUST_LOG` | `episteme=debug,...` | Log filter (tracing-subscriber syntax) |
 | `EPISTEME_DOMAIN` | — | Public domain for the Caddy reverse proxy / Let's Encrypt cert (Docker HTTPS deploy only) |
+| `EPISTEME_SHARED_DIR` | `./shared` | Host folder mounted read-only at `/data/shared` in the container — the path to give filesystem MCP servers. Keep it narrow; everything under it is readable by the AI |
 | `AUTH_COOKIE_INSECURE` | — | Set (e.g. `1`) to allow the session cookie over plain HTTP. Needed for local `cargo run` / Vite dev; leave **unset** in production |
 | `ANTHROPIC_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |
 | `OPENAI_API_KEY` | — | Optional pre-seeded key (can also be set in the UI) |

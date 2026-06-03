@@ -5,6 +5,10 @@ services:
       - "3000"
     volumes:
       - episteme_data:/data
+      # Host folder exposed to filesystem MCP servers at /data/shared.
+      # Set EPISTEME_SHARED_DIR in .env; defaults to ./shared next to this
+      # file. Keep it narrow — everything under it is readable by the AI.
+      - "${EPISTEME_SHARED_DIR:-./shared}:/data/shared:ro"
     environment:
       BIND: "0.0.0.0:3000"
       DATA_DIR: /data
