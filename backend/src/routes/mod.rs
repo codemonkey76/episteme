@@ -18,6 +18,7 @@ pub(crate) mod email;
 mod integrations;
 mod logs;
 mod memories;
+mod tasks;
 mod sessions;
 mod settings;
 
@@ -86,6 +87,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/memories", post(memories::create))
         .route("/api/memories/:id", put(memories::update))
         .route("/api/memories/:id", delete(memories::delete))
+        .route("/api/tasks", get(tasks::list))
+        .route("/api/tasks", post(tasks::create))
+        .route("/api/tasks/:id", put(tasks::update))
+        .route("/api/tasks/:id", delete(tasks::delete))
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))

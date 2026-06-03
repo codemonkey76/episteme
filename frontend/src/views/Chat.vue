@@ -4,6 +4,7 @@ import { useSessionsStore } from '../stores/sessions'
 import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
 import { useCalendarStore } from '../stores/calendar'
+import { useTasksStore } from '../stores/tasks'
 import * as api from '../api'
 
 const logs = useLogsStore()
@@ -11,6 +12,7 @@ const logs = useLogsStore()
 const store = useSessionsStore()
 const approvalsStore = useApprovalsStore()
 const calStore = useCalendarStore()
+const tasksStore = useTasksStore()
 
 // Tool-result messages are model context, not user-facing — hide them.
 const visibleMessages = computed(() => store.messages.filter(m => m.role !== 'tool'))
@@ -60,6 +62,7 @@ onMounted(async () => {
 async function send() {
   if (!input.value.trim() || sending.value || !store.activeSession) return
   let calendarTouched = false
+  let tasksTouched = false
   const text = input.value.trim()
   input.value = ''
   sending.value = true
@@ -87,8 +90,9 @@ async function send() {
         sending.value = false
         scrollToBottom()
         logs.info('Chat', 'Response complete')
-        // If a calendar tool ran this turn, refresh any open Calendar window.
+        // If a calendar/task tool ran this turn, refresh any open window.
         if (calendarTouched) { calStore.notifyChanged(); calendarTouched = false }
+        if (tasksTouched) { tasksStore.notifyChanged(); tasksTouched = false }
       },
       (actionId, toolName, toolArgs) => {
         logs.warn('Chat', `Tool approval required: ${toolName}`)
@@ -105,6 +109,7 @@ async function send() {
         store.appendToolCall(name)
         scrollToBottom()
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
+        if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
       },
       abortController.signal,
     )

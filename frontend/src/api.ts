@@ -397,6 +397,43 @@ export const memories = {
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
 }
 
+// Tasks
+export interface Task {
+  id: string
+  title: string
+  notes: string | null
+  due_at: string | null
+  priority: 'low' | 'normal' | 'high'
+  status: 'open' | 'done'
+  created_at: string
+  updated_at: string
+}
+
+export const tasks = {
+  list: (params?: { status?: string; q?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.status && params.status !== 'all') p.set('status', params.status)
+    if (params?.q) p.set('q', params.q)
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    return json<{ tasks: Task[] }>(`/tasks?${p}`)
+  },
+  create: (task: { title: string; notes?: string; due_at?: string; priority?: string }) =>
+    json<{ task: Task }>('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    }),
+  // Partial update; pass null for notes/due_at to clear them.
+  update: (
+    id: string,
+    patch: Partial<{ title: string; notes: string | null; due_at: string | null; priority: string; status: string }>,
+  ) =>
+    json<{ task: Task }>(`/tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) => fetch(BASE + `/tasks/${id}`, { method: 'DELETE' }),
+}
+
 // Email auto-categorizer
 export interface CategorizerConfig {
   enabled: boolean
