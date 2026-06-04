@@ -289,6 +289,9 @@ export const email = {
     json<MessageDetail>(`/email/messages/${messageId}`),
   markRead: (messageId: string) =>
     fetch(BASE + `/email/messages/${messageId}/read`, { method: 'PATCH' }),
+  // "No response needed" — complete the flag and file to Processed.
+  markDone: (messageId: string) =>
+    fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done`, { method: 'POST' }),
   search: (q: string, nextLink?: string | null) => {
     const params = new URLSearchParams({ q })
     if (nextLink) params.set('next_link', nextLink)

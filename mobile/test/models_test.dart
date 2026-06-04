@@ -39,3 +39,5 @@ void main() {
     expect(n.updatedAt, isNotNull);
   });
 }
+
+// (email text helpers)

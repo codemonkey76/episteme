@@ -192,8 +192,22 @@ async fn set_flag_status(state: &AppState, message_id: &str, status: &str) -> Ap
 /// holds mail still awaiting action. Detached, best-effort — failures log to
 /// the Logs window and never affect the send.
 async fn file_replied_message(state: Arc<AppState>, message_id: String) {
+    // Only file mail that's actually in the Inbox — replying to something in
+    // another folder (search results, sorted mail) shouldn't relocate it.
+    let _ = process_message(&state, &message_id, true).await;
+}
+
+/// Complete the follow-up flag (when flagged) and move the message to the
+/// "Processed" folder. `inbox_only` restricts the move to Inbox mail (the
+/// automatic post-reply path); the explicit Done button moves from anywhere
+/// except Processed itself.
+async fn process_message(
+    state: &Arc<AppState>,
+    message_id: &str,
+    inbox_only: bool,
+) -> Result<(), ()> {
     let msg = match graph_get(
-        &state,
+        state,
         &format!("{GRAPH}/me/messages/{message_id}"),
         &[("$select", "parentFolderId,flag,subject")],
     )
@@ -202,51 +216,69 @@ async fn file_replied_message(state: Arc<AppState>, message_id: String) {
         Ok(m) => m,
         Err(_) => {
             state
-                .log("email", "warn", "post-reply filing: couldn't load original message")
+                .log("email", "warn", "filing: couldn't load message")
                 .await;
-            return;
+            return Err(());
         }
     };
     let subject = msg["subject"].as_str().unwrap_or("(no subject)").to_string();
 
     if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
-        match complete_flag(&state, &message_id).await {
+        match complete_flag(state, message_id).await {
             Ok(()) => state.log("email", "info", format!("Flag completed: {subject}")).await,
             Err(_) => state.log("email", "warn", format!("Flag completion failed: {subject}")).await,
         }
     }
 
-    // Only file mail that's actually in the Inbox — replying to something in
-    // another folder (search results, sorted mail) shouldn't relocate it.
-    let inbox = match graph_get(
-        &state,
-        &format!("{GRAPH}/me/mailFolders/inbox"),
-        &[("$select", "id")],
-    )
-    .await
-    {
-        Ok(f) => f,
-        Err(_) => return,
-    };
-    let in_inbox = matches!(
-        (msg["parentFolderId"].as_str(), inbox["id"].as_str()),
-        (Some(p), Some(i)) if p == i
-    );
-    if !in_inbox {
-        return;
-    }
-
-    let folder_id = match ensure_folder(&state, "Processed").await {
+    let folder_id = match ensure_folder(state, "Processed").await {
         Ok(id) => id,
         Err(_) => {
-            state.log("email", "warn", "post-reply filing: Processed folder unavailable").await;
-            return;
+            state.log("email", "warn", "filing: Processed folder unavailable").await;
+            return Err(());
         }
     };
-    match move_message(&state, &message_id, &folder_id).await {
-        Ok(()) => state.log("email", "info", format!("Filed to Processed: {subject}")).await,
-        Err(_) => state.log("email", "warn", format!("Filing failed: {subject}")).await,
+    let parent = msg["parentFolderId"].as_str().unwrap_or_default();
+    if parent == folder_id {
+        return Ok(()); // already filed
     }
+    if inbox_only {
+        let inbox = match graph_get(
+            state,
+            &format!("{GRAPH}/me/mailFolders/inbox"),
+            &[("$select", "id")],
+        )
+        .await
+        {
+            Ok(f) => f,
+            Err(_) => return Err(()),
+        };
+        if inbox["id"].as_str() != Some(parent) {
+            return Ok(());
+        }
+    }
+
+    match move_message(state, message_id, &folder_id).await {
+        Ok(()) => {
+            state.log("email", "info", format!("Filed to Processed: {subject}")).await;
+            Ok(())
+        }
+        Err(_) => {
+            state.log("email", "warn", format!("Filing failed: {subject}")).await;
+            Err(())
+        }
+    }
+}
+
+// POST /api/email/messages/:id/done — explicit "no response needed": complete
+// the flag and file to Processed, regardless of current folder.
+pub async fn mark_done(
+    State(state): State<Arc<AppState>>,
+    Path(message_id): Path<String>,
+) -> AppResult<StatusCode> {
+    process_message(&state, &message_id, false)
+        .await
+        .map_err(|()| AppError::Internal(anyhow::anyhow!("filing failed — see Logs")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // GET /api/email/folders

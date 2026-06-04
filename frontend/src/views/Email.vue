@@ -519,6 +519,26 @@ function fmtWhen(iso: string): string {
   })
 }
 
+// "No response needed" — file straight to Processed and close the reader.
+const markingDone = ref(false)
+async function markDone() {
+  const m = selectedMessage.value
+  if (!m || markingDone.value) return
+  markingDone.value = true
+  try {
+    const res = await api.email.markDone(m.id)
+    if (!res.ok) throw new Error(`${res.status}`)
+    logs.info('Email', `Marked done: ${m.subject ?? '(no subject)'}`)
+    view.value = 'none'
+    selectedMessage.value = null
+    await loadFolders()
+  } catch (e: unknown) {
+    logs.error('Email', `Mark done failed: ${e instanceof Error ? e.message : e}`)
+  } finally {
+    markingDone.value = false
+  }
+}
+
 function startReply(mode: ReplyMode) {
   const m = selectedMessage.value
   if (!m) return
@@ -1046,6 +1066,12 @@ const replyBody = computed(() => {
                 <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
               </svg>
               Forward
+            </button>
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1e3a2a] text-[#6ecf8e] border border-[#2a5a3a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#254a35] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              {{ markingDone ? 'Filing…' : 'Done' }}
             </button>
 
             <!-- AI model picker — compact icon dropdown, right-aligned -->

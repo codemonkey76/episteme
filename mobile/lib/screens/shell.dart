@@ -5,7 +5,9 @@ import '../main.dart';
 import '../state/auth.dart';
 import '../state/notes.dart';
 import '../state/tasks.dart';
+import 'calendar_tab.dart';
 import 'chat_tab.dart';
+import 'email_tab.dart';
 import 'notes_tab.dart';
 import 'tasks_tab.dart';
 
@@ -26,8 +28,8 @@ class _ShellScreenState extends State<ShellScreen> {
   Widget build(BuildContext context) {
     final pages = [
       const ChatTab(),
-      const _ComingSoon(label: 'Email', phase: 'phase 3'),
-      const _ComingSoon(label: 'Calendar', phase: 'phase 3'),
+      const EmailTab(),
+      const CalendarTab(),
       const TasksTab(),
       const NotesTab(),
     ];
@@ -70,23 +72,3 @@ class _ShellScreenState extends State<ShellScreen> {
   }
 }
 
-class _ComingSoon extends StatelessWidget {
-  const _ComingSoon({required this.label, required this.phase});
-  final String label;
-  final String phase;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.construction, size: 36, color: Palette.faint.withValues(alpha: 0.5)),
-          const SizedBox(height: 10),
-          Text('$label is coming in $phase',
-              style: const TextStyle(color: Palette.faint, fontSize: 14)),
-        ],
-      ),
-    );
-  }
-}

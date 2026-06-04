@@ -17,6 +17,7 @@ class ApiClient {
   String? _cookie;
 
   String get baseUrl => _baseUrl;
+  String? get sessionCookie => _cookie;
   bool get hasSession => _cookie != null && _baseUrl.isNotEmpty;
 
   /// Restore server URL + session cookie from storage. Returns true when a
@@ -106,6 +107,14 @@ class ApiClient {
     final res = await http.put(_uri(path),
         headers: _headers(), body: body == null ? null : jsonEncode(body));
     return _decode(res);
+  }
+
+  Future<void> patch(String path, [Object? body]) async {
+    final res = await http.patch(_uri(path),
+        headers: _headers(), body: body == null ? null : jsonEncode(body));
+    if (res.statusCode >= 400) {
+      throw ApiException(_errorMessage(res), res.statusCode);
+    }
   }
 
   Future<void> delete(String path) async {
