@@ -30,6 +30,19 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 - **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval would scale to large stores
 
+## Mobile app
+
+A Flutter app (Android-first; the codebase is iOS-ready but unbuilt) lives in [`mobile/`](mobile/). It talks to the same backend over HTTPS — point it at your deployed domain at the login screen. Mobile swaps the floating-window workspace for bottom tabs: Chat, Email, Calendar, Tasks, Notes (Tasks and Notes are live; the rest land in later phases).
+
+```sh
+cd mobile
+flutter pub get
+flutter run -d linux          # desktop dev loop
+flutter build apk --debug     # Android APK -> build/app/outputs/flutter-apk/
+```
+
+Gradle needs a JDK ≤ 21 — if your system Java is newer, point `org.gradle.java.home` at one in `~/.gradle/gradle.properties`.
+
 ## Stack
 
 | Layer | Technology |
