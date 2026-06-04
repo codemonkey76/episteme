@@ -305,8 +305,9 @@ pub async fn list_attachments(
 ) -> AppResult<Json<Value>> {
     // Only base `attachment` fields: `contentId` lives on the fileAttachment
     // subtype (selecting it 400s) and the default response includes the heavy
-    // `contentBytes`. The frontend resolves inline `cid:` references by matching
-    // the attachment name (Outlook's `cid:image001.png@…` ↔ name `image001.png`).
+    // `contentBytes`. The frontend resolves inline `cid:` references by name
+    // (Outlook's `cid:image001.png@…` ↔ name `image001.png`) with a positional
+    // fallback over inline attachments for opaque OWA-style content-IDs.
     let res = graph_get(
         &state,
         &format!("{GRAPH}/me/messages/{message_id}/attachments"),

@@ -169,7 +169,11 @@ function formatSize(bytes: number): string {
 
 // Rewrite inline `cid:` image references to the attachment proxy URL so embedded
 // images render (browsers can't resolve cid: URLs). Matches each `cid:NAME@host`
-// to the attachment named NAME (Outlook's convention), with a contentId fallback.
+// to the attachment named NAME (Outlook's classic convention), with a contentId
+// check when present. OWA and other clients often use opaque content-IDs
+// (`cid:part1.abc@…`) that match neither — those fall back to pairing unmatched
+// cid references with unused inline attachments in document order (Graph can't
+// give us contentId: selecting it 400s on the base attachment collection).
 // Updates reactively once the attachment metadata loads.
 const renderedBody = computed(() => {
   const m = selectedMessage.value
@@ -177,13 +181,36 @@ const renderedBody = computed(() => {
   const html = m.body.content
   if (!isHtmlBody.value || attachments.value.length === 0) return html
 
-  return html.replace(/cid:([^"'\s)>]+)/gi, (full, cid: string) => {
+  const cidRe = /cid:([^"'\s)>]+)/gi
+  const cids = [...new Set([...html.matchAll(cidRe)].map(x => x[1]))]
+  const used = new Set<string>()
+  const assigned = new Map<string, api.Attachment>()
+
+  // Pass 1: exact contentId/name matches claim their attachments first.
+  for (const cid of cids) {
     const prefix = cid.split('@')[0]
     const att = attachments.value.find(a =>
       (a.contentId && a.contentId.replace(/^<|>$/g, '') === cid) ||
       a.name === cid ||
       a.name === prefix,
     )
+    if (att) {
+      used.add(att.id)
+      assigned.set(cid, att)
+    }
+  }
+  // Pass 2: remaining cid refs pair with unclaimed inline attachments in order.
+  for (const cid of cids) {
+    if (assigned.has(cid)) continue
+    const att = attachments.value.find(a => a.isInline && !used.has(a.id))
+    if (att) {
+      used.add(att.id)
+      assigned.set(cid, att)
+    }
+  }
+
+  return html.replace(cidRe, (full, cid: string) => {
+    const att = assigned.get(cid)
     return att ? api.email.attachmentUrl(m.id, att.id) : full
   })
 })
