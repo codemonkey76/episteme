@@ -256,6 +256,10 @@ export interface SendEmailPayload {
   body: string
   reply_to_message_id?: string
   action?: 'reply' | 'replyAll' | 'forward'
+  /// Original AI draft, when the send started from "AI reply" — the backend
+  /// diffs it against `body` to learn writing-style preferences.
+  ai_draft?: string
+  ai_provider?: string
 }
 
 export interface Attachment {

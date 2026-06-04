@@ -21,7 +21,7 @@ const INJECT_LIMIT: i64 = 50;
 /// Recent memories considered when deduping a freshly-extracted one.
 const DEDUP_LIMIT: i64 = 200;
 
-const VALID_CATEGORIES: [&str; 5] = ["preference", "fact", "feedback", "project", "other"];
+const VALID_CATEGORIES: [&str; 6] = ["preference", "fact", "feedback", "project", "style", "other"];
 
 /// Prepend a system message listing stored memories, if any exist.
 pub async fn inject(history: &mut Vec<ChatMessage>, pool: &SqlitePool) {
@@ -94,6 +94,18 @@ pub async fn extract(
             return;
         }
     };
+    save_extracted(state, items, session_id.as_deref(), None).await;
+}
+
+/// Validate, dedup, and persist extracted memories. `force_category` pins
+/// every item to one category (used by the style path) instead of trusting
+/// the model's per-item categorization.
+async fn save_extracted(
+    state: &AppState,
+    items: Vec<Extracted>,
+    session_id: Option<&str>,
+    force_category: Option<&str>,
+) {
     if items.is_empty() {
         return;
     }
@@ -109,13 +121,72 @@ pub async fn extract(
         if is_duplicate(content, &existing) {
             continue;
         }
-        let category = normalize_category(&item.category);
+        let category = match force_category {
+            Some(c) => c.to_string(),
+            None => normalize_category(&item.category),
+        };
 
-        match db::memories::insert(&state.db, content, &category, "auto", session_id.as_deref()).await {
+        match db::memories::insert(&state.db, content, &category, "auto", session_id).await {
             Ok(_) => log_event(state, format!("Remembered [{category}]: {content}")),
             Err(e) => tracing::warn!("failed to save memory: {e}"),
         }
     }
+}
+
+const STYLE_SYSTEM: &str = "An AI drafted an email reply for the user; the user edited it and \
+sent their own version. Compare the two and extract durable WRITING-STYLE preferences the \
+edits reveal — tone, length, formality, greetings and sign-offs, phrasing habits, structure. \
+Only extract preferences that would apply to FUTURE emails; ignore changes specific to this \
+email's content (names, dates, facts, decisions). State each as a concise instruction for a \
+future drafting assistant, e.g. \"Signs off emails with 'Cheers, Shane'\" or \"Prefers replies \
+under three sentences\".\n\n\
+Respond with ONLY a JSON array, no prose, no code fences. Each element: \
+{\"content\": \"<style note>\"}. If the edits reveal nothing durable, return [].";
+
+/// Cap on draft/sent text fed to the style-extraction prompt.
+const STYLE_TEXT_LIMIT: usize = 4000;
+
+fn truncate_chars(s: &str, limit: usize) -> String {
+    if s.chars().count() <= limit {
+        s.to_string()
+    } else {
+        s.chars().take(limit).collect()
+    }
+}
+
+/// Best-effort extraction of writing-style lessons from an edited AI draft.
+/// Detached and swallowed like `extract` — must never affect the email send.
+pub async fn extract_style(state: &AppState, provider: ProviderConfig, draft: String, sent: String) {
+    if draft.trim().is_empty() || draft.trim() == sent.trim() {
+        return;
+    }
+
+    let user = format!(
+        "AI DRAFT:\n{}\n\nWHAT THE USER ACTUALLY SENT:\n{}",
+        truncate_chars(&draft, STYLE_TEXT_LIMIT),
+        truncate_chars(&sent, STYLE_TEXT_LIMIT),
+    );
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(STYLE_SYSTEM.to_string()) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user) },
+    ];
+
+    let raw = match ModelRouter::complete(&provider, history).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("style extraction failed: {e}");
+            return;
+        }
+    };
+    let items = match parse(&raw) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("style extraction parse failed: {e}");
+            return;
+        }
+    };
+
+    save_extracted(state, items, None, Some("style")).await;
 }
 
 /// Extract the JSON array, tolerating code fences / surrounding prose.
@@ -141,6 +212,30 @@ fn is_duplicate(content: &str, existing: &[db::memories::Memory]) -> bool {
         let e = m.content.to_lowercase();
         e == c || e.contains(&c) || c.contains(&e)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tolerates_fences_and_prose() {
+        let raw = "Sure! Here you go:\n```json\n[{\"content\": \"Signs off with Cheers\"}]\n```";
+        let items = parse(raw).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content, "Signs off with Cheers");
+    }
+
+    #[test]
+    fn parse_empty_array() {
+        assert!(parse("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn truncate_respects_char_boundaries() {
+        assert_eq!(truncate_chars("héllo wörld", 5), "héllo");
+        assert_eq!(truncate_chars("short", 100), "short");
+    }
 }
 
 /// Persist + broadcast a log entry under the `Memory` category (same pattern as

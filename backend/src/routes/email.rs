@@ -400,6 +400,11 @@ pub struct SendBody {
     /// endpoint; reply/replyAll both send via /reply with explicit recipients.
     #[serde(default)]
     action: Option<String>,
+    /// The original AI draft, when this send started from "AI reply" — used to
+    /// learn writing-style preferences from the user's edits.
+    ai_draft: Option<String>,
+    /// Provider that produced the draft (reused for style extraction).
+    ai_provider: Option<String>,
 }
 
 /// Map plain addresses to Graph recipient objects.
@@ -417,6 +422,11 @@ pub async fn send_email(
     let token = microsoft::get_valid_token(&state)
         .await
         .map_err(AppError::Internal)?;
+
+    // Pulled out before `payload` is partially moved below.
+    let ai_draft = payload.ai_draft.clone().filter(|d| !d.trim().is_empty());
+    let ai_provider = payload.ai_provider.clone();
+    let sent_body = payload.body.clone();
 
     let to = recipients(&payload.to);
     let cc = recipients(&payload.cc);
@@ -472,6 +482,20 @@ pub async fn send_email(
             .map_err(|e| AppError::Internal(e.into()))?;
     }
 
+    // The send succeeded — if it started life as an AI draft and the user
+    // changed it, learn writing-style preferences from the edits. Detached
+    // and best-effort; never affects the send result.
+    if let (Some(draft), Some(provider_name)) = (ai_draft, ai_provider) {
+        let providers: Vec<ProviderConfig> =
+            db::settings::get(&state.db, "providers").await.ok().flatten().unwrap_or_default();
+        if let Some(provider) = providers.into_iter().find(|p| p.name == provider_name) {
+            let st = Arc::clone(&state);
+            tokio::spawn(async move {
+                crate::memory::extract_style(&st, provider, draft, sent_body).await;
+            });
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -500,11 +524,27 @@ pub async fn ai_draft(
             AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider))
         })?;
 
-    let system = "You draft email replies on behalf of the user. Output only the body of the \
+    let mut system = String::from(
+        "You draft email replies on behalf of the user. Output only the body of the \
 reply — no subject line, no quoted original message, and no placeholder tokens like [Name]. \
 If the email contains quoted earlier messages or a reply thread, respond ONLY to the most \
 recent message, not to the quoted history. Keep it clear, polite, and concise in a professional \
-tone, and directly address anything the email asks.";
+tone, and directly address anything the email asks.",
+    );
+
+    // Apply style lessons learned from the user's past edits to AI drafts.
+    let style_memories = db::memories::list(&state.db, Some("style"), None, 20)
+        .await
+        .unwrap_or_default();
+    if !style_memories.is_empty() {
+        system.push_str(
+            "\n\nApply these writing-style preferences, learned from how the user edited \
+previous drafts:\n",
+        );
+        for m in &style_memories {
+            system.push_str(&format!("- {}\n", m.content));
+        }
+    }
 
     let user = format!(
         "Draft a reply to this email.\n\nFrom: {}\nSubject: {}\n\n{}",
@@ -512,7 +552,7 @@ tone, and directly address anything the email asks.";
     );
 
     let history = vec![
-        ChatMessage { role: "system".to_string(), content: Value::String(system.to_string()) },
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 

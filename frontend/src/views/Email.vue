@@ -371,6 +371,7 @@ async function aiReply() {
         composeForm.value.body += text
       },
     )
+    aiDraftOriginal.value = composeForm.value.body
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Draft failed'
     sendMsg.value = `AI draft failed: ${msg}`
@@ -421,6 +422,11 @@ async function askAi() {
   }
 }
 
+// Snapshot of the AI-generated draft, taken when streaming completes — sent
+// alongside the (possibly edited) body so the backend can learn style
+// preferences from the diff. Cleared whenever a compose form is (re)opened.
+const aiDraftOriginal = ref('')
+
 function startReply(mode: ReplyMode) {
   const m = selectedMessage.value
   if (!m) return
@@ -428,6 +434,7 @@ function startReply(mode: ReplyMode) {
   showReply.value = true
   sendMsg.value = ''
   showCcBcc.value = false
+  aiDraftOriginal.value = ''
   const subject = m.subject ?? ''
   if (mode === 'forward') {
     composeForm.value = {
@@ -474,6 +481,11 @@ async function sendEmail() {
     } else {
       payload.subject = composeForm.value.subject
     }
+    // Started as an AI draft → let the backend learn from the edits.
+    if (aiDraftOriginal.value) {
+      payload.ai_draft = aiDraftOriginal.value
+      payload.ai_provider = aiProvider.value
+    }
     const res = await api.email.send(payload)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', 'Email sent successfully')
@@ -493,6 +505,7 @@ async function sendEmail() {
     }
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
     showCcBcc.value = false
+    aiDraftOriginal.value = ''
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Send failed'
     sendMsg.value = `Failed: ${msg}`

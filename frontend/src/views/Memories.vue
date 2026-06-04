@@ -5,7 +5,7 @@ import { useLogsStore } from '../stores/logs'
 
 const logs = useLogsStore()
 
-const CATEGORIES = ['preference', 'fact', 'feedback', 'project', 'other'] as const
+const CATEGORIES = ['preference', 'fact', 'feedback', 'project', 'style', 'other'] as const
 type Category = (typeof CATEGORIES)[number]
 
 const items = ref<api.Memory[]>([])
@@ -101,6 +101,7 @@ const CAT_COLOR: Record<string, string> = {
   fact: '#7adfbb',
   feedback: '#ffb07a',
   project: '#c07aff',
+  style: '#6ecfcf',
   other: '#9a9a9a',
 }
 function catColor(c: string): string {
