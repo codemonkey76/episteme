@@ -11,9 +11,7 @@ use axum::Extension;
 
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::integrations::microsoft::{
-    self, MicrosoftAppConfig, MicrosoftUserTokens, KEY_MICROSOFT_APP,
-};
+use crate::integrations::microsoft::{self, MicrosoftAppConfig, MicrosoftUserTokens};
 use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
@@ -21,6 +19,9 @@ const GRAPH_SCOPES: &str = "openid email profile offline_access \
     https://graph.microsoft.com/Mail.Read \
     https://graph.microsoft.com/Mail.ReadWrite \
     https://graph.microsoft.com/Mail.Send \
+    https://graph.microsoft.com/Mail.Read.Shared \
+    https://graph.microsoft.com/Mail.ReadWrite.Shared \
+    https://graph.microsoft.com/Mail.Send.Shared \
     https://graph.microsoft.com/Calendars.ReadWrite \
     https://graph.microsoft.com/User.Read";
 
@@ -63,7 +64,7 @@ pub async fn get_config(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<EmailConfigStatus>> {
-    let app: Option<MicrosoftAppConfig> = db::settings::get(&state.db, KEY_MICROSOFT_APP)
+    let app: Option<MicrosoftAppConfig> = db::settings::get(&state.db, &microsoft::app_key(&user.id))
         .await
         .map_err(AppError::Internal)?;
     let tokens: Option<MicrosoftUserTokens> =
@@ -75,33 +76,25 @@ pub async fn get_config(
     let configured =
         !app.tenant_id.is_empty() && !app.client_id.is_empty() && !app.client_secret.is_empty();
     let tokens = tokens.unwrap_or_default();
-    // The Azure app identifiers are the admin's; members only need to know
-    // whether the integration is ready and whether THEY are connected.
-    let (tenant_id, client_id) = if user.is_admin() {
-        (app.tenant_id, app.client_id)
-    } else {
-        (String::new(), String::new())
-    };
+    // Each user owns their own Azure app registration, so return their own
+    // identifiers (the secret is never sent back to the client).
     Ok(Json(EmailConfigStatus {
         configured,
         connected: tokens.access_token.is_some(),
-        tenant_id,
-        client_id,
+        tenant_id: app.tenant_id,
+        client_id: app.client_id,
         connected_email: tokens.connected_email,
     }))
 }
 
-// POST /api/integrations/email/config — shared Azure app credentials;
-// admin-only since every user connects through them.
+// POST /api/integrations/email/config — the caller's own Azure app credentials.
 pub async fn save_config(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<SaveConfigBody>,
 ) -> AppResult<StatusCode> {
-    if !user.is_admin() {
-        return Err(AppError::Unauthorized("admin access required".into()));
-    }
-    let existing: Option<MicrosoftAppConfig> = db::settings::get(&state.db, KEY_MICROSOFT_APP)
+    let key = microsoft::app_key(&user.id);
+    let existing: Option<MicrosoftAppConfig> = db::settings::get(&state.db, &key)
         .await
         .map_err(AppError::Internal)?;
 
@@ -118,7 +111,7 @@ pub async fn save_config(
         client_id: body.client_id,
         client_secret,
     };
-    db::settings::set(&state.db, KEY_MICROSOFT_APP, &config)
+    db::settings::set(&state.db, &key, &config)
         .await
         .map_err(AppError::Internal)?;
 
@@ -142,7 +135,7 @@ pub async fn connect(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     headers: HeaderMap,
 ) -> AppResult<Redirect> {
-    let config = microsoft::app_config(&state).await.map_err(AppError::Internal)?;
+    let config = microsoft::app_config(&state, &user.id).await.map_err(AppError::Internal)?;
 
     let host = headers
         .get("host")
@@ -209,7 +202,7 @@ async fn callback_inner(
             .ok_or_else(|| anyhow::anyhow!("CSRF state mismatch — possible replay attack"))?
     };
 
-    let config = microsoft::app_config(&state).await?;
+    let config = microsoft::app_config(&state, &user_id).await?;
 
     let host = headers
         .get("host")
@@ -277,4 +270,94 @@ async fn callback_inner(
     db::settings::set(&state.db, &microsoft::user_key(&user_id), &updated).await?;
 
     Ok(Redirect::temporary("/?integration=email&status=connected"))
+}
+
+// ── Shared mailboxes ────────────────────────────────────────────────────────────
+// Microsoft Graph can't enumerate the shared mailboxes a user has delegated
+// access to, so users add them by address. We verify access by listing the
+// target mailbox's folders with the user's own token (succeeds only when they
+// actually hold delegated rights), then remember it per user.
+
+#[derive(Deserialize)]
+pub struct AddSharedBody {
+    address: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn shared_list(state: &AppState, user_id: &str) -> AppResult<Vec<microsoft::SharedMailbox>> {
+    Ok(db::settings::get(&state.db, &microsoft::shared_key(user_id))
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default())
+}
+
+// GET /api/integrations/email/shared — the caller's saved shared mailboxes.
+pub async fn list_shared(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<serde_json::Value>> {
+    let mailboxes = shared_list(&state, &user.id).await?;
+    Ok(Json(serde_json::json!({ "mailboxes": mailboxes })))
+}
+
+// POST /api/integrations/email/shared — verify access, then add.
+pub async fn add_shared(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<AddSharedBody>,
+) -> AppResult<Json<serde_json::Value>> {
+    let address = body.address.trim().to_lowercase();
+    if address.is_empty() || !address.contains('@') || address.contains('/')
+        || address.contains(char::is_whitespace)
+    {
+        return Err(AppError::BadRequest("Enter a valid mailbox email address.".into()));
+    }
+
+    // Verify the caller can actually open the mailbox before saving it.
+    let token = microsoft::get_valid_token(&state, &user.id)
+        .await
+        .map_err(|_| AppError::BadRequest("Connect your own mailbox first.".into()))?;
+    let probe = state
+        .http_client
+        .get(format!(
+            "https://graph.microsoft.com/v1.0/users/{address}/mailFolders/inbox"
+        ))
+        .query(&[("$select", "id")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    if !probe.status().is_success() {
+        return Err(AppError::BadRequest(
+            "Couldn't open that mailbox — check the address and that you've been granted access."
+                .into(),
+        ));
+    }
+
+    let mut mailboxes = shared_list(&state, &user.id).await?;
+    if !mailboxes.iter().any(|m| m.address.eq_ignore_ascii_case(&address)) {
+        mailboxes.push(microsoft::SharedMailbox {
+            address: address.clone(),
+            name: body.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()),
+        });
+        db::settings::set(&state.db, &microsoft::shared_key(&user.id), &mailboxes)
+            .await
+            .map_err(AppError::Internal)?;
+    }
+    Ok(Json(serde_json::json!({ "mailboxes": mailboxes })))
+}
+
+// DELETE /api/integrations/email/shared/:address — forget a shared mailbox.
+pub async fn remove_shared(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+) -> AppResult<StatusCode> {
+    let mut mailboxes = shared_list(&state, &user.id).await?;
+    mailboxes.retain(|m| !m.address.eq_ignore_ascii_case(address.trim()));
+    db::settings::set(&state.db, &microsoft::shared_key(&user.id), &mailboxes)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }

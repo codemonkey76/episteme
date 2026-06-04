@@ -26,6 +26,34 @@ use tokio::sync::mpsc;
 
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 
+/// Graph mailbox path segment: `me` for the signed-in user, or `users/{address}`
+/// for a shared mailbox the user has delegated access to. The address is
+/// validated to block path injection; Graph still enforces the real access
+/// rights, so an address the user can't open just yields a 403.
+pub fn mailbox_seg(mailbox: Option<&str>) -> AppResult<String> {
+    match mailbox.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok("me".to_string()),
+        Some(addr) => {
+            let valid = addr.contains('@')
+                && !addr.contains('/')
+                && !addr.contains(char::is_whitespace)
+                && addr.len() <= 320;
+            if valid {
+                Ok(format!("users/{addr}"))
+            } else {
+                Err(AppError::BadRequest("invalid mailbox address".into()))
+            }
+        }
+    }
+}
+
+/// Optional `?mailbox=<address>` selecting a shared mailbox (absent = own).
+#[derive(Deserialize)]
+pub struct MailboxQuery {
+    #[serde(default)]
+    mailbox: Option<String>,
+}
+
 pub async fn graph_get(
     state: &AppState,
     user_id: &str,
@@ -118,11 +146,17 @@ pub async fn graph_delete(state: &AppState, user_id: &str, url: &str) -> AppResu
 
 /// Return the id of the mail folder named `name`, creating it under the mailbox
 /// root if it doesn't already exist. Matching is case-insensitive on displayName.
-pub async fn ensure_folder(state: &AppState, user_id: &str, name: &str) -> AppResult<String> {
+pub async fn ensure_folder(
+    state: &AppState,
+    user_id: &str,
+    mailbox: Option<&str>,
+    name: &str,
+) -> AppResult<String> {
+    let seg = mailbox_seg(mailbox)?;
     let existing = graph_get(
         state,
         user_id,
-        &format!("{GRAPH}/me/mailFolders"),
+        &format!("{GRAPH}/{seg}/mailFolders"),
         &[("$top", "100"), ("$select", "id,displayName")],
     )
     .await?;
@@ -140,7 +174,7 @@ pub async fn ensure_folder(state: &AppState, user_id: &str, name: &str) -> AppRe
     let created = graph_post(
         state,
         user_id,
-        &format!("{GRAPH}/me/mailFolders"),
+        &format!("{GRAPH}/{seg}/mailFolders"),
         &serde_json::json!({ "displayName": name }),
     )
     .await?;
@@ -152,11 +186,18 @@ pub async fn ensure_folder(state: &AppState, user_id: &str, name: &str) -> AppRe
 }
 
 /// Move a message into the destination folder.
-pub async fn move_message(state: &AppState, user_id: &str, message_id: &str, dest_folder_id: &str) -> AppResult<()> {
+pub async fn move_message(
+    state: &AppState,
+    user_id: &str,
+    mailbox: Option<&str>,
+    message_id: &str,
+    dest_folder_id: &str,
+) -> AppResult<()> {
+    let seg = mailbox_seg(mailbox)?;
     graph_post(
         state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}/move"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}/move"),
         &serde_json::json!({ "destinationId": dest_folder_id }),
     )
     .await?;
@@ -164,23 +205,40 @@ pub async fn move_message(state: &AppState, user_id: &str, message_id: &str, des
 }
 
 /// Set the follow-up flag on a message, leaving it in place.
-pub async fn flag_message(state: &AppState, user_id: &str, message_id: &str) -> AppResult<()> {
-    set_flag_status(state, user_id, message_id, "flagged").await
+pub async fn flag_message(
+    state: &AppState,
+    user_id: &str,
+    mailbox: Option<&str>,
+    message_id: &str,
+) -> AppResult<()> {
+    set_flag_status(state, user_id, mailbox, message_id, "flagged").await
 }
 
 /// Mark a message's follow-up flag as completed (✓ in Outlook).
-pub async fn complete_flag(state: &AppState, user_id: &str, message_id: &str) -> AppResult<()> {
-    set_flag_status(state, user_id, message_id, "complete").await
+pub async fn complete_flag(
+    state: &AppState,
+    user_id: &str,
+    mailbox: Option<&str>,
+    message_id: &str,
+) -> AppResult<()> {
+    set_flag_status(state, user_id, mailbox, message_id, "complete").await
 }
 
-async fn set_flag_status(state: &AppState, user_id: &str, message_id: &str, status: &str) -> AppResult<()> {
+async fn set_flag_status(
+    state: &AppState,
+    user_id: &str,
+    mailbox: Option<&str>,
+    message_id: &str,
+    status: &str,
+) -> AppResult<()> {
+    let seg = mailbox_seg(mailbox)?;
     let token = microsoft::get_valid_token(state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
     let res = state
         .http_client
-        .patch(format!("{GRAPH}/me/messages/{message_id}"))
+        .patch(format!("{GRAPH}/{seg}/messages/{message_id}"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "flag": { "flagStatus": status } }))
         .send()
@@ -198,10 +256,15 @@ async fn set_flag_status(state: &AppState, user_id: &str, message_id: &str, stat
 /// flagged) and file it out of the Inbox into "Processed" so the inbox only
 /// holds mail still awaiting action. Detached, best-effort — failures log to
 /// the Logs window and never affect the send.
-async fn file_replied_message(state: Arc<AppState>, user_id: String, message_id: String) {
+async fn file_replied_message(
+    state: Arc<AppState>,
+    user_id: String,
+    mailbox: Option<String>,
+    message_id: String,
+) {
     // Only file mail that's actually in the Inbox — replying to something in
     // another folder (search results, sorted mail) shouldn't relocate it.
-    let _ = process_message(&state, &user_id, &message_id, true).await;
+    let _ = process_message(&state, &user_id, mailbox.as_deref(), &message_id, true).await;
 }
 
 /// Complete the follow-up flag (when flagged) and move the message to the
@@ -211,13 +274,15 @@ async fn file_replied_message(state: Arc<AppState>, user_id: String, message_id:
 async fn process_message(
     state: &Arc<AppState>,
     user_id: &str,
+    mailbox: Option<&str>,
     message_id: &str,
     inbox_only: bool,
 ) -> Result<(), ()> {
+    let seg = mailbox_seg(mailbox).map_err(|_| ())?;
     let msg = match graph_get(
         state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "parentFolderId,flag,subject")],
     )
     .await
@@ -233,13 +298,13 @@ async fn process_message(
     let subject = msg["subject"].as_str().unwrap_or("(no subject)").to_string();
 
     if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
-        match complete_flag(state, user_id, message_id).await {
+        match complete_flag(state, user_id, mailbox, message_id).await {
             Ok(()) => state.log("email", "info", format!("Flag completed: {subject}")).await,
             Err(_) => state.log("email", "warn", format!("Flag completion failed: {subject}")).await,
         }
     }
 
-    let folder_id = match ensure_folder(state, user_id, "Processed").await {
+    let folder_id = match ensure_folder(state, user_id, mailbox, "Processed").await {
         Ok(id) => id,
         Err(_) => {
             state.log("email", "warn", "filing: Processed folder unavailable").await;
@@ -254,7 +319,7 @@ async fn process_message(
         let inbox = match graph_get(
             state,
             user_id,
-            &format!("{GRAPH}/me/mailFolders/inbox"),
+            &format!("{GRAPH}/{seg}/mailFolders/inbox"),
             &[("$select", "id")],
         )
         .await
@@ -267,7 +332,7 @@ async fn process_message(
         }
     }
 
-    match move_message(state, user_id, message_id, &folder_id).await {
+    match move_message(state, user_id, mailbox, message_id, &folder_id).await {
         Ok(()) => {
             state.log("email", "info", format!("Filed to Processed: {subject}")).await;
             Ok(())
@@ -285,9 +350,10 @@ pub async fn mark_done(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
-    process_message(&state, user_id, &message_id, false)
+    process_message(&state, user_id, q.mailbox.as_deref(), &message_id, false)
         .await
         .map_err(|()| AppError::Internal(anyhow::anyhow!("filing failed — see Logs")))?;
     Ok(StatusCode::NO_CONTENT)
@@ -297,12 +363,14 @@ pub async fn mark_done(
 pub async fn list_folders(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<Value>> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     let res = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/mailFolders"),
+        &format!("{GRAPH}/{seg}/mailFolders"),
         &[
             ("$top", "30"),
             ("$select", "id,displayName,unreadItemCount,totalItemCount"),
@@ -318,6 +386,8 @@ pub struct SearchQuery {
     q: Option<String>,
     next_link: Option<String>,
     top: Option<u32>,
+    #[serde(default)]
+    mailbox: Option<String>,
 }
 
 pub async fn search_messages(
@@ -338,8 +408,9 @@ pub async fn search_messages(
     } else {
         let q = params.q.as_deref().unwrap_or("").replace('"', "");
         let top = params.top.unwrap_or(30).min(50);
+        let seg = mailbox_seg(params.mailbox.as_deref())?;
         format!(
-            "{GRAPH}/me/messages?$search=%22{}%22&$select=id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag&$expand=singleValueExtendedProperties($filter=id%20eq%20'Integer%200x1081')&$top={top}",
+            "{GRAPH}/{seg}/messages?$search=%22{}%22&$select=id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag&$expand=singleValueExtendedProperties($filter=id%20eq%20'Integer%200x1081')&$top={top}",
             q
         )
     };
@@ -379,6 +450,8 @@ pub async fn search_messages(
 pub struct MessagesQuery {
     skip: Option<u32>,
     top: Option<u32>,
+    #[serde(default)]
+    mailbox: Option<String>,
 }
 
 pub async fn list_messages(
@@ -390,11 +463,12 @@ pub async fn list_messages(
     let user_id = user.id.as_str();
     let skip = q.skip.unwrap_or(0).to_string();
     let top = q.top.unwrap_or(30).min(50).to_string();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
 
     let res = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/mailFolders/{folder_id}/messages"),
+        &format!("{GRAPH}/{seg}/mailFolders/{folder_id}/messages"),
         &[
             ("$select", "id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag"),
             // PidTagLastVerbExecuted (0x1081) tells us whether the message was
@@ -414,12 +488,14 @@ pub async fn get_message(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<Value>> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     let res = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "id,subject,from,toRecipients,ccRecipients,body,receivedDateTime,isRead,hasAttachments")],
     )
     .await?;
@@ -431,8 +507,10 @@ pub async fn list_attachments(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<Value>> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     // Only base `attachment` fields: `contentId` lives on the fileAttachment
     // subtype (selecting it 400s) and the default response includes the heavy
     // `contentBytes`. The frontend resolves inline `cid:` references by name
@@ -441,7 +519,7 @@ pub async fn list_attachments(
     let res = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}/attachments"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
     .await?;
@@ -454,13 +532,15 @@ pub async fn get_attachment_raw(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path((message_id, att_id)): Path<(String, String)>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Response> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
-    let url = format!("{GRAPH}/me/messages/{message_id}/attachments/{att_id}/$value");
+    let url = format!("{GRAPH}/{seg}/messages/{message_id}/attachments/{att_id}/$value");
     let upstream = state
         .http_client
         .get(&url)
@@ -499,15 +579,17 @@ pub async fn mark_read(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
     let res = state
         .http_client
-        .patch(format!("{GRAPH}/me/messages/{message_id}"))
+        .patch(format!("{GRAPH}/{seg}/messages/{message_id}"))
         .bearer_auth(&token)
         .json(&serde_json::json!({ "isRead": true }))
         .send()
@@ -529,8 +611,10 @@ pub async fn mark_all_read(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(folder_id): Path<String>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<Value>> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(q.mailbox.as_deref())?;
     let mut marked = 0usize;
 
     // Safety cap: 40 rounds × 100 messages = 4000 per call; the UI reports
@@ -539,7 +623,7 @@ pub async fn mark_all_read(
         let page = graph_get(
             &state,
             user_id,
-            &format!("{GRAPH}/me/mailFolders/{folder_id}/messages"),
+            &format!("{GRAPH}/{seg}/mailFolders/{folder_id}/messages"),
             &[("$filter", "isRead eq false"), ("$select", "id"), ("$top", "100")],
         )
         .await?;
@@ -559,7 +643,7 @@ pub async fn mark_all_read(
                     serde_json::json!({
                         "id": (i + 1).to_string(),
                         "method": "PATCH",
-                        "url": format!("/me/messages/{id}"),
+                        "url": format!("/{seg}/messages/{id}"),
                         "headers": { "Content-Type": "application/json" },
                         "body": { "isRead": true },
                     })
@@ -617,6 +701,9 @@ pub struct SendBody {
     /// Plain text of the message being replied to — context for commitment
     /// detection so short replies ("I'll get this done tonight") resolve.
     reply_context: Option<String>,
+    /// Shared mailbox address to send as (absent = the user's own mailbox).
+    #[serde(default)]
+    mailbox: Option<String>,
 }
 
 /// Map plain addresses to Graph recipient objects.
@@ -633,11 +720,13 @@ pub async fn send_email(
     Json(payload): Json<SendBody>,
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
     let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
     // Pulled out before `payload` is partially moved below.
+    let mailbox = payload.mailbox.clone();
     let ai_draft = payload.ai_draft.clone().filter(|d| !d.trim().is_empty());
     let ai_provider = payload.ai_provider.clone();
     let sent_body = payload.body.clone();
@@ -673,7 +762,7 @@ pub async fn send_email(
         // the `message` parameter for both actions.
         let (url, body) = if payload.action.as_deref() == Some("forward") {
             (
-                format!("{GRAPH}/me/messages/{reply_id}/forward"),
+                format!("{GRAPH}/{seg}/messages/{reply_id}/forward"),
                 serde_json::json!({
                     "toRecipients": to,
                     "message": { "ccRecipients": cc, "bccRecipients": bcc },
@@ -682,7 +771,7 @@ pub async fn send_email(
             )
         } else {
             (
-                format!("{GRAPH}/me/messages/{reply_id}/reply"),
+                format!("{GRAPH}/{seg}/messages/{reply_id}/reply"),
                 serde_json::json!({
                     "message": { "toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc },
                     "comment": payload.body,
@@ -709,7 +798,7 @@ pub async fn send_email(
         });
         state
             .http_client
-            .post(format!("{GRAPH}/me/sendMail"))
+            .post(format!("{GRAPH}/{seg}/sendMail"))
             .bearer_auth(&token)
             .json(&body)
             .send()
@@ -724,7 +813,7 @@ pub async fn send_email(
     //  - commitment detection on what was sent ("I'll do X on Saturday…")
     if let Some(id) = replied_id {
         let st = Arc::clone(&state);
-        tokio::spawn(file_replied_message(st, user.id.clone(), id));
+        tokio::spawn(file_replied_message(st, user.id.clone(), mailbox.clone(), id));
     }
     if let Some(provider_name) = ai_provider {
         let providers: Vec<ProviderConfig> =
@@ -855,6 +944,8 @@ pub struct AdviseBody {
     session_id: String,
     provider: String,
     instruction: Option<String>,
+    #[serde(default)]
+    mailbox: Option<String>,
 }
 
 /// Cap on inline images forwarded to the model, and per-image base64 size.
@@ -879,11 +970,12 @@ pub async fn advise(
         .find(|p| p.name == payload.provider)
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider)))?;
 
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
     // Message metadata + body.
     let msg = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "subject,from,body")],
     )
     .await?;
@@ -901,7 +993,7 @@ pub async fn advise(
     let attachments = graph_get(
         &state,
         user_id,
-        &format!("{GRAPH}/me/messages/{message_id}/attachments"),
+        &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
     .await?;
@@ -921,7 +1013,7 @@ pub async fn advise(
             let full = graph_get(
                 &state,
                 user_id,
-                &format!("{GRAPH}/me/messages/{message_id}/attachments/{att_id}"),
+                &format!("{GRAPH}/{seg}/messages/{message_id}/attachments/{att_id}"),
                 &[],
             )
             .await?;

@@ -223,7 +223,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
         match category.as_str() {
             "attention" | "none" | "" => {
                 if category == "attention" {
-                    match email::flag_message(state, user_id, id).await {
+                    match email::flag_message(state, user_id, None, id).await {
                         Ok(()) => {
                             summary.flagged += 1;
                             log_event(state, "info", format!("Flagged: {subject}"));
@@ -242,7 +242,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
                 // Resolve (and cache) the destination folder id.
                 let folder_id = match folder_ids.get(folder_name) {
                     Some(fid) => fid.clone(),
-                    None => match email::ensure_folder(state, user_id, folder_name).await {
+                    None => match email::ensure_folder(state, user_id, None, folder_name).await {
                         Ok(fid) => {
                             folder_ids.insert(folder_name, fid.clone());
                             fid
@@ -254,7 +254,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
                         }
                     },
                 };
-                match email::move_message(state, user_id, id, &folder_id).await {
+                match email::move_message(state, user_id, None, id, &folder_id).await {
                     Ok(()) => {
                         summary.moved += 1;
                         log_event(state, "info", format!("Moved to {folder_name}: {subject}"));

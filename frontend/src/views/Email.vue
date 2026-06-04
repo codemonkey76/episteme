@@ -7,6 +7,7 @@ import { useSessionsStore } from '../stores/sessions'
 import { useTasksStore } from '../stores/tasks'
 import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
+import { currentTheme, THEMES } from '../theme'
 
 const logs = useLogsStore()
 const windows = useWindowsStore()
@@ -23,6 +24,14 @@ const aiProvider = ref('')
 const providersList = ref<api.ProviderConfig[]>([])
 const providerMenuOpen = ref(false)
 
+// ── Mailbox selection (own vs shared) ──────────────────────────────────────────
+// '' = the user's own mailbox; otherwise a shared mailbox address. Threaded
+// into every Graph-backed call so the whole window operates on the choice.
+const sharedMailboxes = ref<api.SharedMailbox[]>([])
+const currentMailbox = ref('')
+// undefined (not '') is what the API layer expects for "own mailbox".
+const mbox = computed(() => currentMailbox.value || undefined)
+
 onMounted(async () => {
   try {
     const cfg = await api.integrations.email.getConfig()
@@ -30,7 +39,12 @@ onMounted(async () => {
   } finally {
     checkingConnection.value = false
   }
-  if (connected.value) await loadFolders()
+  if (connected.value) {
+    try {
+      sharedMailboxes.value = (await api.integrations.email.listShared()).mailboxes
+    } catch { /* none, or transient — switcher just shows the own mailbox */ }
+    await loadFolders()
+  }
   try {
     const { providers } = await api.settings.listProviders()
     providersList.value = providers
@@ -39,6 +53,19 @@ onMounted(async () => {
   // Pick up suggestions left over from earlier sends.
   if (connected.value) await loadSuggestions()
 })
+
+// Switch the active mailbox: reset the reading state and reload folders.
+async function switchMailbox(address: string) {
+  if (address === currentMailbox.value) return
+  currentMailbox.value = address
+  selectedFolder.value = null
+  selectedMessage.value = null
+  view.value = 'none'
+  searchQuery.value = ''
+  searchResults.value = []
+  searchNextLink.value = null
+  await loadFolders()
+}
 
 // ── Folders ───────────────────────────────────────────────────────────────────
 const FOLDER_ORDER = ['Inbox', 'Drafts', 'Sent Items', 'Deleted Items', 'Junk Email']
@@ -53,7 +80,7 @@ async function loadFolders() {
   folderError.value = ''
   logs.debug('Email', 'Loading mail folders')
   try {
-    const res = await api.email.listFolders()
+    const res = await api.email.listFolders(mbox.value)
     folders.value = [...res.value].sort((a, b) => {
       const ai = FOLDER_ORDER.indexOf(a.displayName)
       const bi = FOLDER_ORDER.indexOf(b.displayName)
@@ -101,7 +128,7 @@ async function loadMessages(folderId: string, skip = 0) {
   const folder = folders.value.find(f => f.id === folderId)
   logs.debug('Email', `Loading messages for "${folder?.displayName ?? folderId}" (skip=${skip})`)
   try {
-    const res = await api.email.listMessages(folderId, skip, PAGE)
+    const res = await api.email.listMessages(folderId, skip, PAGE, mbox.value)
     if (skip === 0) {
       messages.value = res.value
     } else {
@@ -126,7 +153,7 @@ async function markAllRead() {
   if (!folder || markingAllRead.value) return
   markingAllRead.value = true
   try {
-    const res = await api.email.markAllRead(folder.id)
+    const res = await api.email.markAllRead(folder.id, mbox.value)
     // Reflect locally without a full reload.
     messages.value = messages.value.map(m => ({ ...m, isRead: true }))
     searchResults.value = searchResults.value.map(m => ({ ...m, isRead: true }))
@@ -162,6 +189,47 @@ const iframeEl = ref<HTMLIFrameElement | null>(null)
 // see the iframe render at the placeholder height and then jump to full size.
 const bodyReady = ref(false)
 
+// Dark-mode rendering for HTML email bodies. Emails ship their own (usually
+// light-background, dark-text) inline styles, so rather than fight every inline
+// `color:` we invert the whole document. invert(0.87) — not a full invert —
+// softens the extremes the user sees: black text lands on a gentle #dedede
+// instead of harsh white, white backgrounds become a muted #212121. hue-rotate
+// keeps coloured text roughly true; media is inverted back so it looks normal.
+const darkEmail = ref(localStorage.getItem('email:dark') !== '0')
+watch(darkEmail, v => {
+  localStorage.setItem('email:dark', v ? '1' : '0')
+  // The iframe reloads with the new srcdoc; hide it until onIframeLoad re-measures.
+  if (isHtmlBody.value) bodyReady.value = false
+})
+
+// Track the active theme so the dark-email tint follows it live. Themes only
+// swap the `data-theme` attribute on <html>, so observe that.
+const themeKey = ref(currentTheme())
+let themeObserver: MutationObserver | null = null
+onMounted(() => {
+  themeObserver = new MutationObserver(() => { themeKey.value = currentTheme() })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+})
+onUnmounted(() => themeObserver?.disconnect())
+
+function hexToRgba(hex: string, a: number): string {
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
+}
+
+// The inverted email body lands on a neutral grey; a low-opacity overlay in the
+// theme's accent hue (blended through the same invert) nudges it to match the
+// app — purple under Amethyst, blue under Graphite, etc.
+const darkEmailStyle = computed(() => {
+  const accent = THEMES.find(t => t.key === themeKey.value)?.swatch.accent ?? '#4a8aff'
+  return (
+    '<style>html{background:#fff;filter:invert(0.87) hue-rotate(180deg);}' +
+    'img,video,picture,svg,iframe,[style*="background-image"]{filter:invert(1) hue-rotate(180deg);}' +
+    `#__tint{position:fixed;inset:0;pointer-events:none;mix-blend-mode:overlay;background:${hexToRgba(accent, 0.1)};}</style>` +
+    '<div id="__tint"></div>'
+  )
+})
+
 // Attachments for the open message. Inline ones are embedded in the HTML body,
 // so only non-inline attachments are surfaced as chips.
 const attachments = ref<api.Attachment[]>([])
@@ -175,7 +243,7 @@ function openAttachment(att: api.Attachment) {
     title: att.name,
     component: AttachmentViewer,
     props: {
-      url: api.email.attachmentUrl(m.id, att.id),
+      url: api.email.attachmentUrl(m.id, att.id, mbox.value),
       name: att.name,
       contentType: att.contentType,
     },
@@ -238,6 +306,12 @@ const renderedBody = computed(() => {
   })
 })
 
+// Final iframe document: the (cid-rewritten) email body, prefixed with the
+// dark-mode stylesheet when enabled. Toggling reloads the iframe reactively.
+const srcDoc = computed(() =>
+  darkEmail.value ? darkEmailStyle.value + renderedBody.value : renderedBody.value,
+)
+
 // Microsoft Graph returns body.contentType lowercase ("html"/"text"), so
 // compare case-insensitively rather than against a fixed-case literal.
 const isHtmlBody = computed(
@@ -250,7 +324,7 @@ async function selectMessage(summary: api.MessageSummary) {
   loadingMessage.value = true
   attachments.value = []
   try {
-    const detail = await api.email.getMessage(summary.id)
+    const detail = await api.email.getMessage(summary.id, mbox.value)
     selectedMessage.value = detail
     // Fetch attachment metadata in the background so the body renders right away.
     // NOTE: Graph's `hasAttachments` is false when a message has ONLY inline
@@ -259,12 +333,12 @@ async function selectMessage(summary: api.MessageSummary) {
       detail.body?.contentType?.toLowerCase() === 'html' && detail.body.content.includes('cid:')
     if (summary.hasAttachments || hasInlineCid) {
       api.email
-        .listAttachments(summary.id)
+        .listAttachments(summary.id, mbox.value)
         .then(r => { if (selectedMessage.value?.id === summary.id) attachments.value = r.value })
         .catch(() => { /* attachments are non-critical */ })
     }
     if (!summary.isRead) {
-      api.email.markRead(summary.id)
+      api.email.markRead(summary.id, mbox.value)
       const idx = messages.value.findIndex(m => m.id === summary.id)
       if (idx !== -1) {
         messages.value[idx] = { ...messages.value[idx], isRead: true }
@@ -513,7 +587,7 @@ async function askAi() {
     windows.openKey('chat', undefined, 'fill')
     await api.streamAdvise(
       m.id,
-      { sessionId: s.id, provider: aiProvider.value },
+      { sessionId: s.id, provider: aiProvider.value, mailbox: mbox.value },
       (tok) => sessions.appendToken(tok),
       () => {},
       () => {},
@@ -597,7 +671,7 @@ async function markDone() {
   if (!m || markingDone.value) return
   markingDone.value = true
   try {
-    const res = await api.email.markDone(m.id)
+    const res = await api.email.markDone(m.id, mbox.value)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', `Marked done: ${m.subject ?? '(no subject)'}`)
     view.value = 'none'
@@ -657,6 +731,7 @@ async function sendEmail() {
       cc: parseAddrs(composeForm.value.cc),
       bcc: parseAddrs(composeForm.value.bcc),
       body: composeForm.value.body,
+      mailbox: mbox.value,
     }
     if (showReply.value && selectedMessage.value) {
       payload.reply_to_message_id = selectedMessage.value.id
@@ -781,7 +856,7 @@ async function runSearch(q: string, nextLink?: string | null) {
   searchError.value = ''
   if (!nextLink) logs.info('Email', `Searching for "${q}"`)
   try {
-    const res = await api.email.search(q, nextLink)
+    const res = await api.email.search(q, nextLink, mbox.value)
     if (nextLink) {
       searchResults.value.push(...res.value)
     } else {
@@ -906,6 +981,20 @@ const replyBody = computed(() => {
           </svg>
         </button>
       </div>
+      <!-- Mailbox switcher: own + any shared mailboxes the user has added. -->
+      <div v-if="sharedMailboxes.length" class="relative mb-1">
+        <select
+          :value="currentMailbox"
+          class="w-full bg-surface text-[var(--c-c0c0c0)] border border-raised rounded-md pl-2 pr-6 py-[0.4rem] text-[0.75rem] font-[inherit] cursor-pointer appearance-none focus:outline-none focus:border-[var(--c-3a6adf)] truncate"
+          title="Switch mailbox"
+          @change="switchMailbox(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">My mailbox</option>
+          <option v-for="m in sharedMailboxes" :key="m.address" :value="m.address">{{ m.name || m.address }}</option>
+        </select>
+        <svg class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--c-606060)]" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+
       <div v-if="folderError" class="text-[0.72rem] text-danger py-1 px-2 cursor-default" :title="folderError">⚠ Load failed</div>
 
       <nav class="flex flex-col gap-[0.125rem]">
@@ -1106,15 +1195,30 @@ const replyBody = computed(() => {
 
           <!-- Body -->
           <div class="py-[0.875rem] px-5 flex-shrink-0">
+            <div v-if="isHtmlBody" class="flex justify-end mb-1.5">
+              <button
+                class="inline-flex items-center gap-[0.3rem] py-[0.2rem] px-2 bg-surface text-[var(--c-808080)] border border-raised rounded text-[0.7rem] font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
+                :title="darkEmail ? 'Showing email in dark mode — click for the original colours' : 'Show email in dark mode'"
+                @click="darkEmail = !darkEmail"
+              >
+                <svg v-if="darkEmail" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                {{ darkEmail ? 'Light' : 'Dark' }}
+              </button>
+            </div>
             <!-- allow-same-origin (without allow-scripts) lets us measure the content
                  height so the iframe grows to fit; email scripts still can't run. -->
             <iframe
               v-if="isHtmlBody"
               ref="iframeEl"
-              :srcdoc="renderedBody"
+              :srcdoc="srcDoc"
               sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-              class="w-full min-h-[200px] border-none bg-white rounded-md block transition-opacity duration-150"
-              :class="bodyReady ? 'opacity-100' : 'opacity-0'"
+              class="w-full min-h-[200px] border-none rounded-md block transition-opacity duration-150"
+              :class="[bodyReady ? 'opacity-100' : 'opacity-0', darkEmail ? 'bg-surface' : 'bg-white']"
               @load="onIframeLoad"
             />
             <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
