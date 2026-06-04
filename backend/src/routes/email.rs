@@ -158,6 +158,15 @@ pub async fn move_message(state: &AppState, message_id: &str, dest_folder_id: &s
 
 /// Set the follow-up flag on a message, leaving it in place.
 pub async fn flag_message(state: &AppState, message_id: &str) -> AppResult<()> {
+    set_flag_status(state, message_id, "flagged").await
+}
+
+/// Mark a message's follow-up flag as completed (✓ in Outlook).
+pub async fn complete_flag(state: &AppState, message_id: &str) -> AppResult<()> {
+    set_flag_status(state, message_id, "complete").await
+}
+
+async fn set_flag_status(state: &AppState, message_id: &str, status: &str) -> AppResult<()> {
     let token = microsoft::get_valid_token(state)
         .await
         .map_err(AppError::Internal)?;
@@ -166,16 +175,78 @@ pub async fn flag_message(state: &AppState, message_id: &str) -> AppResult<()> {
         .http_client
         .patch(format!("{GRAPH}/me/messages/{message_id}"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "flag": { "flagStatus": "flagged" } }))
+        .json(&serde_json::json!({ "flag": { "flagStatus": status } }))
         .send()
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
 
     if !res.status().is_success() {
-        let status = res.status();
-        return Err(AppError::Internal(anyhow::anyhow!("flag failed: {status}")));
+        let code = res.status();
+        return Err(AppError::Internal(anyhow::anyhow!("flag update failed: {code}")));
     }
     Ok(())
+}
+
+/// After a reply is sent: mark the original's follow-up flag complete (if
+/// flagged) and file it out of the Inbox into "Processed" so the inbox only
+/// holds mail still awaiting action. Detached, best-effort — failures log to
+/// the Logs window and never affect the send.
+async fn file_replied_message(state: Arc<AppState>, message_id: String) {
+    let msg = match graph_get(
+        &state,
+        &format!("{GRAPH}/me/messages/{message_id}"),
+        &[("$select", "parentFolderId,flag,subject")],
+    )
+    .await
+    {
+        Ok(m) => m,
+        Err(_) => {
+            state
+                .log("email", "warn", "post-reply filing: couldn't load original message")
+                .await;
+            return;
+        }
+    };
+    let subject = msg["subject"].as_str().unwrap_or("(no subject)").to_string();
+
+    if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
+        match complete_flag(&state, &message_id).await {
+            Ok(()) => state.log("email", "info", format!("Flag completed: {subject}")).await,
+            Err(_) => state.log("email", "warn", format!("Flag completion failed: {subject}")).await,
+        }
+    }
+
+    // Only file mail that's actually in the Inbox — replying to something in
+    // another folder (search results, sorted mail) shouldn't relocate it.
+    let inbox = match graph_get(
+        &state,
+        &format!("{GRAPH}/me/mailFolders/inbox"),
+        &[("$select", "id")],
+    )
+    .await
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let in_inbox = matches!(
+        (msg["parentFolderId"].as_str(), inbox["id"].as_str()),
+        (Some(p), Some(i)) if p == i
+    );
+    if !in_inbox {
+        return;
+    }
+
+    let folder_id = match ensure_folder(&state, "Processed").await {
+        Ok(id) => id,
+        Err(_) => {
+            state.log("email", "warn", "post-reply filing: Processed folder unavailable").await;
+            return;
+        }
+    };
+    match move_message(&state, &message_id, &folder_id).await {
+        Ok(()) => state.log("email", "info", format!("Filed to Processed: {subject}")).await,
+        Err(_) => state.log("email", "warn", format!("Filing failed: {subject}")).await,
+    }
 }
 
 // GET /api/email/folders
@@ -428,6 +499,11 @@ pub async fn send_email(
     let ai_draft = payload.ai_draft.clone().filter(|d| !d.trim().is_empty());
     let ai_provider = payload.ai_provider.clone();
     let sent_body = payload.body.clone();
+    // Replies (not forwards) trigger post-send filing of the original.
+    let replied_id = payload
+        .reply_to_message_id
+        .clone()
+        .filter(|_| payload.action.as_deref() != Some("forward"));
     let send_context = format!(
         "{} to {}{}",
         match payload.action.as_deref() {
@@ -498,10 +574,15 @@ pub async fn send_email(
             .map_err(|e| AppError::Internal(e.into()))?;
     }
 
-    // The send succeeded — kick off detached, best-effort analysis that must
+    // The send succeeded — kick off detached, best-effort follow-ups that must
     // never affect the send result:
+    //  - file the replied-to message out of the Inbox (flag → complete)
     //  - style learning, when the send started as an AI draft the user edited
     //  - commitment detection on what was sent ("I'll do X on Saturday…")
+    if let Some(id) = replied_id {
+        let st = Arc::clone(&state);
+        tokio::spawn(file_replied_message(st, id));
+    }
     if let Some(provider_name) = ai_provider {
         let providers: Vec<ProviderConfig> =
             db::settings::get(&state.db, "providers").await.ok().flatten().unwrap_or_default();

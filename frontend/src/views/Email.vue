@@ -595,6 +595,14 @@ async function sendEmail() {
         if (item) item.singleValueExtendedProperties = [{ id: 'Integer 0x1081', value: verb }]
       }
       showReply.value = false
+      // Replies get filed to "Processed" server-side a moment later — refresh
+      // so the original drops out of the Inbox list and counts update.
+      if (replyMode.value !== 'forward') {
+        window.setTimeout(() => {
+          if (selectedFolder.value) loadMessages(selectedFolder.value.id)
+          loadFolders()
+        }, 3000)
+      }
     }
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
     showCcBcc.value = false
