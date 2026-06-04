@@ -10,6 +10,7 @@ import Notes from '../views/Notes.vue'
 import Logs from '../views/Logs.vue'
 import Tasks from '../views/Tasks.vue'
 import Memories from '../views/Memories.vue'
+import Prompts from '../views/Prompts.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 
 export interface WindowDef {
@@ -33,5 +34,6 @@ export const windowRegistry: Record<string, WindowDef> = {
   logs: { title: 'Logs', component: markRaw(Logs), width: 900, height: 520 },
   tasks: { title: 'Tasks', component: markRaw(Tasks), width: 620, height: 480 },
   memories: { title: 'Memories', component: markRaw(Memories), width: 680, height: 560 },
+  prompts: { title: 'Prompts', component: markRaw(Prompts), width: 860, height: 600 },
   settings: { title: 'Settings', component: markRaw(SettingsPanel), width: 680, props: { initialTab: 'account' } },
 }

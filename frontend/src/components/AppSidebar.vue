@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useWindowsStore } from '../stores/windows'
+import { useAuthStore } from '../stores/auth'
 
 const winStore = useWindowsStore()
+const auth = useAuthStore()
 const collapsed = ref(false)
 const sidebarEl = ref<HTMLElement>()
 
@@ -144,6 +146,15 @@ function toggleSettings(tab: string) {
           <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5c0 .5-.08.98-.23 1.42A3.5 3.5 0 0 1 18 14.5a3.5 3.5 0 0 1-1.5 2.87V18a2.5 2.5 0 0 1-5 0"/>
         </svg>
         <span v-if="!collapsed">Memories</span>
+      </button>
+
+      <!-- Prompts (admin: the model prompts are instance-wide) -->
+      <button v-if="auth.role === 'admin'" :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('prompts') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Prompts' : ''" :aria-pressed="isOpen('prompts')" @click="toggleKey('prompts')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"/>
+          <line x1="12" y1="19" x2="20" y2="19"/>
+        </svg>
+        <span v-if="!collapsed">Prompts</span>
       </button>
     </nav>
 

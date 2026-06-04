@@ -712,13 +712,7 @@ pub async fn ai_draft(
             AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider))
         })?;
 
-    let mut system = String::from(
-        "You draft email replies on behalf of the user. Output only the body of the \
-reply — no subject line, no quoted original message, and no placeholder tokens like [Name]. \
-If the email contains quoted earlier messages or a reply thread, respond ONLY to the most \
-recent message, not to the quoted history. Keep it clear, polite, and concise in a professional \
-tone, and directly address anything the email asks.",
-    );
+    let mut system = crate::prompts::get(&state.db, "email_draft").await;
 
     // Apply style lessons learned from the user's past edits to AI drafts.
     let style_memories = db::memories::list(&state.db, user_id, Some("style"), None, 20)
@@ -866,10 +860,10 @@ pub async fn advise(
         }
     }
 
-    let instruction = payload
-        .instruction
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "Help me understand this email and tell me what I should do about it.".to_string());
+    let instruction = match payload.instruction.filter(|s| !s.trim().is_empty()) {
+        Some(i) => i,
+        None => crate::prompts::get(&state.db, "email_advise").await,
+    };
     let text = format!(
         "{instruction}\n\n--- Email ---\nFrom: {from_name} <{from_addr}>\nSubject: {subject}\n\n{body_text}"
     );

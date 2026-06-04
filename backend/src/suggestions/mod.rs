@@ -13,32 +13,6 @@ use crate::state::AppState;
 
 const BODY_LIMIT: usize = 4000;
 
-const DETECT_SYSTEM: &str = "The user just SENT the email below. Find commitments THE USER \
-made to do something in the future — promises of future action. Ignore commitments made by \
-other people, past events, and intentions with no timeframe at all (\"someday\", \"when I \
-get a chance\").\n\n\
-Classify each commitment:\n\
-- \"event\": appointment-like, happens at a specific clock time (e.g. performing maintenance \
-at 9pm, attending a meeting). Include \"start\" and, when stated, \"end\".\n\
-- \"task\": something to get done within or by a timeframe (e.g. sending a quote by Friday, \
-finishing a build this weekend, publishing a video during the week). Include \"start\" as \
-the due time.\n\n\
-Fuzzy timeframes COUNT as commitments — resolve them to the END of the stated period as the \
-due time: \"this weekend\" → Sunday 6pm, \"during the week\" / \"next week\" → Friday 5pm of \
-that week, \"by end of month\" → last day of the month 5pm. A named weekday means its NEXT \
-occurrence — count forward from today to the first matching weekday. Example: if today is \
-Wednesday 10 March, \"by Friday\" means Friday 12 March (two days later), never the Friday \
-after that.\n\n\
-Times must be RFC3339 with the user's UTC offset, resolved against the current date/time \
-given below.\n\n\
-Titles must be specific and self-contained: resolve pronouns and vague references (\"this\", \
-\"it\", \"that\") using the subject line and the message being replied to. \"I'll get this \
-done tonight\" in a thread about cancelling the Jobs server → \"Cancel the Jobs server\", \
-never \"Get this done\".\n\n\
-Respond with ONLY a JSON array, no prose, no code fences. Each element: \
-{\"kind\": \"task\"|\"event\", \"title\": \"<short imperative description>\", \
-\"start\": \"<RFC3339>\"?, \"end\": \"<RFC3339>\"?}. If there are no commitments, return [].";
-
 #[derive(Debug, Deserialize)]
 struct Detected {
     #[serde(default)]
@@ -131,8 +105,9 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
         tz.name(),
         now.format("%:z"),
     );
+    let system = crate::prompts::get(&state.db, "commitment_detect").await;
     let history = vec![
-        ChatMessage { role: "system".to_string(), content: Value::String(DETECT_SYSTEM.to_string()) },
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 

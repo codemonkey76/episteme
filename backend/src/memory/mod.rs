@@ -30,11 +30,10 @@ pub async fn inject(history: &mut Vec<ChatMessage>, pool: &SqlitePool, user_id: 
         _ => return,
     };
 
-    let mut text = String::from(
-        "Persistent memory about the user, learned from past conversations. Use it to \
-personalize your responses and stay consistent. Do not mention these notes unless relevant.\n\n\
-Memories:\n",
-    );
+    let mut text = crate::prompts::get(pool, "memory_inject").await;
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
     for m in &memories {
         text.push_str(&format!("- [{}] {}\n", m.category, m.content));
     }
@@ -48,15 +47,6 @@ struct Extracted {
     #[serde(default)]
     category: String,
 }
-
-const EXTRACT_SYSTEM: &str = "You extract durable, long-term memories about the user from a \
-single chat exchange. Capture only things worth remembering for FUTURE conversations: stable \
-preferences, personal/work facts, ongoing projects, and explicit feedback on how the user wants \
-you to behave. Ignore one-off task details, transient context, and anything already obvious.\n\n\
-Categorize each as one of: preference, fact, feedback, project, other.\n\n\
-Respond with ONLY a JSON array, no prose, no code fences. Each element: \
-{\"content\": \"<concise third-person note>\", \"category\": \"<category>\"}. If there is nothing \
-worth remembering, return [].";
 
 /// Best-effort extraction of memories from a finished exchange. Errors are
 /// logged and swallowed — this must never affect the chat turn.
@@ -75,8 +65,9 @@ pub async fn extract(
     let user = format!(
         "Exchange to analyze:\n\nUser: {user_text}\n\nAssistant: {assistant_text}"
     );
+    let system = crate::prompts::get(&state.db, "memory_extract").await;
     let history = vec![
-        ChatMessage { role: "system".to_string(), content: Value::String(EXTRACT_SYSTEM.to_string()) },
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 
@@ -136,16 +127,6 @@ async fn save_extracted(
     }
 }
 
-const STYLE_SYSTEM: &str = "An AI drafted an email reply for the user; the user edited it and \
-sent their own version. Compare the two and extract durable WRITING-STYLE preferences the \
-edits reveal — tone, length, formality, greetings and sign-offs, phrasing habits, structure. \
-Only extract preferences that would apply to FUTURE emails; ignore changes specific to this \
-email's content (names, dates, facts, decisions). State each as a concise instruction for a \
-future drafting assistant, e.g. \"Signs off emails with 'Cheers, Shane'\" or \"Prefers replies \
-under three sentences\".\n\n\
-Respond with ONLY a JSON array, no prose, no code fences. Each element: \
-{\"content\": \"<style note>\"}. If the edits reveal nothing durable, return [].";
-
 /// Cap on draft/sent text fed to the style-extraction prompt.
 const STYLE_TEXT_LIMIT: usize = 4000;
 
@@ -175,8 +156,9 @@ pub async fn extract_style(
         truncate_chars(&draft, STYLE_TEXT_LIMIT),
         truncate_chars(&sent, STYLE_TEXT_LIMIT),
     );
+    let system = crate::prompts::get(&state.db, "style_extract").await;
     let history = vec![
-        ChatMessage { role: "system".to_string(), content: Value::String(STYLE_SYSTEM.to_string()) },
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 

@@ -592,6 +592,27 @@ export const users = {
   remove: (id: string) => fetch(BASE + `/users/${id}`, { method: 'DELETE' }),
 }
 
+export interface PromptInfo {
+  key: string
+  name: string
+  description: string
+  variables: string[]
+  default: string
+  content: string
+  customized: boolean
+}
+
+export const prompts = {
+  list: () => json<{ prompts: PromptInfo[] }>('/settings/prompts'),
+  save: (key: string, content: string) =>
+    fetch(BASE + `/settings/prompts/${key}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }),
+  reset: (key: string) => fetch(BASE + `/settings/prompts/${key}`, { method: 'DELETE' }),
+}
+
 export const invites = {
   create: (label: string) =>
     json<{ invite: Invite }>('/admin/invites', {

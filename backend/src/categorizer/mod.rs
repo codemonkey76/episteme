@@ -98,21 +98,6 @@ fn folder_for(category: &str) -> Option<&'static str> {
     }
 }
 
-const SYSTEM_PROMPT: &str = "You are an email triage assistant. You are given a \
-list of inbox emails. Classify EACH email into exactly one category:\n\
-- \"promotions\": marketing, newsletters, sales, offers.\n\
-- \"invoices\": bills, receipts, payment confirmations, statements.\n\
-- \"notifications\": automated system notifications, alerts, Sentry/error \
-reports, CI results, monitoring.\n\
-- \"deliveries\": shipping and delivery/order tracking updates.\n\
-- \"attention\": anything that needs a human to read or act — personal mail, \
-direct questions, requests, anything ambiguous or important.\n\
-- \"none\": equivalent to attention; use when unsure. Never guess a low-priority \
-category for mail that might matter.\n\n\
-Respond with ONLY a JSON array, no prose, no code fences. Each element: \
-{\"id\": \"<the email id>\", \"category\": \"<one category>\"}. Include every email \
-exactly once.";
-
 // ── Config accessors (used by HTTP routes) ─────────────────────────────────────
 
 pub async fn get_config(pool: &sqlx::SqlitePool, user_id: &str) -> Result<CategorizerConfig> {
@@ -201,8 +186,9 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
         ));
     }
 
+    let system = crate::prompts::get(&state.db, "email_categorizer").await;
     let history = vec![
-        ChatMessage { role: "system".to_string(), content: Value::String(SYSTEM_PROMPT.to_string()) },
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage {
             role: "user".to_string(),
             content: Value::String(format!("Classify these emails:\n\n{listing}")),

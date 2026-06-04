@@ -18,6 +18,7 @@ pub(crate) mod email;
 mod integrations;
 mod logs;
 mod memories;
+mod prompts;
 mod tasks;
 mod notes;
 mod suggestions;
@@ -114,6 +115,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/mcp-servers/:name", delete(settings::delete_mcp_server))
         .route("/api/settings/tools", get(settings::list_tools))
         .route("/api/settings/tools", post(settings::set_tool_policy))
+        // Model prompts are instance-wide (every feature's system messages).
+        .route("/api/settings/prompts", get(prompts::list))
+        .route("/api/settings/prompts/:key", put(prompts::save))
+        .route("/api/settings/prompts/:key", delete(prompts::reset))
         // Logs are instance-wide (every user's activity) — admin only.
         .route("/api/logs", post(logs::create))
         .route("/api/logs", get(logs::list))

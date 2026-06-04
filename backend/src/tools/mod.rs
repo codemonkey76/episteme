@@ -55,24 +55,11 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
 pub async fn system_preamble(state: &AppState, user_id: &str) -> ChatMessage {
     let tz = state.home_tz(user_id).await;
     let now = Utc::now().with_timezone(&tz);
-    let text = format!(
-        "You are a helpful assistant with access to the user's Microsoft 365 calendar, \
-to-do list, and notes.\n\
-The current date and time is {now_str} in the user's timezone ({tz_name}, UTC{offset}).\n\
-Always present dates and times to the user in this timezone — never in UTC, and \
-never show a timezone conversion.\n\
-When the user asks to schedule, add an appointment, or set a reminder, call \
-create_calendar_event. For to-dos without a fixed appointment time (\"remind me to \
-buy milk\", \"I need to renew my rego\"), use the task tools instead. Use the note \
-tools to save and recall freeform information the user wants kept (ideas, references, \
-details). Resolve relative times (\"tomorrow\", \"next Friday at 3pm\") against the \
-current time and output times as RFC3339 with the user's UTC offset ({offset}). For \
-reminders, set reminder_minutes_before. After acting, briefly confirm what you did \
-in plain language.",
-        now_str = now.format("%A, %-d %B %Y, %-I:%M %p"),
-        tz_name = tz.name(),
-        offset = now.format("%:z"),
-    );
+    let text = crate::prompts::get(&state.db, "chat_system")
+        .await
+        .replace("{now}", &now.format("%A, %-d %B %Y, %-I:%M %p").to_string())
+        .replace("{timezone}", tz.name())
+        .replace("{offset}", &now.format("%:z").to_string());
     ChatMessage { role: "system".to_string(), content: Value::String(text) }
 }
 
