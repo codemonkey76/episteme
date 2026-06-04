@@ -1,6 +1,11 @@
 // Theme switching. Themes are CSS-variable remaps defined in style.css; this
-// module just sets `data-theme` on <html> and remembers the choice. Swatches
-// mirror each theme's generated palette for the Appearance picker.
+// module sets `data-theme` on <html> and remembers the choice. The selection
+// is stored per user on the server and follows the account across devices;
+// localStorage is only a fast-start cache so the right theme paints before
+// auth resolves. Swatches mirror each theme's generated palette for the
+// Appearance picker.
+
+import * as api from './api'
 
 export interface ThemeDef {
   key: string
@@ -49,6 +54,7 @@ export const THEMES: ThemeDef[] = [
 ]
 
 const STORAGE_KEY = 'episteme-theme'
+let previewing = false
 
 export function currentTheme(): string {
   const saved = localStorage.getItem(STORAGE_KEY)
@@ -61,11 +67,34 @@ export function applyTheme(key: string) {
   localStorage.setItem(STORAGE_KEY, key)
 }
 
-/** Apply the persisted theme before the app mounts (no flash of default).
+/** Apply + persist to the user's account (best-effort). */
+export function saveTheme(key: string) {
+  applyTheme(key)
+  api.settings.setTheme(key).catch(() => {})
+}
+
+/** Pull the account's theme after auth resolves. First run (nothing stored
+ *  server-side yet) pushes the local choice up instead. */
+export async function syncThemeFromServer() {
+  if (previewing) return // a ?theme= preview wins for this page load
+  try {
+    const { theme } = await api.settings.getTheme()
+    if (theme && THEMES.some(t => t.key === theme)) {
+      if (theme !== currentTheme()) applyTheme(theme)
+    } else {
+      await api.settings.setTheme(currentTheme())
+    }
+  } catch {
+    /* offline / impersonation edge — keep the cached theme */
+  }
+}
+
+/** Apply the cached theme before the app mounts (no flash of default).
  *  A `?theme=` URL param previews a theme without persisting it. */
 export function initTheme() {
   const param = new URLSearchParams(window.location.search).get('theme')
   if (param && THEMES.some(t => t.key === param)) {
+    previewing = true
     document.documentElement.setAttribute('data-theme', param)
     return
   }

@@ -60,6 +60,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/providers", get(settings::list_providers))
         .route("/api/settings/timezone", get(settings::get_timezone))
         .route("/api/settings/timezone", post(settings::set_timezone))
+        .route("/api/settings/theme", get(settings::get_theme))
+        .route("/api/settings/theme", post(settings::set_theme))
         .route("/api/sessions/:id/approvals", get(approvals::list_pending))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))

@@ -717,6 +717,13 @@ export const settings = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, policy }),
     }),
+  getTheme: () => json<{ theme: string | null }>('/settings/theme'),
+  setTheme: (theme: string) =>
+    fetch(BASE + '/settings/theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme }),
+    }),
   getTimezone: () => json<{ timezone: string; configured: boolean }>('/settings/timezone'),
   setTimezone: async (timezone: string) => {
     const res = await fetch(BASE + '/settings/timezone', {

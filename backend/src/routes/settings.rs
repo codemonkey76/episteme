@@ -308,3 +308,35 @@ pub async fn set_timezone(
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// ── Theme (per-user UI preference) ──────────────────────────────────────────
+
+pub async fn get_theme(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<serde_json::Value>> {
+    let theme: Option<String> = db::settings::get(&state.db, &format!("theme:{}", user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "theme": theme })))
+}
+
+#[derive(Deserialize)]
+pub struct ThemeBody {
+    theme: String,
+}
+
+pub async fn set_theme(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<ThemeBody>,
+) -> AppResult<StatusCode> {
+    // Theme keys are defined by the frontend; just keep the value sane.
+    if body.theme.len() > 64 || !body.theme.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(AppError::BadRequest("invalid theme name".into()));
+    }
+    db::settings::set(&state.db, &format!("theme:{}", user.id), &body.theme)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}

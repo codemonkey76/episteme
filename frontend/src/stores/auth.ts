@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import * as api from '../api'
+import { syncThemeFromServer } from '../theme'
 
 interface State {
   loaded: boolean
@@ -35,6 +36,8 @@ export const useAuthStore = defineStore('auth', {
       this.role = s.role
       this.impersonator = s.impersonator
       this.loaded = true
+      // Theme follows the account (covers login, new devices, impersonation).
+      if (this.authenticated) void syncThemeFromServer()
     },
     async login(username: string, password: string) {
       const r = await api.auth.login(username, password)

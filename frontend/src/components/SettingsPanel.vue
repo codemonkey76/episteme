@@ -3,13 +3,13 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useAuthStore } from '../stores/auth'
-import { THEMES, applyTheme, currentTheme } from '../theme'
+import { THEMES, saveTheme, currentTheme } from '../theme'
 
 const logs = useLogsStore()
 const activeTheme = ref(currentTheme())
 function selectTheme(key: string) {
   activeTheme.value = key
-  applyTheme(key)
+  saveTheme(key) // applies locally and persists to the account
 }
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.role === 'admin')
