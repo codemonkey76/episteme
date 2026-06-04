@@ -14,14 +14,21 @@ use crate::state::AppState;
 const BODY_LIMIT: usize = 4000;
 
 const DETECT_SYSTEM: &str = "The user just SENT the email below. Find commitments THE USER \
-made to do something at or by a specific time — promises of future action with a stated or \
-clearly implied date/time. Ignore commitments made by other people, past events, and vague \
-intentions with no timeframe.\n\n\
+made to do something in the future — promises of future action. Ignore commitments made by \
+other people, past events, and intentions with no timeframe at all (\"someday\", \"when I \
+get a chance\").\n\n\
 Classify each commitment:\n\
-- \"event\": appointment-like, happens at a specific start time (e.g. performing maintenance \
+- \"event\": appointment-like, happens at a specific clock time (e.g. performing maintenance \
 at 9pm, attending a meeting). Include \"start\" and, when stated, \"end\".\n\
-- \"task\": deadline-like, something to finish by a time (e.g. sending a quote by Friday). \
-Include \"start\" as the due time when one is stated, otherwise omit it.\n\n\
+- \"task\": something to get done within or by a timeframe (e.g. sending a quote by Friday, \
+finishing a build this weekend, publishing a video during the week). Include \"start\" as \
+the due time.\n\n\
+Fuzzy timeframes COUNT as commitments — resolve them to the END of the stated period as the \
+due time: \"this weekend\" → Sunday 6pm, \"during the week\" / \"next week\" → Friday 5pm of \
+that week, \"by end of month\" → last day of the month 5pm. A named weekday means its NEXT \
+occurrence — count forward from today to the first matching weekday. Example: if today is \
+Wednesday 10 March, \"by Friday\" means Friday 12 March (two days later), never the Friday \
+after that.\n\n\
 Times must be RFC3339 with the user's UTC offset, resolved against the current date/time \
 given below.\n\n\
 Respond with ONLY a JSON array, no prose, no code fences. Each element: \
@@ -94,17 +101,28 @@ Email the user sent ({context}):\n\n{body_capped}",
     let raw = match ModelRouter::complete(&provider, history).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("commitment detection failed: {e}");
+            state
+                .log("suggestions", "error", format!("commitment detection failed: {e}"))
+                .await;
             return;
         }
     };
     let items = match parse(&raw) {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!("commitment detection parse failed: {e}");
+            state
+                .log("suggestions", "error", format!("commitment detection parse failed: {e}"))
+                .await;
             return;
         }
     };
+    if items.is_empty() {
+        // Visible in the Logs window so "nothing happened" is diagnosable.
+        state
+            .log("suggestions", "info", format!("no commitments detected ({context})"))
+            .await;
+        return;
+    }
 
     for item in items {
         let title = item.title.trim();
