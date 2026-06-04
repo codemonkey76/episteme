@@ -262,9 +262,57 @@ function onIframeLoad() {
     if (doc) {
       const h = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight)
       el.style.height = h + 16 + 'px'
+      // Track text selection inside the body so "Create task" can use it.
+      doc.addEventListener('selectionchange', () => {
+        selectionText.value = doc.getSelection()?.toString().trim() ?? ''
+      })
     }
   } catch {}
   bodyReady.value = true
+}
+
+// ── Create task from selected text ────────────────────────────────────────────
+// The selection IS the task: select "could you check the upload for us" in an
+// email and turn it into a to-do without leaving the message.
+const selectionText = ref('')
+const selectionTaskState = ref<'idle' | 'saving' | 'added'>('idle')
+
+// Plain-text bodies render in the parent document (a <pre>), not the iframe.
+onMounted(() => {
+  document.addEventListener('selectionchange', () => {
+    if (view.value !== 'message') return
+    const sel = document.getSelection()?.toString().trim() ?? ''
+    if (sel) selectionText.value = sel
+  })
+})
+
+watch(selectedMessage, () => {
+  selectionText.value = ''
+  selectionTaskState.value = 'idle'
+})
+
+async function createTaskFromSelection() {
+  const m = selectedMessage.value
+  const text = selectionText.value.replace(/\s+/g, ' ').trim()
+  if (!m || !text || selectionTaskState.value === 'saving') return
+  selectionTaskState.value = 'saving'
+  const title = text.length > 140 ? `${text.slice(0, 140)}…` : text
+  const from = m.from.emailAddress
+  let notes = `From email — ${from.name} <${from.address}>: ${m.subject ?? '(no subject)'}`
+  if (text.length > 140) notes += `\n\n"${text}"`
+  try {
+    await api.tasks.create({ title, notes })
+    tasksStore.notifyChanged()
+    logs.info('Email', `Task from selection: ${title}`)
+    selectionTaskState.value = 'added'
+    setTimeout(() => {
+      selectionTaskState.value = 'idle'
+      selectionText.value = ''
+    }, 2000)
+  } catch (e: unknown) {
+    selectionTaskState.value = 'idle'
+    logs.error('Email', `Task from selection failed: ${e instanceof Error ? e.message : e}`)
+  }
 }
 
 watch(selectedMessage, () => {
@@ -1072,6 +1120,18 @@ const replyBody = computed(() => {
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               {{ markingDone ? 'Filing…' : 'Done' }}
+            </button>
+            <button
+              v-if="selectionText"
+              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1a2a1e] text-[#8edfae] border border-[#2a5a3a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#1f3526] disabled:opacity-60"
+              :disabled="selectionTaskState === 'saving'"
+              :title="`Create a task from the selected text: “${selectionText.slice(0, 80)}”`"
+              @click="createTaskFromSelection"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+              {{ selectionTaskState === 'added' ? 'Task added ✓' : selectionTaskState === 'saving' ? 'Adding…' : 'Create task from selection' }}
             </button>
 
             <!-- AI model picker — compact icon dropdown, right-aligned -->

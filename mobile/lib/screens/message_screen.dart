@@ -8,6 +8,7 @@ import 'package:provider/provider.dart' hide Provider;
 import '../api/models.dart';
 import '../main.dart';
 import '../state/email.dart';
+import '../state/tasks.dart';
 import '../util/email_text.dart';
 import 'compose_screen.dart';
 
@@ -101,6 +102,35 @@ class _MessageScreenState extends State<MessageScreen> {
       mode: mode,
       latestText: latestMessageText(d),
     );
+  }
+
+  String _selectedText = '';
+
+  /// Selection context-menu action: the selected text becomes a task, with
+  /// the email (sender/subject) attached as notes for context.
+  Future<void> _createTaskFromSelection() async {
+    final m = widget.summary;
+    final text = _selectedText.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return;
+    final title = text.length > 140 ? '${text.substring(0, 140)}…' : text;
+    var notes =
+        'From email — ${m.from.display} <${m.from.address}>: ${m.subject}';
+    if (text.length > 140) notes += '\n\n"$text"';
+    try {
+      await context.read<TasksStore>().create(title: title, notes: notes);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Task added: $title',
+              maxLines: 2, overflow: TextOverflow.ellipsis),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Task failed: $e')));
+      }
+    }
   }
 
   bool _markingDone = false;
@@ -247,16 +277,38 @@ class _MessageScreenState extends State<MessageScreen> {
                           style: const TextStyle(
                               color: Palette.faint, fontSize: 12)),
                     const Divider(color: Color(0xFF1E1E1E), height: 24),
-                    if (d.bodyIsHtml)
-                      HtmlWidget(
-                        renderedHtml ?? d.body,
-                        textStyle: const TextStyle(
-                            color: Palette.fg, fontSize: 14, height: 1.45),
-                      )
-                    else
-                      SelectableText(d.body,
-                          style: const TextStyle(
-                              color: Palette.fg, fontSize: 14, height: 1.5)),
+                    SelectionArea(
+                      onSelectionChanged: (c) =>
+                          _selectedText = c?.plainText ?? '',
+                      contextMenuBuilder: (ctx, selectableRegionState) {
+                        return AdaptiveTextSelectionToolbar.buttonItems(
+                          anchors: selectableRegionState.contextMenuAnchors,
+                          buttonItems: [
+                            ContextMenuButtonItem(
+                              label: 'Create task',
+                              onPressed: () {
+                                selectableRegionState.hideToolbar();
+                                _createTaskFromSelection();
+                              },
+                            ),
+                            ...selectableRegionState.contextMenuButtonItems,
+                          ],
+                        );
+                      },
+                      child: d.bodyIsHtml
+                          ? HtmlWidget(
+                              renderedHtml ?? d.body,
+                              textStyle: const TextStyle(
+                                  color: Palette.fg,
+                                  fontSize: 14,
+                                  height: 1.45),
+                            )
+                          : Text(d.body,
+                              style: const TextStyle(
+                                  color: Palette.fg,
+                                  fontSize: 14,
+                                  height: 1.5)),
+                    ),
                   ],
                 ),
     );
