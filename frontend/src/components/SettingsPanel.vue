@@ -696,8 +696,8 @@ async function logout() {
             </div>
           </div>
 
-          <!-- Setup instructions -->
-          <details class="instructions border border-[#222] rounded-md overflow-hidden">
+          <!-- Setup instructions (admin: it's their Azure app) -->
+          <details v-if="isAdmin" class="instructions border border-[#222] rounded-md overflow-hidden">
             <summary class="px-3 py-[0.45rem] text-[0.775rem] text-[#707070] cursor-pointer select-none list-none hover:text-[#a0a0a0]">Setup instructions</summary>
             <ol class="pt-3 pr-3.5 pb-3.5 pl-7 flex flex-col gap-2 text-[0.775rem] text-muted leading-[1.5] border-t border-[#1e1e1e]">
               <li class="pl-1">
@@ -743,8 +743,37 @@ async function logout() {
             </ol>
           </details>
 
-          <!-- Credentials form -->
-          <form class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveEmailConfig">
+          <!-- Member view: the app is configured by the admin; members only
+               connect or disconnect their own mailbox. -->
+          <div v-if="!isAdmin" class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]">
+            <p class="text-[0.775rem] text-[#787878]">
+              {{ emailConfig.configured
+                ? 'Connect your Microsoft 365 mailbox to use email, calendar, and auto-sort.'
+                : 'The Microsoft integration hasn\'t been set up yet — ask your admin.' }}
+            </p>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="emailConfig.configured && !emailConfig.connected"
+                type="button"
+                class="bg-[#0d2a1a] text-success border border-[#1a4030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#122e1e]"
+                @click="connectEmail"
+              >
+                Connect Microsoft 365 →
+              </button>
+              <button
+                v-if="emailConfig.connected"
+                type="button"
+                class="bg-[#2a1010] text-[#ff7070] border border-[#4a1a1a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#3a1515]"
+                @click="disconnectEmail"
+              >
+                Disconnect
+              </button>
+              <span v-if="emailConfig.connected" class="text-[0.75rem] text-[#6ecf8e]">{{ emailConfig.connected_email }}</span>
+            </div>
+          </div>
+
+          <!-- Credentials form (admin only) -->
+          <form v-if="isAdmin" class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveEmailConfig">
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Tenant ID (Directory ID)
               <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="emailForm.tenant_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />

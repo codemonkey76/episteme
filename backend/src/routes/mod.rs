@@ -54,18 +54,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/:id", put(sessions::update))
         .route("/api/sessions/:id", delete(sessions::delete))
         .route("/api/sessions/:id/messages", get(sessions::messages))
+        // Provider list is readable by everyone (the chat picker needs it,
+        // with api keys stripped); managing them is admin-only below.
         .route("/api/settings/providers", get(settings::list_providers))
-        .route("/api/settings/providers", post(settings::upsert_provider))
-        .route("/api/settings/providers/:name", delete(settings::delete_provider))
-        .route("/api/settings/ollama/models", get(settings::list_ollama_models))
-        .route("/api/settings/mcp-servers", get(settings::list_mcp_servers))
-        .route("/api/settings/mcp-servers", post(settings::upsert_mcp_server))
-        .route("/api/settings/mcp-servers/status", get(settings::mcp_server_status))
         .route("/api/settings/timezone", get(settings::get_timezone))
         .route("/api/settings/timezone", post(settings::set_timezone))
-        .route("/api/settings/tools", get(settings::list_tools))
-        .route("/api/settings/tools", post(settings::set_tool_policy))
-        .route("/api/settings/mcp-servers/:name", delete(settings::delete_mcp_server))
         .route("/api/sessions/:id/approvals", get(approvals::list_pending))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))
@@ -110,6 +103,17 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     // Admin-only management routes (auth + role check).
     let admin = Router::new()
+        // Shared infrastructure config — admin only (the UI also hides these
+        // tabs from members, but the API is the real boundary).
+        .route("/api/settings/providers", post(settings::upsert_provider))
+        .route("/api/settings/providers/:name", delete(settings::delete_provider))
+        .route("/api/settings/ollama/models", get(settings::list_ollama_models))
+        .route("/api/settings/mcp-servers", get(settings::list_mcp_servers))
+        .route("/api/settings/mcp-servers", post(settings::upsert_mcp_server))
+        .route("/api/settings/mcp-servers/status", get(settings::mcp_server_status))
+        .route("/api/settings/mcp-servers/:name", delete(settings::delete_mcp_server))
+        .route("/api/settings/tools", get(settings::list_tools))
+        .route("/api/settings/tools", post(settings::set_tool_policy))
         // Logs are instance-wide (every user's activity) — admin only.
         .route("/api/logs", post(logs::create))
         .route("/api/logs", get(logs::list))

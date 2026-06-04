@@ -23,22 +23,31 @@ const KEY_MCP_SERVERS: &str = "mcp_servers";
 pub async fn list_providers(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, KEY_PROVIDERS)
+    let mut providers: Vec<ProviderConfig> = db::settings::get(&state.db, KEY_PROVIDERS)
         .await
         .map_err(AppError::Internal)?
         .unwrap_or_default();
+    // Never echo stored API keys to any client.
+    for p in &mut providers {
+        p.api_key = None;
+    }
     Ok(Json(serde_json::json!({ "providers": providers })))
 }
 
 pub async fn upsert_provider(
     State(state): State<Arc<AppState>>,
-    Json(provider): Json<ProviderConfig>,
+    Json(mut provider): Json<ProviderConfig>,
 ) -> AppResult<StatusCode> {
     let mut providers: Vec<ProviderConfig> = db::settings::get(&state.db, KEY_PROVIDERS)
         .await
         .map_err(AppError::Internal)?
         .unwrap_or_default();
     if let Some(existing) = providers.iter_mut().find(|p| p.name == provider.name) {
+        // Blank key on an update keeps the stored one (keys are never echoed
+        // back to the client, so the form can't re-submit them).
+        if provider.api_key.as_deref().unwrap_or("").is_empty() {
+            provider.api_key = existing.api_key.clone();
+        }
         *existing = provider;
     } else {
         providers.push(provider);

@@ -75,11 +75,18 @@ pub async fn get_config(
     let configured =
         !app.tenant_id.is_empty() && !app.client_id.is_empty() && !app.client_secret.is_empty();
     let tokens = tokens.unwrap_or_default();
+    // The Azure app identifiers are the admin's; members only need to know
+    // whether the integration is ready and whether THEY are connected.
+    let (tenant_id, client_id) = if user.is_admin() {
+        (app.tenant_id, app.client_id)
+    } else {
+        (String::new(), String::new())
+    };
     Ok(Json(EmailConfigStatus {
         configured,
         connected: tokens.access_token.is_some(),
-        tenant_id: app.tenant_id,
-        client_id: app.client_id,
+        tenant_id,
+        client_id,
         connected_email: tokens.connected_email,
     }))
 }
