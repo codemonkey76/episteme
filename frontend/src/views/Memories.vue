@@ -117,32 +117,32 @@ function fmtDate(iso: string): string {
 <template>
   <div class="flex flex-col h-full bg-bg overflow-hidden">
     <!-- Toolbar -->
-    <div class="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0 flex-wrap">
-      <select v-model="categoryFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-1e1e1e)] shrink-0 flex-wrap">
+      <select v-model="categoryFilter" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
         <option value="All">All categories</option>
         <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
       </select>
 
-      <select v-model="sourceFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+      <select v-model="sourceFilter" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
         <option value="all">All sources</option>
         <option value="auto">Auto</option>
         <option value="manual">Manual</option>
       </select>
 
-      <div class="flex items-center gap-[0.3rem] bg-surface border border-raised rounded px-2 py-[0.2rem] flex-1 min-w-[10rem] text-[#484848]">
+      <div class="flex items-center gap-[0.3rem] bg-surface border border-raised rounded px-2 py-[0.2rem] flex-1 min-w-[10rem] text-[var(--c-484848)]">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
-        <input v-model="searchQuery" class="flex-1 bg-none border-none text-[#c0c0c0] text-xs font-[inherit] outline-none min-w-0 placeholder:text-[#404040]" placeholder="Search memories…" />
-        <button v-if="searchQuery" class="bg-none border-none text-[#484848] cursor-pointer text-[0.65rem] p-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
+        <input v-model="searchQuery" class="flex-1 bg-none border-none text-[var(--c-c0c0c0)] text-xs font-[inherit] outline-none min-w-0 placeholder:text-[var(--c-404040)]" placeholder="Search memories…" />
+        <button v-if="searchQuery" class="bg-none border-none text-[var(--c-484848)] cursor-pointer text-[0.65rem] p-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
       </div>
 
       <div class="flex items-center gap-1.5 ml-auto">
-        <button class="flex items-center gap-[0.35rem] bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254880]" @click="startAdd">
+        <button class="flex items-center gap-[0.35rem] bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="startAdd">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add
         </button>
-        <button class="flex items-center justify-center bg-surface text-[#808080] border border-raised rounded px-2 py-1 cursor-pointer transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0] disabled:opacity-50" title="Refresh" :disabled="loading" @click="load">
+        <button class="flex items-center justify-center bg-surface text-[var(--c-808080)] border border-raised rounded px-2 py-1 cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)] disabled:opacity-50" title="Refresh" :disabled="loading" @click="load">
           <svg :class="loading ? 'animate-[spin_0.7s_linear_infinite]' : ''" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
@@ -151,38 +151,38 @@ function fmtDate(iso: string): string {
     </div>
 
     <!-- Add composer -->
-    <div v-if="adding" class="flex flex-col gap-2 px-3 py-2.5 border-b border-[#1e1e1e] bg-[#111] shrink-0">
-      <textarea v-model="draft.content" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Something to remember about you, your preferences, or your projects…" />
+    <div v-if="adding" class="flex flex-col gap-2 px-3 py-2.5 border-b border-[var(--c-1e1e1e)] bg-[var(--c-111111)] shrink-0">
+      <textarea v-model="draft.content" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Something to remember about you, your preferences, or your projects…" />
       <div class="flex items-center gap-2">
-        <select v-model="draft.category" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+        <select v-model="draft.category" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
           <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
         </select>
-        <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="!draft.content.trim()" @click="saveAdd">Save</button>
-        <button class="bg-transparent text-[#585858] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
+        <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="!draft.content.trim()" @click="saveAdd">Save</button>
+        <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
       </div>
     </div>
 
-    <div v-if="error" class="px-3 py-2 text-danger text-[0.775rem] border-b border-[#1e1e1e] shrink-0">{{ error }}</div>
+    <div v-if="error" class="px-3 py-2 text-danger text-[0.775rem] border-b border-[var(--c-1e1e1e)] shrink-0">{{ error }}</div>
 
     <!-- List -->
     <div class="flex-1 overflow-y-auto">
-      <div v-if="loading && items.length === 0" class="flex items-center justify-center h-full text-[#484848] text-[0.8125rem]">
-        <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" />
+      <div v-if="loading && items.length === 0" class="flex items-center justify-center h-full text-[var(--c-484848)] text-[0.8125rem]">
+        <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" />
       </div>
-      <div v-else-if="filtered.length === 0" class="flex items-center justify-center h-full text-[#383838] text-[0.8125rem]">
+      <div v-else-if="filtered.length === 0" class="flex items-center justify-center h-full text-[var(--c-383838)] text-[0.8125rem]">
         {{ items.length === 0 ? 'No memories yet. They accumulate as you chat.' : 'No memories match your filters.' }}
       </div>
       <div v-else>
-        <div v-for="m in filtered" :key="m.id" class="group flex items-start gap-3 px-3.5 py-2.5 border-b border-[#161616] hover:bg-[#131313]">
+        <div v-for="m in filtered" :key="m.id" class="group flex items-start gap-3 px-3.5 py-2.5 border-b border-[var(--c-161616)] hover:bg-[var(--c-131313)]">
           <!-- Edit mode -->
           <div v-if="editingId === m.id" class="flex-1 flex flex-col gap-2 min-w-0">
-            <textarea v-model="editDraft.content" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[#3a6adf]" />
+            <textarea v-model="editDraft.content" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)]" />
             <div class="flex items-center gap-2">
-              <select v-model="editDraft.category" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+              <select v-model="editDraft.category" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
                 <option v-for="c in CATEGORIES" :key="c" :value="c">{{ c }}</option>
               </select>
-              <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[#254880]" @click="saveEdit(m)">Save</button>
-              <button class="bg-transparent text-[#585858] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="editingId = null">Cancel</button>
+              <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[var(--c-254880)]" @click="saveEdit(m)">Save</button>
+              <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="editingId = null">Cancel</button>
             </div>
           </div>
 
@@ -190,18 +190,18 @@ function fmtDate(iso: string): string {
           <template v-else>
             <span class="mt-[0.15rem] shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border" :style="{ color: catColor(m.category), borderColor: catColor(m.category) + '55' }">{{ m.category }}</span>
             <div class="flex-1 min-w-0">
-              <p class="text-[0.8125rem] text-[#d0d0d0] leading-[1.45] break-words">{{ m.content }}</p>
-              <div class="text-[0.68rem] text-[#505050] mt-[0.2rem] flex items-center gap-1.5">
+              <p class="text-[0.8125rem] text-[var(--c-d0d0d0)] leading-[1.45] break-words">{{ m.content }}</p>
+              <div class="text-[0.68rem] text-[var(--c-505050)] mt-[0.2rem] flex items-center gap-1.5">
                 <span>{{ m.source === 'auto' ? '✨ learned' : '✎ manual' }}</span>
                 <span>·</span>
                 <span>{{ fmtDate(m.created_at) }}</span>
               </div>
             </div>
             <div class="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-              <button class="text-[#606060] hover:text-[#a0c0ff] p-1 cursor-pointer bg-none border-none" title="Edit" @click="startEdit(m)">
+              <button class="text-[var(--c-606060)] hover:text-[var(--c-a0c0ff)] p-1 cursor-pointer bg-none border-none" title="Edit" @click="startEdit(m)">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
               </button>
-              <button class="text-[#606060] hover:text-[#d08080] p-1 cursor-pointer bg-none border-none" title="Delete" @click="remove(m)">
+              <button class="text-[var(--c-606060)] hover:text-[var(--c-d08080)] p-1 cursor-pointer bg-none border-none" title="Delete" @click="remove(m)">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
             </div>
@@ -211,7 +211,7 @@ function fmtDate(iso: string): string {
     </div>
 
     <!-- Status bar -->
-    <div class="px-3 py-[0.25rem] border-t border-surface text-[#505050] text-[0.68rem] shrink-0">
+    <div class="px-3 py-[0.25rem] border-t border-surface text-[var(--c-505050)] text-[0.68rem] shrink-0">
       {{ filtered.length }} / {{ items.length }} memories
     </div>
   </div>

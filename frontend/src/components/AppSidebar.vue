@@ -55,9 +55,9 @@ function toggleSettings(tab: string) {
 
 <template>
   <!-- `sidebar` is a marker class queried by stores/windows.ts to measure the dock area -->
-  <aside ref="sidebarEl" :class="['sidebar flex flex-col bg-[#161616] border-r border-raised h-full transition-[width,min-width] duration-200 ease-[ease] overflow-hidden shrink-0', collapsed ? 'w-[52px] min-w-[52px]' : 'w-[200px] min-w-[200px]']">
+  <aside ref="sidebarEl" :class="['sidebar flex flex-col bg-[var(--c-161616)] border-r border-raised h-full transition-[width,min-width] duration-200 ease-[ease] overflow-hidden shrink-0', collapsed ? 'w-[52px] min-w-[52px]' : 'w-[200px] min-w-[200px]']">
     <div class="flex items-center gap-2.5 px-3.5 py-3 border-b border-raised min-h-[48px] shrink-0">
-      <button class="flex items-center justify-center bg-none border-none cursor-pointer text-[#707070] p-1 rounded shrink-0 transition-colors duration-150 hover:text-fg" title="Toggle sidebar" @click="toggle">
+      <button class="flex items-center justify-center bg-none border-none cursor-pointer text-[var(--c-707070)] p-1 rounded shrink-0 transition-colors duration-150 hover:text-fg" title="Toggle sidebar" @click="toggle">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <line x1="3" y1="6" x2="21" y2="6"/>
           <line x1="3" y1="12" x2="21" y2="12"/>
@@ -69,7 +69,7 @@ function toggleSettings(tab: string) {
 
     <nav class="flex-1 flex flex-col gap-0.5 p-1.5 overflow-y-auto">
       <!-- Chat -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] mb-0.5 hover:bg-[#1a2a4a] hover:text-[#7ab5ff]', isOpen('chat') ? 'bg-[#1a2a4a] text-[#7ab5ff]' : 'text-[#5a9aff]']" :title="collapsed ? 'Chat' : ''" :aria-pressed="isOpen('chat')" @click="toggleKey('chat')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] mb-0.5 hover:bg-[var(--c-1a2a4a)] hover:text-[var(--c-7ab5ff)]', isOpen('chat') ? 'bg-[var(--c-1a2a4a)] text-[var(--c-7ab5ff)]' : 'text-[var(--c-5a9aff)]']" :title="collapsed ? 'Chat' : ''" :aria-pressed="isOpen('chat')" @click="toggleKey('chat')">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
@@ -77,17 +77,17 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- History -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('chats') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'History' : ''" :aria-pressed="isOpen('chats')" @click="toggleKey('chats')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('chats') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'History' : ''" :aria-pressed="isOpen('chats')" @click="toggleKey('chats')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
         </svg>
         <span v-if="!collapsed">History</span>
       </button>
 
-      <div class="h-px bg-[#222] mx-1.5 my-1 shrink-0" />
+      <div class="h-px bg-[var(--c-222222)] mx-1.5 my-1 shrink-0" />
 
       <!-- Email -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('email') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Email' : ''" :aria-pressed="isOpen('email')" @click="toggleKey('email')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('email') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Email' : ''" :aria-pressed="isOpen('email')" @click="toggleKey('email')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
           <polyline points="22,6 12,13 2,6"/>
@@ -96,7 +96,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Calendar -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('calendar') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Calendar' : ''" :aria-pressed="isOpen('calendar')" @click="toggleKey('calendar')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('calendar') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Calendar' : ''" :aria-pressed="isOpen('calendar')" @click="toggleKey('calendar')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
           <line x1="16" y1="2" x2="16" y2="6"/>
@@ -107,7 +107,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Notes -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('notes') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Notes' : ''" :aria-pressed="isOpen('notes')" @click="toggleKey('notes')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('notes') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Notes' : ''" :aria-pressed="isOpen('notes')" @click="toggleKey('notes')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
@@ -119,7 +119,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Logs -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('logs') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Logs' : ''" :aria-pressed="isOpen('logs')" @click="toggleKey('logs')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('logs') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Logs' : ''" :aria-pressed="isOpen('logs')" @click="toggleKey('logs')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
@@ -131,7 +131,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Tasks -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('tasks') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Tasks' : ''" :aria-pressed="isOpen('tasks')" @click="toggleKey('tasks')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('tasks') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Tasks' : ''" :aria-pressed="isOpen('tasks')" @click="toggleKey('tasks')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="9 11 12 14 22 4"/>
           <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -140,7 +140,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Memories -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('memories') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Memories' : ''" :aria-pressed="isOpen('memories')" @click="toggleKey('memories')">
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('memories') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Memories' : ''" :aria-pressed="isOpen('memories')" @click="toggleKey('memories')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a4.5 4.5 0 0 0-4.5 4.5c0 .5.08.98.23 1.42A3.5 3.5 0 0 0 6 14.5a3.5 3.5 0 0 0 1.5 2.87V18a2.5 2.5 0 0 0 5 0V4.5A2.5 2.5 0 0 0 12 2z"/>
           <path d="M12 2a4.5 4.5 0 0 1 4.5 4.5c0 .5-.08.98-.23 1.42A3.5 3.5 0 0 1 18 14.5a3.5 3.5 0 0 1-1.5 2.87V18a2.5 2.5 0 0 1-5 0"/>
@@ -149,7 +149,7 @@ function toggleSettings(tab: string) {
       </button>
 
       <!-- Prompts (admin: the model prompts are instance-wide) -->
-      <button v-if="auth.role === 'admin'" :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg', isOpen('prompts') ? 'bg-[#222] text-fg' : 'text-[#808080]']" :title="collapsed ? 'Prompts' : ''" :aria-pressed="isOpen('prompts')" @click="toggleKey('prompts')">
+      <button v-if="auth.role === 'admin'" :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('prompts') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Prompts' : ''" :aria-pressed="isOpen('prompts')" @click="toggleKey('prompts')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="4 17 10 11 4 5"/>
           <line x1="12" y1="19" x2="20" y2="19"/>
@@ -160,14 +160,14 @@ function toggleSettings(tab: string) {
 
     <div class="p-1.5 border-t border-raised shrink-0">
       <div :class="['flex items-center gap-0.5', collapsed && 'justify-center']">
-        <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[#222] hover:text-fg flex-1 min-w-0', isOpen('settings') ? 'bg-[#222] text-fg' : 'text-[#808080]', collapsed && 'hidden']" :title="collapsed ? 'Account' : ''" @click="toggleSettings('account')">
+        <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg flex-1 min-w-0', isOpen('settings') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]', collapsed && 'hidden']" :title="collapsed ? 'Account' : ''" @click="toggleSettings('account')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
             <circle cx="12" cy="7" r="4"/>
           </svg>
           <span v-if="!collapsed">Account</span>
         </button>
-        <button :class="['flex items-center justify-center bg-none border-none cursor-pointer rounded shrink-0 transition-colors duration-150 hover:text-fg p-2', isOpen('settings') ? 'text-fg bg-[#222]' : 'text-[#707070]']" title="Settings" @click="toggleSettings('providers')">
+        <button :class="['flex items-center justify-center bg-none border-none cursor-pointer rounded shrink-0 transition-colors duration-150 hover:text-fg p-2', isOpen('settings') ? 'text-fg bg-[var(--c-222222)]' : 'text-[var(--c-707070)]']" title="Settings" @click="toggleSettings('providers')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>

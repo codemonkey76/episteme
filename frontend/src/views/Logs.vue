@@ -63,14 +63,14 @@ function catColor(cat: string): string {
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-[#0d0d0f] overflow-hidden font-mono text-[0.775rem]" style="font-family: ui-monospace, 'Cascadia Code', monospace;">
+  <div class="flex flex-col h-full bg-[var(--c-0d0d0f)] overflow-hidden font-mono text-[0.775rem]" style="font-family: ui-monospace, 'Cascadia Code', monospace;">
     <!-- Toolbar -->
-    <div class="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0 flex-wrap">
-      <select v-model="categoryFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-1e1e1e)] shrink-0 flex-wrap">
+      <select v-model="categoryFilter" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
         <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
       </select>
 
-      <select v-model="levelFilter" class="bg-surface text-[#c0c0c0] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer min-w-[7rem]">
+      <select v-model="levelFilter" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer min-w-[7rem]">
         <option value="all">All levels</option>
         <option value="debug">Debug</option>
         <option value="info">Info</option>
@@ -78,44 +78,44 @@ function catColor(cat: string): string {
         <option value="error">Error</option>
       </select>
 
-      <div class="flex items-center gap-[0.3rem] bg-surface border border-raised rounded px-2 py-[0.2rem] flex-1 min-w-[10rem] text-[#484848]">
+      <div class="flex items-center gap-[0.3rem] bg-surface border border-raised rounded px-2 py-[0.2rem] flex-1 min-w-[10rem] text-[var(--c-484848)]">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
-        <input v-model="searchQuery" class="flex-1 bg-none border-none text-[#c0c0c0] text-xs font-[inherit] outline-none min-w-0 placeholder:text-[#404040]" placeholder="Filter messages…" />
-        <button v-if="searchQuery" class="bg-none border-none text-[#484848] cursor-pointer text-[0.65rem] p-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
+        <input v-model="searchQuery" class="flex-1 bg-none border-none text-[var(--c-c0c0c0)] text-xs font-[inherit] outline-none min-w-0 placeholder:text-[var(--c-404040)]" placeholder="Filter messages…" />
+        <button v-if="searchQuery" class="bg-none border-none text-[var(--c-484848)] cursor-pointer text-[0.65rem] p-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
       </div>
 
       <div class="flex items-center gap-[0.625rem] ml-auto">
-        <label class="flex items-center gap-[0.3rem] text-[#606060] text-[0.72rem] cursor-pointer font-sans" :title="autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'">
+        <label class="flex items-center gap-[0.3rem] text-[var(--c-606060)] text-[0.72rem] cursor-pointer font-sans" :title="autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'">
           <input type="checkbox" v-model="autoScroll" class="cursor-pointer" />
           <span>Auto-scroll</span>
         </label>
-        <button class="bg-[#1e1e1e] text-[#808080] border border-raised rounded px-2 py-[0.2rem] text-[0.72rem] font-sans cursor-pointer transition-colors duration-100 hover:bg-[#282828] hover:text-[#c0c0c0]" @click="store.clear()">Clear</button>
+        <button class="bg-[var(--c-1e1e1e)] text-[var(--c-808080)] border border-raised rounded px-2 py-[0.2rem] text-[0.72rem] font-sans cursor-pointer transition-colors duration-100 hover:bg-[var(--c-282828)] hover:text-[var(--c-c0c0c0)]" @click="store.clear()">Clear</button>
       </div>
     </div>
 
     <!-- Log list -->
     <div class="flex-1 overflow-y-auto overflow-x-hidden" ref="listEl">
-      <div v-if="filtered.length === 0" class="p-6 text-[#383838] text-center font-sans">No log entries.</div>
+      <div v-if="filtered.length === 0" class="p-6 text-[var(--c-383838)] text-center font-sans">No log entries.</div>
       <div
         v-for="e in filtered"
         :key="e.id"
-        class="group flex items-baseline gap-2 px-3 py-[0.15rem] border-b border-[#111] leading-normal min-h-[1.5rem] hover:!bg-[#141414]"
+        class="group flex items-baseline gap-2 px-3 py-[0.15rem] border-b border-[var(--c-111111)] leading-normal min-h-[1.5rem] hover:!bg-[var(--c-141414)]"
         :style="{ background: LEVEL_BG[e.level] }"
       >
-        <span class="text-[#404050] shrink-0 text-[0.72rem] min-w-[6rem]">{{ fmt(e.ts) }}</span>
+        <span class="text-[var(--c-404050)] shrink-0 text-[0.72rem] min-w-[6rem]">{{ fmt(e.ts) }}</span>
         <span class="font-semibold shrink-0 min-w-[6rem] text-[0.72rem]" :style="{ color: catColor(e.category) }">{{ e.category }}</span>
         <span class="font-bold shrink-0 min-w-[3.5rem] text-[0.68rem] tracking-[0.04em]" :style="{ color: LEVEL_COLOR[e.level] }">{{ e.level.toUpperCase() }}</span>
-        <span class="text-[#c0c0c0] break-words flex-1 min-w-0">{{ e.message }}</span>
+        <span class="text-[var(--c-c0c0c0)] break-words flex-1 min-w-0">{{ e.message }}</span>
       </div>
     </div>
 
     <!-- Status bar -->
-    <div class="px-3 py-[0.2rem] border-t border-surface text-[#404040] text-[0.68rem] shrink-0 font-sans flex items-center">
+    <div class="px-3 py-[0.2rem] border-t border-surface text-[var(--c-404040)] text-[0.68rem] shrink-0 font-sans flex items-center">
       <span
         class="inline-block w-[6px] h-[6px] rounded-full mr-[0.4rem] shrink-0"
-        :class="store.connected ? 'bg-success' : 'bg-[#505050]'"
+        :class="store.connected ? 'bg-success' : 'bg-[var(--c-505050)]'"
         :title="store.connected ? 'Live' : 'Disconnected'"
       />
       {{ filtered.length }} / {{ store.entries.length }} entries

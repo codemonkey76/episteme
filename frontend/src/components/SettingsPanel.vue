@@ -3,8 +3,14 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useAuthStore } from '../stores/auth'
+import { THEMES, applyTheme, currentTheme } from '../theme'
 
 const logs = useLogsStore()
+const activeTheme = ref(currentTheme())
+function selectTheme(key: string) {
+  activeTheme.value = key
+  applyTheme(key)
+}
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.role === 'admin')
 
@@ -413,53 +419,53 @@ async function logout() {
 <template>
   <div class="flex flex-row h-full min-h-[420px]">
     <!-- Vertical nav -->
-    <nav class="w-[156px] min-w-[156px] bg-[#141414] border-r border-[#252525] flex flex-col p-2 gap-0.5 overflow-y-auto">
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'account' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'account'">
+    <nav class="w-[156px] min-w-[156px] bg-[var(--c-141414)] border-r border-[var(--c-252525)] flex flex-col p-2 gap-0.5 overflow-y-auto">
+      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'account' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'account'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
         </svg>
         Account
       </button>
-      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'providers' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'providers'">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'providers' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'providers'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
         </svg>
         Providers
       </button>
-      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'mcp' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'mcp'">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'mcp' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'mcp'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
         MCP Servers
       </button>
-      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'tools' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'tools'; loadTools()">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'tools' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'tools'; loadTools()">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
         </svg>
         Tools
       </button>
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'integrations' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'integrations'">
+      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'integrations' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'integrations'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
         </svg>
         Integrations
       </button>
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'appearance' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'appearance'">
+      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'appearance' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'appearance'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
         Appearance
       </button>
 
-      <div v-if="isAdmin" class="flex flex-col gap-0.5 mt-2 pt-2 border-t border-[#252525]">
-        <span class="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#484848] px-3 pt-1 pb-1.5 pointer-events-none">Admin</span>
-        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'users' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'users'; loadUsers()">
+      <div v-if="isAdmin" class="flex flex-col gap-0.5 mt-2 pt-2 border-t border-[var(--c-252525)]">
+        <span class="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[var(--c-484848)] px-3 pt-1 pb-1.5 pointer-events-none">Admin</span>
+        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'users' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'users'; loadUsers()">
           <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
           Users
         </button>
-        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'system' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'system'">
+        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'system' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'system'">
           <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
           </svg>
@@ -476,33 +482,33 @@ async function logout() {
         <h2 class="text-[0.9375rem] font-semibold text-fg">Account</h2>
 
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Change password</h3>
-          <form class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="changePassword">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Current password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="passwordForm.current" type="password" autocomplete="current-password" /></label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">New password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="passwordForm.next" type="password" autocomplete="new-password" /></label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Confirm new password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="passwordForm.confirm" type="password" autocomplete="new-password" /></label>
-            <p v-if="passwordMsg" class="text-[0.775rem] text-[#888]">{{ passwordMsg }}</p>
-            <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]">Update password</button>
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Change password</h3>
+          <form class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="changePassword">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Current password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="passwordForm.current" type="password" autocomplete="current-password" /></label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">New password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="passwordForm.next" type="password" autocomplete="new-password" /></label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Confirm new password <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="passwordForm.confirm" type="password" autocomplete="new-password" /></label>
+            <p v-if="passwordMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ passwordMsg }}</p>
+            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)]">Update password</button>
           </form>
         </section>
 
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Two-factor authentication</h3>
-          <div class="flex items-center justify-between bg-[#111] border border-[#222] rounded-lg px-3.5 py-3 gap-4">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Two-factor authentication</h3>
+          <div class="flex items-center justify-between bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg px-3.5 py-3 gap-4">
             <div>
-              <div class="text-[0.8125rem] text-[#d0d0d0]">Authenticator app</div>
-              <div class="text-[0.75rem] text-[#585858] mt-[0.1rem]">{{ twoFactorEnabled ? 'Active' : 'Not configured' }}</div>
+              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)]">Authenticator app</div>
+              <div class="text-[0.75rem] text-[var(--c-585858)] mt-[0.1rem]">{{ twoFactorEnabled ? 'Active' : 'Not configured' }}</div>
             </div>
-            <button class="bg-[#1e1e1e] text-[#c0c0c0] border border-[#303030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#282828]" @click="toggleTwoFactor">
+            <button class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="toggleTwoFactor">
               {{ twoFactorEnabled ? 'Disable' : 'Enable' }}
             </button>
           </div>
-          <p v-if="accountMsg" class="text-[0.775rem] text-[#888]">{{ accountMsg }}</p>
+          <p v-if="accountMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ accountMsg }}</p>
         </section>
 
-        <section class="flex flex-col gap-3 border-t border-[#222] pt-5">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Danger zone</h3>
-          <button class="bg-[#2a1010] text-[#ff7070] border border-[#4a1a1a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#3a1515]" @click="logout">Sign out</button>
+        <section class="flex flex-col gap-3 border-t border-[var(--c-222222)] pt-5">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Danger zone</h3>
+          <button class="bg-[var(--c-2a1010)] text-[var(--c-ff7070)] border border-[var(--c-4a1a1a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-3a1515)]" @click="logout">Sign out</button>
         </section>
       </div>
 
@@ -512,24 +518,24 @@ async function logout() {
 
         <section class="flex flex-col gap-3">
           <ul v-if="providers.length" class="list-none flex flex-col gap-1.5">
-            <li v-for="p in providers" :key="p.name" class="flex justify-between items-center bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+            <li v-for="p in providers" :key="p.name" class="flex justify-between items-center bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md px-3 py-2 gap-4">
               <div class="flex flex-col gap-[0.1rem] min-w-0">
-                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ p.name }}</span>
-                <span class="text-[0.75rem] text-[#585858]">{{ p.provider }} · {{ p.model_id }}</span>
+                <span class="text-[0.8125rem] text-[var(--c-d0d0d0)]">{{ p.name }}</span>
+                <span class="text-[0.75rem] text-[var(--c-585858)]">{{ p.provider }} · {{ p.model_id }}</span>
               </div>
-              <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] shrink-0 hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteProvider(p.name)">Remove</button>
+              <button class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] shrink-0 hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="deleteProvider(p.name)">Remove</button>
             </li>
           </ul>
-          <p v-else class="text-[#484848] text-[0.8125rem]">No providers configured.</p>
+          <p v-else class="text-[var(--c-484848)] text-[0.8125rem]">No providers configured.</p>
         </section>
 
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Add / update provider</h3>
-          <form class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveProvider">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Name <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.name" placeholder="e.g. my-ollama" required /></label>
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Add / update provider</h3>
+          <form class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="saveProvider">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Name <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.name" placeholder="e.g. my-ollama" required /></label>
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Provider
-              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.provider" @change="onProviderTypeChange">
+              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.provider" @change="onProviderTypeChange">
                 <option>anthropic</option>
                 <option>openai</option>
                 <option>ollama</option>
@@ -545,37 +551,37 @@ async function logout() {
               <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
                 Ollama URL
                 <div class="flex gap-1.5">
-                  <input class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.base_url" placeholder="http://192.168.1.x:11434" />
-                  <button type="button" class="bg-[#1a1a2a] text-[#7090d0] border border-[#2a2a4a] rounded px-[0.6rem] py-1.5 cursor-pointer text-[0.775rem] font-[inherit] whitespace-nowrap transition-[background] duration-[120ms] shrink-0 hover:not-disabled:bg-[#222240] disabled:opacity-40 disabled:cursor-default" :disabled="!newProvider.base_url || ollamaFetching" @click="fetchOllamaModels">
+                  <input class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.base_url" placeholder="http://192.168.1.x:11434" />
+                  <button type="button" class="bg-[var(--c-1a1a2a)] text-[var(--c-7090d0)] border border-[var(--c-2a2a4a)] rounded px-[0.6rem] py-1.5 cursor-pointer text-[0.775rem] font-[inherit] whitespace-nowrap transition-[background] duration-[120ms] shrink-0 hover:not-disabled:bg-[var(--c-222240)] disabled:opacity-40 disabled:cursor-default" :disabled="!newProvider.base_url || ollamaFetching" @click="fetchOllamaModels">
                     {{ ollamaFetching ? '…' : 'Fetch models' }}
                   </button>
                 </div>
               </label>
-              <p v-if="ollamaFetchError" class="text-[0.775rem] text-[#c06060]">{{ ollamaFetchError }}</p>
+              <p v-if="ollamaFetchError" class="text-[0.775rem] text-[var(--c-c06060)]">{{ ollamaFetchError }}</p>
               <label v-if="ollamaModels.length" class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
                 Model
-                <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.model_id">
+                <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.model_id">
                   <option v-for="m in ollamaModels" :key="m" :value="m">{{ m }}</option>
                 </select>
               </label>
               <label v-else-if="!ollamaFetching" class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
                 Model ID
-                <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.model_id" placeholder="Fetch models above, or type manually" />
+                <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.model_id" placeholder="Fetch models above, or type manually" />
               </label>
             </template>
 
             <!-- All other providers -->
             <template v-else>
-              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Model ID <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.model_id" required /></label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Model ID <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.model_id" required /></label>
               <label v-if="newProvider.provider === 'openai_compatible'" class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-                Base URL <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.base_url" placeholder="https://…/v1" />
+                Base URL <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.base_url" placeholder="https://…/v1" />
               </label>
               <label v-if="newProvider.provider !== 'ollama'" class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-                API Key <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newProvider.api_key" type="password" />
+                API Key <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newProvider.api_key" type="password" />
               </label>
             </template>
 
-            <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]" :disabled="!newProvider.name || !newProvider.model_id">Save</button>
+            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)]" :disabled="!newProvider.name || !newProvider.model_id">Save</button>
           </form>
         </section>
       </div>
@@ -584,86 +590,86 @@ async function logout() {
       <div v-else-if="activeTab === 'mcp'" class="px-6 py-5 flex flex-col gap-6">
         <div class="flex items-center justify-between">
           <h2 class="text-[0.9375rem] font-semibold text-fg">MCP Servers</h2>
-          <button class="bg-[#1e1e1e] text-[#c0c0c0] border border-[#303030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#282828]" @click="refreshMcpStatus">Refresh</button>
+          <button class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="refreshMcpStatus">Refresh</button>
         </div>
 
         <section class="flex flex-col gap-3">
           <ul v-if="mcpServers.length" class="list-none flex flex-col gap-1.5">
-            <li v-for="s in mcpServers" :key="s.name" class="flex justify-between items-center bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+            <li v-for="s in mcpServers" :key="s.name" class="flex justify-between items-center bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md px-3 py-2 gap-4">
               <div class="flex flex-col gap-[0.1rem] min-w-0">
-                <span class="text-[0.8125rem] text-[#d0d0d0] flex items-center gap-1.5">
+                <span class="text-[0.8125rem] text-[var(--c-d0d0d0)] flex items-center gap-1.5">
                   <span
                     class="inline-block w-2 h-2 rounded-full shrink-0"
-                    :class="mcpStatusFor(s.name)?.connected ? 'bg-[#4caf6e]' : 'bg-[#c05050]'"
+                    :class="mcpStatusFor(s.name)?.connected ? 'bg-[var(--c-4caf6e)]' : 'bg-[var(--c-c05050)]'"
                   ></span>
                   {{ s.name }}
                 </span>
-                <span class="text-[0.75rem] text-[#585858]">
+                <span class="text-[0.75rem] text-[var(--c-585858)]">
                   {{ s.transport.type === 'stdio' ? `stdio · ${s.transport.command} ${s.transport.args.join(' ')}` : `http · ${s.transport.url}` }}
                 </span>
-                <span v-if="mcpStatusFor(s.name)?.connected" class="text-[0.75rem] text-[#4caf6e]">
+                <span v-if="mcpStatusFor(s.name)?.connected" class="text-[0.75rem] text-[var(--c-4caf6e)]">
                   {{ mcpStatusFor(s.name)?.tool_count }} tool{{ mcpStatusFor(s.name)?.tool_count === 1 ? '' : 's' }}
                 </span>
-                <span v-else-if="mcpStatusFor(s.name)?.error" class="text-[0.75rem] text-[#c06060] break-all">
+                <span v-else-if="mcpStatusFor(s.name)?.error" class="text-[0.75rem] text-[var(--c-c06060)] break-all">
                   {{ mcpStatusFor(s.name)?.error }}
                 </span>
               </div>
-              <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] shrink-0 hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteMcpServer(s.name)">Remove</button>
+              <button class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] shrink-0 hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="deleteMcpServer(s.name)">Remove</button>
             </li>
           </ul>
-          <p v-else class="text-[#484848] text-[0.8125rem]">No MCP servers configured.</p>
+          <p v-else class="text-[var(--c-484848)] text-[0.8125rem]">No MCP servers configured.</p>
         </section>
 
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Add / update server</h3>
-          <form class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveMcpServer">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Name <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.name" placeholder="e.g. filesystem" required /></label>
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Add / update server</h3>
+          <form class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="saveMcpServer">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Name <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newMcp.name" placeholder="e.g. filesystem" required /></label>
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Transport
-              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.type">
+              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newMcp.type">
                 <option value="stdio">stdio (local command)</option>
                 <option value="http">http (remote server)</option>
               </select>
             </label>
 
             <template v-if="newMcp.type === 'stdio'">
-              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Command <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.command" placeholder="e.g. npx" required /></label>
-              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Arguments <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.args" placeholder="e.g. -y @modelcontextprotocol/server-everything" /></label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Command <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newMcp.command" placeholder="e.g. npx" required /></label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Arguments <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newMcp.args" placeholder="e.g. -y @modelcontextprotocol/server-everything" /></label>
             </template>
             <template v-else>
-              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">URL <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="newMcp.url" placeholder="https://example.com/mcp" required /></label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">URL <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="newMcp.url" placeholder="https://example.com/mcp" required /></label>
             </template>
 
-            <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:opacity-40 disabled:cursor-default" :disabled="mcpSaving || !newMcp.name || (newMcp.type === 'stdio' ? !newMcp.command : !newMcp.url)">
+            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)] disabled:opacity-40 disabled:cursor-default" :disabled="mcpSaving || !newMcp.name || (newMcp.type === 'stdio' ? !newMcp.command : !newMcp.url)">
               {{ mcpSaving ? 'Connecting…' : 'Save & connect' }}
             </button>
-            <p v-if="mcpMsg" class="text-[0.775rem]" :class="mcpMsg.startsWith('Connected') ? 'text-[#4caf6e]' : 'text-[#c06060]'">{{ mcpMsg }}</p>
+            <p v-if="mcpMsg" class="text-[0.775rem]" :class="mcpMsg.startsWith('Connected') ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ mcpMsg }}</p>
           </form>
-          <p class="text-[0.75rem] text-[#585858]">Tools from connected servers are offered to the model in every chat. By default they run without asking — flag individual tools as "ask first" under <b>Settings → Tools</b>.</p>
+          <p class="text-[0.75rem] text-[var(--c-585858)]">Tools from connected servers are offered to the model in every chat. By default they run without asking — flag individual tools as "ask first" under <b>Settings → Tools</b>.</p>
         </section>
       </div>
 
       <!-- Tools (approval policies) -->
       <div v-else-if="activeTab === 'tools'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">Tools</h2>
-        <p class="text-[0.775rem] text-[#787878] -mt-3">Tools marked <b>Ask first</b> pause the chat and wait for your approval before running. Everything else runs automatically.</p>
+        <p class="text-[0.775rem] text-[var(--c-787878)] -mt-3">Tools marked <b>Ask first</b> pause the chat and wait for your approval before running. Everything else runs automatically.</p>
 
-        <div v-if="toolsLoading && tools.length === 0" class="text-[#484848] text-[0.8125rem]">Loading…</div>
-        <p v-else-if="tools.length === 0" class="text-[#484848] text-[0.8125rem]">No tools available.</p>
+        <div v-if="toolsLoading && tools.length === 0" class="text-[var(--c-484848)] text-[0.8125rem]">Loading…</div>
+        <p v-else-if="tools.length === 0" class="text-[var(--c-484848)] text-[0.8125rem]">No tools available.</p>
 
         <section v-for="[group, groupTools] in toolGroups" :key="group" class="flex flex-col gap-2">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">{{ group }}</h3>
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">{{ group }}</h3>
           <ul class="list-none flex flex-col gap-1">
-            <li v-for="t in groupTools" :key="t.name" class="flex items-center justify-between bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+            <li v-for="t in groupTools" :key="t.name" class="flex items-center justify-between bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md px-3 py-2 gap-4">
               <div class="flex flex-col gap-[0.1rem] min-w-0">
-                <span class="text-[0.8125rem] text-[#d0d0d0] flex items-center gap-2">
+                <span class="text-[0.8125rem] text-[var(--c-d0d0d0)] flex items-center gap-2">
                   {{ t.name }}
-                  <span v-if="t.suggest_ask && t.policy !== 'ask'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[#e0b060] border-[#e0b06055]" title="This tool reports that it modifies external state">ask suggested</span>
+                  <span v-if="t.suggest_ask && t.policy !== 'ask'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[var(--c-e0b060)] border-[var(--c-e0b06055)]" title="This tool reports that it modifies external state">ask suggested</span>
                 </span>
-                <span class="text-[0.75rem] text-[#585858] break-words">{{ t.description }}</span>
+                <span class="text-[0.75rem] text-[var(--c-585858)] break-words">{{ t.description }}</span>
               </div>
-              <label class="flex items-center gap-1.5 shrink-0 cursor-pointer text-[0.75rem] select-none" :class="t.policy === 'ask' ? 'text-[#e0b060]' : 'text-[#585858]'">
-                <input type="checkbox" class="accent-[#e0b060] cursor-pointer" :checked="t.policy === 'ask'" @change="toggleToolPolicy(t)" />
+              <label class="flex items-center gap-1.5 shrink-0 cursor-pointer text-[0.75rem] select-none" :class="t.policy === 'ask' ? 'text-[var(--c-e0b060)]' : 'text-[var(--c-585858)]'">
+                <input type="checkbox" class="accent-[var(--c-e0b060)] cursor-pointer" :checked="t.policy === 'ask'" @change="toggleToolPolicy(t)" />
                 Ask first
               </label>
             </li>
@@ -676,7 +682,7 @@ async function logout() {
         <h2 class="text-[0.9375rem] font-semibold text-fg">Integrations</h2>
 
         <!-- Microsoft 365 card -->
-        <section class="bg-[#111] border border-[#222] rounded-lg p-3.5 flex flex-col gap-3.5">
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
           <div class="flex items-center justify-between gap-4">
             <div class="flex items-center gap-2.5">
               <!-- Microsoft "four squares" logo -->
@@ -687,64 +693,64 @@ async function logout() {
                 <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
               </svg>
               <div>
-                <div class="text-[0.8125rem] text-[#d0d0d0] font-medium">Microsoft 365</div>
-                <div class="text-[0.72rem] text-[#585858] mt-[0.1rem]">Work / School account via Entra ID</div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Microsoft 365</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Work / School account via Entra ID</div>
               </div>
             </div>
-            <div v-if="emailConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[#0d2a1a] text-success border border-[#1a4030] flex items-center gap-[0.35rem]">
+            <div v-if="emailConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] flex items-center gap-[0.35rem]">
               <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
               {{ emailConfig.connected_email ?? 'Connected' }}
             </div>
-            <div v-else-if="emailConfig.configured" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[#1a1a0d] text-[#b0a030] border border-[#3a3010]">
+            <div v-else-if="emailConfig.configured" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[var(--c-1a1a0d)] text-[var(--c-b0a030)] border border-[var(--c-3a3010)]">
               Credentials saved
             </div>
-            <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-surface text-[#484848] border border-[#282828]">
+            <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
               Not configured
             </div>
           </div>
 
           <!-- Setup instructions (admin: it's their Azure app) -->
-          <details v-if="isAdmin" class="instructions border border-[#222] rounded-md overflow-hidden">
-            <summary class="px-3 py-[0.45rem] text-[0.775rem] text-[#707070] cursor-pointer select-none list-none hover:text-[#a0a0a0]">Setup instructions</summary>
-            <ol class="pt-3 pr-3.5 pb-3.5 pl-7 flex flex-col gap-2 text-[0.775rem] text-muted leading-[1.5] border-t border-[#1e1e1e]">
+          <details v-if="isAdmin" class="instructions border border-[var(--c-222222)] rounded-md overflow-hidden">
+            <summary class="px-3 py-[0.45rem] text-[0.775rem] text-[var(--c-707070)] cursor-pointer select-none list-none hover:text-[var(--c-a0a0a0)]">Setup instructions</summary>
+            <ol class="pt-3 pr-3.5 pb-3.5 pl-7 flex flex-col gap-2 text-[0.775rem] text-muted leading-[1.5] border-t border-[var(--c-1e1e1e)]">
               <li class="pl-1">
-                Sign in to <strong class="text-[#c0c0c0]">portal.azure.com</strong> with your Microsoft 365 admin account.
+                Sign in to <strong class="text-[var(--c-c0c0c0)]">portal.azure.com</strong> with your Microsoft 365 admin account.
               </li>
               <li class="pl-1">
-                Go to <strong class="text-[#c0c0c0]">Microsoft Entra ID → App registrations → New registration</strong>.
+                Go to <strong class="text-[var(--c-c0c0c0)]">Microsoft Entra ID → App registrations → New registration</strong>.
               </li>
               <li class="pl-1">
-                Set a name (e.g. <em class="text-[#a0a0a0] not-italic">Episteme</em>), and for <em class="text-[#a0a0a0] not-italic">Supported account types</em> choose
-                <strong class="text-[#c0c0c0]">"Accounts in any organizational directory (Any Microsoft Entra ID tenant)"</strong>.
+                Set a name (e.g. <em class="text-[var(--c-a0a0a0)] not-italic">Episteme</em>), and for <em class="text-[var(--c-a0a0a0)] not-italic">Supported account types</em> choose
+                <strong class="text-[var(--c-c0c0c0)]">"Accounts in any organizational directory (Any Microsoft Entra ID tenant)"</strong>.
               </li>
               <li class="pl-1">
-                Under <em class="text-[#a0a0a0] not-italic">Redirect URI</em>, select platform <strong class="text-[#c0c0c0]">Web</strong> and enter:
-                <code class="block mt-[0.3rem] font-mono text-[0.75rem] bg-surface px-2 py-[0.3rem] rounded text-[#a0c8ff] break-all">{{ callbackUri }}</code>
+                Under <em class="text-[var(--c-a0a0a0)] not-italic">Redirect URI</em>, select platform <strong class="text-[var(--c-c0c0c0)]">Web</strong> and enter:
+                <code class="block mt-[0.3rem] font-mono text-[0.75rem] bg-surface px-2 py-[0.3rem] rounded text-[var(--c-a0c8ff)] break-all">{{ callbackUri }}</code>
               </li>
               <li class="pl-1">
-                Click <strong class="text-[#c0c0c0]">Register</strong>. From the overview page copy:
+                Click <strong class="text-[var(--c-c0c0c0)]">Register</strong>. From the overview page copy:
                 <ul class="mt-[0.35rem] pl-5 flex flex-col gap-[0.2rem] list-disc">
-                  <li><strong class="text-[#c0c0c0]">Application (client) ID</strong> → paste into <em class="text-[#a0a0a0] not-italic">Client ID</em> below</li>
-                  <li><strong class="text-[#c0c0c0]">Directory (tenant) ID</strong> → paste into <em class="text-[#a0a0a0] not-italic">Tenant ID</em> below</li>
+                  <li><strong class="text-[var(--c-c0c0c0)]">Application (client) ID</strong> → paste into <em class="text-[var(--c-a0a0a0)] not-italic">Client ID</em> below</li>
+                  <li><strong class="text-[var(--c-c0c0c0)]">Directory (tenant) ID</strong> → paste into <em class="text-[var(--c-a0a0a0)] not-italic">Tenant ID</em> below</li>
                 </ul>
               </li>
               <li class="pl-1">
-                Go to <strong class="text-[#c0c0c0]">Certificates &amp; secrets → Client secrets → New client secret</strong>.
-                Set a description and expiry, then copy the <strong class="text-[#c0c0c0]">Value</strong> (not the Secret ID)
-                → paste into <em class="text-[#a0a0a0] not-italic">Client Secret</em> below.
+                Go to <strong class="text-[var(--c-c0c0c0)]">Certificates &amp; secrets → Client secrets → New client secret</strong>.
+                Set a description and expiry, then copy the <strong class="text-[var(--c-c0c0c0)]">Value</strong> (not the Secret ID)
+                → paste into <em class="text-[var(--c-a0a0a0)] not-italic">Client Secret</em> below.
               </li>
               <li class="pl-1">
-                Go to <strong class="text-[#c0c0c0]">API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
+                Go to <strong class="text-[var(--c-c0c0c0)]">API permissions → Add a permission → Microsoft Graph → Delegated permissions</strong>
                 and add:
                 <ul class="mt-[0.35rem] pl-5 flex flex-col gap-[0.2rem] list-disc">
-                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[#a0c8ff]">Mail.Read</code></li>
-                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[#a0c8ff]">Mail.ReadWrite</code></li>
-                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[#a0c8ff]">Mail.Send</code></li>
-                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[#a0c8ff]">User.Read</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Read</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.ReadWrite</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Send</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">User.Read</code></li>
                 </ul>
               </li>
               <li class="pl-1">
-                Click <strong class="text-[#c0c0c0]">Grant admin consent</strong> for your organisation (requires admin role),
+                Click <strong class="text-[var(--c-c0c0c0)]">Grant admin consent</strong> for your organisation (requires admin role),
                 or ask your tenant administrator to do so.
               </li>
             </ol>
@@ -752,8 +758,8 @@ async function logout() {
 
           <!-- Member view: the app is configured by the admin; members only
                connect or disconnect their own mailbox. -->
-          <div v-if="!isAdmin" class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]">
-            <p class="text-[0.775rem] text-[#787878]">
+          <div v-if="!isAdmin" class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]">
+            <p class="text-[0.775rem] text-[var(--c-787878)]">
               {{ emailConfig.configured
                 ? 'Connect your Microsoft 365 mailbox to use email, calendar, and auto-sort.'
                 : 'The Microsoft integration hasn\'t been set up yet — ask your admin.' }}
@@ -762,7 +768,7 @@ async function logout() {
               <button
                 v-if="emailConfig.configured && !emailConfig.connected"
                 type="button"
-                class="bg-[#0d2a1a] text-success border border-[#1a4030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#122e1e]"
+                class="bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-122e1e)]"
                 @click="connectEmail"
               >
                 Connect Microsoft 365 →
@@ -770,44 +776,44 @@ async function logout() {
               <button
                 v-if="emailConfig.connected"
                 type="button"
-                class="bg-[#2a1010] text-[#ff7070] border border-[#4a1a1a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#3a1515]"
+                class="bg-[var(--c-2a1010)] text-[var(--c-ff7070)] border border-[var(--c-4a1a1a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-3a1515)]"
                 @click="disconnectEmail"
               >
                 Disconnect
               </button>
-              <span v-if="emailConfig.connected" class="text-[0.75rem] text-[#6ecf8e]">{{ emailConfig.connected_email }}</span>
+              <span v-if="emailConfig.connected" class="text-[0.75rem] text-[var(--c-6ecf8e)]">{{ emailConfig.connected_email }}</span>
             </div>
           </div>
 
           <!-- Credentials form (admin only) -->
-          <form v-if="isAdmin" class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]" @submit.prevent="saveEmailConfig">
+          <form v-if="isAdmin" class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="saveEmailConfig">
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Tenant ID (Directory ID)
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="emailForm.tenant_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="emailForm.tenant_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
             </label>
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Client ID (Application ID)
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="emailForm.client_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="emailForm.client_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
             </label>
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Client Secret
               <input
-                class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]"
+                class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]"
                 v-model="emailForm.client_secret"
                 type="password"
                 autocomplete="new-password"
                 :placeholder="emailConfig.configured ? 'Leave blank to keep existing secret' : 'Paste secret value here'"
               />
             </label>
-            <p v-if="emailMsg" class="text-[0.775rem] text-[#888]">{{ emailMsg }}</p>
+            <p v-if="emailMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ emailMsg }}</p>
             <div class="flex items-center gap-2 flex-wrap">
-              <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]" :disabled="emailSaving">
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)]" :disabled="emailSaving">
                 {{ emailSaving ? 'Saving…' : 'Save credentials' }}
               </button>
               <button
                 v-if="emailConfig.configured && !emailConfig.connected"
                 type="button"
-                class="bg-[#0d2a1a] text-success border border-[#1a4030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#122e1e]"
+                class="bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-122e1e)]"
                 @click="connectEmail"
               >
                 Connect Microsoft 365 →
@@ -815,38 +821,38 @@ async function logout() {
               <button
                 v-if="emailConfig.connected"
                 type="button"
-                class="bg-[#2a1010] text-[#ff7070] border border-[#4a1a1a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#3a1515]"
+                class="bg-[var(--c-2a1010)] text-[var(--c-ff7070)] border border-[var(--c-4a1a1a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-3a1515)]"
                 @click="disconnectEmail"
               >
                 Disconnect
               </button>
             </div>
-            <p v-if="emailConfig.configured && !emailConfig.connected" class="text-[0.72rem] text-[#585858] leading-[1.5]">
-              After saving credentials, click <em class="text-[#a0a0a0] not-italic">Connect</em> to authorise via Microsoft login.
+            <p v-if="emailConfig.configured && !emailConfig.connected" class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
+              After saving credentials, click <em class="text-[var(--c-a0a0a0)] not-italic">Connect</em> to authorise via Microsoft login.
               You'll be redirected back here when done.
             </p>
           </form>
         </section>
 
         <!-- AI auto-sort card -->
-        <section class="bg-[#111] border border-[#222] rounded-lg p-3.5 flex flex-col gap-3.5">
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
           <div class="flex items-center justify-between gap-4">
             <div class="flex items-center gap-2.5">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7ab0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
               </svg>
               <div>
-                <div class="text-[0.8125rem] text-[#d0d0d0] font-medium">AI auto-sort</div>
-                <div class="text-[0.72rem] text-[#585858] mt-[0.1rem]">Sort low-priority inbox mail into folders; flag what needs you</div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">AI auto-sort</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Sort low-priority inbox mail into folders; flag what needs you</div>
               </div>
             </div>
-            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', catConfig.enabled ? 'bg-[#0d2a1a] text-success border-[#1a4030]' : 'bg-surface text-[#484848] border-[#282828]']">
+            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', catConfig.enabled ? 'bg-[var(--c-0d2a1a)] text-success border-[var(--c-1a4030)]' : 'bg-surface text-[var(--c-484848)] border-[var(--c-282828)]']">
               <span v-if="catConfig.enabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
               {{ catConfig.enabled ? 'Active' : 'Off' }}
             </div>
           </div>
 
-          <p v-if="!emailConfig.connected" class="text-[0.775rem] text-[#b0a030]">
+          <p v-if="!emailConfig.connected" class="text-[0.775rem] text-[var(--c-b0a030)]">
             Connect a Microsoft 365 account above to use auto-sort.
           </p>
 
@@ -854,48 +860,48 @@ async function logout() {
             <!-- Category → folder reference -->
             <ul class="list-none flex flex-col gap-1">
               <li v-for="c in CATEGORY_FOLDERS" :key="c.label" class="flex items-baseline gap-2 text-[0.75rem]">
-                <span class="text-[#a0c8ff] font-medium min-w-[5.5rem]">{{ c.label }}</span>
-                <span class="text-[#585858]">{{ c.desc }}</span>
+                <span class="text-[var(--c-a0c8ff)] font-medium min-w-[5.5rem]">{{ c.label }}</span>
+                <span class="text-[var(--c-585858)]">{{ c.desc }}</span>
               </li>
               <li class="flex items-baseline gap-2 text-[0.75rem]">
-                <span class="text-[#d0a030] font-medium min-w-[5.5rem]">⚑ Flagged</span>
-                <span class="text-[#585858]">anything needing your attention (stays in Inbox)</span>
+                <span class="text-[var(--c-d0a030)] font-medium min-w-[5.5rem]">⚑ Flagged</span>
+                <span class="text-[var(--c-585858)]">anything needing your attention (stays in Inbox)</span>
               </li>
             </ul>
 
-            <div class="flex flex-col gap-2.5 bg-[#0d0d0d] border border-[#1e1e1e] rounded-md p-3">
-              <label class="flex items-center justify-between gap-4 text-[0.8125rem] text-[#d0d0d0] cursor-pointer">
+            <div class="flex flex-col gap-2.5 bg-[var(--c-0d0d0d)] border border-[var(--c-1e1e1e)] rounded-md p-3">
+              <label class="flex items-center justify-between gap-4 text-[0.8125rem] text-[var(--c-d0d0d0)] cursor-pointer">
                 <span>Run automatically in the background</span>
-                <input type="checkbox" v-model="catConfig.enabled" class="w-4 h-4 accent-[#3a6adf] cursor-pointer" />
+                <input type="checkbox" v-model="catConfig.enabled" class="w-4 h-4 accent-[var(--c-3a6adf)] cursor-pointer" />
               </label>
               <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
                 <span>AI provider</span>
-                <select v-model="catConfig.provider" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] min-w-[10rem]">
+                <select v-model="catConfig.provider" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] min-w-[10rem]">
                   <option value="">First configured</option>
                   <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
                 </select>
               </label>
               <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
                 <span>Check interval (seconds)</span>
-                <input type="number" min="60" v-model.number="catConfig.interval_secs" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] w-[6rem]" />
+                <input type="number" min="60" v-model.number="catConfig.interval_secs" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] w-[6rem]" />
               </label>
               <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
                 <span>Max emails per run</span>
-                <input type="number" min="1" max="50" v-model.number="catConfig.batch_limit" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf] w-[6rem]" />
+                <input type="number" min="1" max="50" v-model.number="catConfig.batch_limit" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] w-[6rem]" />
               </label>
             </div>
 
-            <p v-if="catMsg" class="text-[0.775rem] text-[#888]">{{ catMsg }}</p>
+            <p v-if="catMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ catMsg }}</p>
 
             <div class="flex items-center gap-2 flex-wrap">
-              <button type="button" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="catSaving" @click="saveCategorizer">
+              <button type="button" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="catSaving" @click="saveCategorizer">
                 {{ catSaving ? 'Saving…' : 'Save settings' }}
               </button>
-              <button type="button" class="bg-[#1e1e1e] text-[#c0c0c0] border border-[#303030] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[#282828] disabled:opacity-50" :disabled="catRunning" @click="runCategorizer">
+              <button type="button" class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-282828)] disabled:opacity-50" :disabled="catRunning" @click="runCategorizer">
                 {{ catRunning ? 'Sorting…' : 'Run now' }}
               </button>
             </div>
-            <p class="text-[0.72rem] text-[#585858] leading-[1.5]">
+            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
               Auto-sort moves and flags mail in your live mailbox. Every action is recorded in the Logs window.
             </p>
           </template>
@@ -906,7 +912,31 @@ async function logout() {
       <div v-else-if="activeTab === 'appearance'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">Appearance</h2>
         <section class="flex flex-col gap-3">
-          <p class="text-[#484848] text-[0.8125rem]">Appearance options coming soon.</p>
+          <h3 class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)]">Theme</h3>
+          <p class="text-[var(--c-585858)] text-[0.75rem] -mt-1">Applies to this browser. Each device remembers its own choice.</p>
+          <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2.5">
+            <button
+              v-for="t in THEMES"
+              :key="t.key"
+              :class="['flex flex-col rounded-lg overflow-hidden border-2 cursor-pointer p-0 bg-transparent text-left transition-colors duration-100', activeTheme === t.key ? 'border-accent' : 'border-[var(--c-252525)] hover:border-[var(--c-404040)]']"
+              :title="t.description"
+              @click="selectTheme(t.key)"
+            >
+              <!-- Mini preview: sidebar + window on the theme's background -->
+              <span class="block h-[72px] relative" :style="{ background: t.swatch.bg }">
+                <span class="absolute left-0 top-0 bottom-0 w-[22%]" :style="{ background: t.swatch.surface }" />
+                <span class="absolute left-[30%] top-[14%] w-[58%] h-[62%] rounded" :style="{ background: t.swatch.surface }">
+                  <span class="absolute left-[10%] top-[18%] w-[55%] h-[9%] rounded-full" :style="{ background: t.swatch.text, opacity: 0.85 }" />
+                  <span class="absolute left-[10%] top-[42%] w-[75%] h-[9%] rounded-full" :style="{ background: t.swatch.text, opacity: 0.4 }" />
+                  <span class="absolute left-[10%] top-[66%] w-[34%] h-[14%] rounded-sm" :style="{ background: t.swatch.accent }" />
+                </span>
+              </span>
+              <span class="flex items-center gap-1.5 px-2.5 py-1.5 border-t border-[var(--c-252525)] bg-surface">
+                <span class="text-[0.75rem] font-medium" :class="activeTheme === t.key ? 'text-fg' : 'text-[var(--c-a0a0a0)]'">{{ t.label }}</span>
+                <svg v-if="activeTheme === t.key" class="ml-auto text-accent" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              </span>
+            </button>
+          </div>
         </section>
       </div>
 
@@ -916,41 +946,41 @@ async function logout() {
 
         <section class="flex flex-col gap-3">
           <ul v-if="userList.length" class="list-none flex flex-col gap-1.5">
-            <li v-for="u in userList" :key="u.id" class="flex justify-between items-center bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+            <li v-for="u in userList" :key="u.id" class="flex justify-between items-center bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md px-3 py-2 gap-4">
               <div class="flex items-center gap-2 min-w-0">
-                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ u.username }}</span>
-                <span class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border" :class="u.role === 'admin' ? 'text-[#7ab0ff] border-[#7ab0ff55]' : 'text-[#9a9a9a] border-[#9a9a9a55]'">{{ u.role }}</span>
-                <span v-if="u.status === 'disabled'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[#df7a7a] border-[#df7a7a55]">disabled</span>
+                <span class="text-[0.8125rem] text-[var(--c-d0d0d0)]">{{ u.username }}</span>
+                <span class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border" :class="u.role === 'admin' ? 'text-[var(--c-7ab0ff)] border-[var(--c-7ab0ff55)]' : 'text-[var(--c-9a9a9a)] border-[var(--c-9a9a9a55)]'">{{ u.role }}</span>
+                <span v-if="u.status === 'disabled'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[var(--c-df7a7a)] border-[var(--c-df7a7a55)]">disabled</span>
               </div>
               <div v-if="u.role !== 'admin'" class="flex items-center gap-1.5 shrink-0">
-                <button v-if="u.status === 'active'" class="bg-[#16202e] text-[#9ab4d4] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#1c2a3c]" title="Act as this user to set things up for them" @click="authStore.impersonate(u.id)">Impersonate</button>
-                <button v-if="u.status === 'active'" class="bg-[#2a2418] text-[#e0b060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#3a3020]" @click="setUserStatus(u, 'disable')">Disable</button>
-                <button v-else class="bg-[#1e3a2a] text-[#6ecf8e] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#254a35]" @click="setUserStatus(u, 'enable')">Enable</button>
-                <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteUser(u)">Delete</button>
+                <button v-if="u.status === 'active'" class="bg-[var(--c-16202e)] text-[var(--c-9ab4d4)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-1c2a3c)]" title="Act as this user to set things up for them" @click="authStore.impersonate(u.id)">Impersonate</button>
+                <button v-if="u.status === 'active'" class="bg-[var(--c-2a2418)] text-[var(--c-e0b060)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-3a3020)]" @click="setUserStatus(u, 'disable')">Disable</button>
+                <button v-else class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-254a35)]" @click="setUserStatus(u, 'enable')">Enable</button>
+                <button class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="deleteUser(u)">Delete</button>
               </div>
             </li>
           </ul>
         </section>
 
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Invites</h3>
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Invites</h3>
           <div class="flex gap-2">
-            <input v-model="inviteLabelInput" class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" placeholder="Who's this for? (label, optional)" @keyup.enter="createInvite" />
-            <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]" @click="createInvite">Create invite</button>
+            <input v-model="inviteLabelInput" class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" placeholder="Who's this for? (label, optional)" @keyup.enter="createInvite" />
+            <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)]" @click="createInvite">Create invite</button>
           </div>
           <ul v-if="pendingInvites.length" class="list-none flex flex-col gap-1.5">
-            <li v-for="inv in pendingInvites" :key="inv.code" class="flex flex-col gap-1 bg-[#111] border border-[#222] rounded-md px-3 py-2">
+            <li v-for="inv in pendingInvites" :key="inv.code" class="flex flex-col gap-1 bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md px-3 py-2">
               <div class="flex items-center justify-between gap-3">
-                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ inv.label || '(no label)' }}</span>
+                <span class="text-[0.8125rem] text-[var(--c-d0d0d0)]">{{ inv.label || '(no label)' }}</span>
                 <div class="flex items-center gap-1.5">
-                  <button class="bg-[#1a2a1e] text-[#8edfae] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#1f3526]" @click="copyInvite(inv)">{{ copiedCode === inv.code ? 'Copied ✓' : 'Copy link' }}</button>
-                  <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515]" @click="revokeInvite(inv)">Revoke</button>
+                  <button class="bg-[var(--c-1a2a1e)] text-[var(--c-8edfae)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-1f3526)]" @click="copyInvite(inv)">{{ copiedCode === inv.code ? 'Copied ✓' : 'Copy link' }}</button>
+                  <button class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[var(--c-2a1515)]" @click="revokeInvite(inv)">Revoke</button>
                 </div>
               </div>
-              <span class="text-[0.7rem] text-[#585858] break-all">{{ inviteLink(inv) }} · expires {{ new Date(inv.expires_at).toLocaleDateString() }}</span>
+              <span class="text-[0.7rem] text-[var(--c-585858)] break-all">{{ inviteLink(inv) }} · expires {{ new Date(inv.expires_at).toLocaleDateString() }}</span>
             </li>
           </ul>
-          <p v-else class="text-[#484848] text-[0.8125rem]">No pending invites. Create one and email the link — it disappears here once redeemed.</p>
+          <p v-else class="text-[var(--c-484848)] text-[0.8125rem]">No pending invites. Create one and email the link — it disappears here once redeemed.</p>
         </section>
       </div>
 
@@ -958,19 +988,19 @@ async function logout() {
       <div v-else-if="activeTab === 'system'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">System</h2>
         <section class="flex flex-col gap-3">
-          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Timezone</h3>
-          <div class="flex flex-col gap-2 bg-[#111] p-3.5 rounded-lg border border-[#222]">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Timezone</h3>
+          <div class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]">
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Home timezone
-              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" v-model="timezone">
+              <select class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="timezone">
                 <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
               </select>
             </label>
-            <p class="text-[0.75rem] text-[#585858]">The AI resolves "today", "tomorrow at 3pm" and presents all calendar times in this timezone.</p>
-            <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:opacity-40 disabled:cursor-default" :disabled="tzSaving || !timezone" @click="saveTimezone">
+            <p class="text-[0.75rem] text-[var(--c-585858)]">The AI resolves "today", "tomorrow at 3pm" and presents all calendar times in this timezone.</p>
+            <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)] disabled:opacity-40 disabled:cursor-default" :disabled="tzSaving || !timezone" @click="saveTimezone">
               {{ tzSaving ? 'Saving…' : 'Save' }}
             </button>
-            <p v-if="tzMsg" class="text-[0.775rem]" :class="tzMsg === 'Saved.' ? 'text-[#4caf6e]' : 'text-[#c06060]'">{{ tzMsg }}</p>
+            <p v-if="tzMsg" class="text-[0.775rem]" :class="tzMsg === 'Saved.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ tzMsg }}</p>
           </div>
         </section>
       </div>

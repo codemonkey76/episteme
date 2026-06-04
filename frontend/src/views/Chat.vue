@@ -236,7 +236,7 @@ function toolCallLabels(content: string): string[] {
     <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" ref="messagesEl">
       <template v-for="msg in visibleMessages" :key="msg.id">
         <!-- Tool activity indicator -->
-        <div v-if="msg.role === 'tool_call'" class="self-start flex items-center gap-2 text-[0.78rem] text-[#7a9ec0] py-0.5">
+        <div v-if="msg.role === 'tool_call'" class="self-start flex items-center gap-2 text-[0.78rem] text-[var(--c-7a9ec0)] py-0.5">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
           </svg>
@@ -244,7 +244,7 @@ function toolCallLabels(content: string): string[] {
         </div>
         <!-- Normal message -->
         <div v-else :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']">
-          <span class="text-[0.7rem] uppercase text-[#606060]">{{ msg.role }}</span>
+          <span class="text-[0.7rem] uppercase text-[var(--c-606060)]">{{ msg.role }}</span>
           <!-- Assistant: rendered markdown. User: plain text. -->
           <div
             v-if="msg.role === 'assistant'"
@@ -253,7 +253,7 @@ function toolCallLabels(content: string): string[] {
           />
           <pre
             v-else
-            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[#1e2a3a] py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
+            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[var(--c-1e2a3a)] py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
           >{{ displayContent(msg.content) }}</pre>
         </div>
       </template>
@@ -262,36 +262,36 @@ function toolCallLabels(content: string): string[] {
       <div
         v-for="a in sessionApprovals"
         :key="a.id"
-        class="self-start flex flex-col gap-2 max-w-3xl bg-[#1a1610] border border-[#4a3a1a] rounded-lg py-2.5 px-3"
+        class="self-start flex flex-col gap-2 max-w-3xl bg-[var(--c-1a1610)] border border-[var(--c-4a3a1a)] rounded-lg py-2.5 px-3"
       >
-        <div class="flex items-center gap-2 text-[0.8rem] text-[#e0b060]">
+        <div class="flex items-center gap-2 text-[0.8rem] text-[var(--c-e0b060)]">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
           <span class="font-medium">{{ toolLabel(a.tool_name) }} — approval required</span>
         </div>
-        <pre class="text-[0.72rem] text-[#a09070] bg-[#12100a] border border-[#2a2418] rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-40">{{ prettyArgs(a.tool_args) }}</pre>
+        <pre class="text-[0.72rem] text-[var(--c-a09070)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-40">{{ prettyArgs(a.tool_args) }}</pre>
         <div class="flex items-center gap-2">
-          <button class="bg-[#1e3a2a] text-[#6ecf8e] border border-[#2a5a3a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254a35]" @click="approvalsStore.approve(a.id)">Approve</button>
-          <button class="bg-[#3a1e1e] text-[#df7a7a] border border-[#5a2a2a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#4a2525]" @click="approvalsStore.reject(a.id)">Deny</button>
+          <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254a35)]" @click="approvalsStore.approve(a.id)">Approve</button>
+          <button class="bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-4a2525)]" @click="approvalsStore.reject(a.id)">Deny</button>
         </div>
       </div>
     </div>
-    <div v-if="error" class="bg-[#5a2a2a] text-[#e0c0c0] text-[0.8rem] py-[0.4rem] px-4">{{ error }}</div>
+    <div v-if="error" class="bg-[var(--c-5a2a2a)] text-[var(--c-e0c0c0)] text-[0.8rem] py-[0.4rem] px-4">{{ error }}</div>
     <!-- Messages queued while the model responds -->
     <div v-if="queued.length" class="flex flex-wrap gap-1.5 px-3 pt-2 items-center">
-      <span class="text-[0.7rem] text-[#585858] uppercase tracking-[0.05em]">Queued</span>
+      <span class="text-[0.7rem] text-[var(--c-585858)] uppercase tracking-[0.05em]">Queued</span>
       <span
         v-for="(q, i) in queued"
         :key="i"
-        class="inline-flex items-center gap-1.5 bg-[#16202e] border border-[#24344a] text-[#9ab4d4] rounded-full px-2.5 py-[0.2rem] text-[0.75rem] max-w-[18rem]"
+        class="inline-flex items-center gap-1.5 bg-[var(--c-16202e)] border border-[var(--c-24344a)] text-[var(--c-9ab4d4)] rounded-full px-2.5 py-[0.2rem] text-[0.75rem] max-w-[18rem]"
       >
         <span class="truncate">{{ q }}</span>
-        <button class="bg-none border-none cursor-pointer text-[#587098] hover:text-[#9ab4d4] p-0 leading-none" title="Remove from queue" @click="queued.splice(i, 1)">✕</button>
+        <button class="bg-none border-none cursor-pointer text-[var(--c-587098)] hover:text-[var(--c-9ab4d4)] p-0 leading-none" title="Remove from queue" @click="queued.splice(i, 1)">✕</button>
       </span>
     </div>
     <div class="flex gap-2 p-3 border-t border-raised items-end">
-      <button class="bg-surface text-[#5a8adf] border border-raised rounded-md py-2 px-[0.6rem] cursor-pointer flex items-center flex-shrink-0 transition-colors duration-100 hover:not-disabled:bg-[#222] hover:not-disabled:text-[#7ab0ff] disabled:opacity-40" title="New chat" :disabled="sending" @click="newSession">
+      <button class="bg-surface text-[var(--c-5a8adf)] border border-raised rounded-md py-2 px-[0.6rem] cursor-pointer flex items-center flex-shrink-0 transition-colors duration-100 hover:not-disabled:bg-[var(--c-222222)] hover:not-disabled:text-[var(--c-7ab0ff)] disabled:opacity-40" title="New chat" :disabled="sending" @click="newSession">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
@@ -304,7 +304,7 @@ function toolCallLabels(content: string): string[] {
       >
         <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
       </select>
-      <span v-else class="text-[0.75rem] text-[#585858] whitespace-nowrap">No providers configured</span>
+      <span v-else class="text-[0.75rem] text-[var(--c-585858)] whitespace-nowrap">No providers configured</span>
       <!-- Stays enabled while a reply streams so the next message can be
            drafted; send() ignores Enter until the turn finishes. -->
       <textarea
@@ -315,8 +315,8 @@ function toolCallLabels(content: string): string[] {
         class="flex-1 bg-surface text-[inherit] border border-raised rounded-md p-2 font-[inherit] text-[0.9rem] resize-none"
       />
       <div class="flex flex-col gap-1">
-        <button @click="send" :disabled="sending || !input.trim()" class="bg-[#2a4a7a] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Send</button>
-        <button v-if="sending" @click="cancel" class="bg-[#5a2a2a] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Stop</button>
+        <button @click="send" :disabled="sending || !input.trim()" class="bg-[var(--c-2a4a7a)] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Send</button>
+        <button v-if="sending" @click="cancel" class="bg-[var(--c-5a2a2a)] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Stop</button>
       </div>
     </div>
   </div>

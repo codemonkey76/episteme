@@ -95,7 +95,7 @@ const windowStyle = computed(() => ({
 <template>
   <div
     ref="windowEl"
-    class="fixed flex flex-col bg-surface border border-[#383838] rounded-lg shadow-[0_12px_40px_rgba(0,0,0,0.6)] max-h-[85vh] min-w-[280px] transition-[border-radius] duration-[120ms] ease-[ease]"
+    class="fixed flex flex-col bg-surface border border-[var(--c-383838)] rounded-lg shadow-[0_12px_40px_rgba(0,0,0,0.6)] max-h-[85vh] min-w-[280px] transition-[border-radius] duration-[120ms] ease-[ease]"
     :style="windowStyle"
     @pointerdown="store.focus(win.id)"
   >
@@ -103,8 +103,8 @@ const windowStyle = computed(() => ({
       :class="[
         'win-titlebar flex items-center justify-between cursor-grab active:cursor-grabbing select-none rounded-t-lg shrink-0 overflow-hidden transition-[padding] duration-150 ease-[ease]',
         win.snapped
-          ? 'py-[0.2rem] pr-2 pl-[0.625rem] bg-[#1c1c1c]'
-          : 'pt-2 pr-2.5 pb-2 pl-3.5 bg-[#222] border-b border-raised',
+          ? 'py-[0.2rem] pr-2 pl-[0.625rem] bg-[var(--c-1c1c1c)]'
+          : 'pt-2 pr-2.5 pb-2 pl-3.5 bg-[var(--c-222222)] border-b border-raised',
       ]"
       @pointerdown="onDragDown"
       @pointermove="onDragMove"
@@ -113,13 +113,13 @@ const windowStyle = computed(() => ({
       <span
         :class="[
           'win-title font-semibold whitespace-nowrap overflow-hidden text-ellipsis',
-          win.snapped ? 'text-[0.72rem] text-[#808080]' : 'text-[0.8rem] text-[#c0c0c0]',
+          win.snapped ? 'text-[0.72rem] text-[var(--c-808080)]' : 'text-[0.8rem] text-[var(--c-c0c0c0)]',
         ]"
       >{{ win.title }}</span>
       <div class="win-actions flex gap-1.5 shrink-0 ml-2">
         <button
           :class="[
-            'win-btn rounded-full flex items-center justify-center cursor-pointer bg-[#3a3a3a] text-[#808080] transition-[background,color] duration-150 hover:bg-[#7a2a2a] hover:text-[#ffaaaa]',
+            'win-btn rounded-full flex items-center justify-center cursor-pointer bg-[var(--c-3a3a3a)] text-[var(--c-808080)] transition-[background,color] duration-150 hover:bg-[var(--c-7a2a2a)] hover:text-[var(--c-ffaaaa)]',
             win.snapped ? 'w-4 h-4' : 'w-5 h-5',
           ]"
           title="Close"
@@ -139,13 +139,13 @@ const windowStyle = computed(() => ({
 
     <!-- Resize handles -->
     <div
-      class="absolute right-0 top-[30px] bottom-[18px] w-1.5 cursor-[ew-resize] z-20 hover:bg-[linear-gradient(to_left,rgba(74,138,255,0.2),transparent)]"
+      class="absolute right-0 top-[30px] bottom-[18px] w-1.5 cursor-[ew-resize] z-20 hover:bg-[linear-gradient(to_left,color-mix(in_srgb,var(--color-accent)_20%,transparent),transparent)]"
       @pointerdown="onResizeDown($event, 'e')"
       @pointermove="onResizeMove"
       @pointerup="onResizeUp"
     />
     <div
-      class="absolute bottom-0 left-[30px] right-[18px] h-1.5 cursor-[ns-resize] z-20 hover:bg-[linear-gradient(to_top,rgba(74,138,255,0.2),transparent)]"
+      class="absolute bottom-0 left-[30px] right-[18px] h-1.5 cursor-[ns-resize] z-20 hover:bg-[linear-gradient(to_top,color-mix(in_srgb,var(--color-accent)_20%,transparent),transparent)]"
       @pointerdown="onResizeDown($event, 's')"
       @pointermove="onResizeMove"
       @pointerup="onResizeUp"

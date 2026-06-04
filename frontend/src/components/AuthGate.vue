@@ -84,21 +84,21 @@ async function submit() {
   <slot v-if="auth.loaded && auth.authenticated" />
 
   <!-- Initial status probe. -->
-  <div v-else-if="!auth.loaded" class="flex h-screen items-center justify-center bg-[#0c0c0c]">
-    <div class="text-[0.8rem] text-[#585858]">Loading…</div>
+  <div v-else-if="!auth.loaded" class="flex h-screen items-center justify-center bg-[var(--c-0c0c0c)]">
+    <div class="text-[0.8rem] text-[var(--c-585858)]">Loading…</div>
   </div>
 
   <!-- Setup or login. -->
-  <div v-else class="flex h-screen items-center justify-center bg-[#0c0c0c] p-6">
+  <div v-else class="flex h-screen items-center justify-center bg-[var(--c-0c0c0c)] p-6">
     <form
-      class="flex w-full max-w-[340px] flex-col gap-4 rounded-xl border border-[#222] bg-[#111] p-7"
+      class="flex w-full max-w-[340px] flex-col gap-4 rounded-xl border border-[var(--c-222222)] bg-[var(--c-111111)] p-7"
       @submit.prevent="submit"
     >
       <div class="flex flex-col gap-1">
         <h1 class="text-[1.05rem] font-semibold text-fg">
           {{ mode === 'setup' ? 'Create your account' : mode === 'register' ? 'Join Episteme' : 'Sign in' }}
         </h1>
-        <p class="text-[0.78rem] text-[#707070]">
+        <p class="text-[0.78rem] text-[var(--c-707070)]">
           {{ mode === 'setup'
             ? 'Set the admin username and password for this Episteme instance.'
             : mode === 'register'
@@ -114,7 +114,7 @@ async function submit() {
           type="text"
           autocomplete="username"
           required
-          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[#3a6adf] focus:outline-none"
+          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[var(--c-3a6adf)] focus:outline-none"
         />
       </label>
 
@@ -125,7 +125,7 @@ async function submit() {
           type="password"
           :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
           required
-          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[#3a6adf] focus:outline-none"
+          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[var(--c-3a6adf)] focus:outline-none"
         />
       </label>
 
@@ -136,16 +136,16 @@ async function submit() {
           type="password"
           autocomplete="new-password"
           required
-          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[#3a6adf] focus:outline-none"
+          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[var(--c-3a6adf)] focus:outline-none"
         />
       </label>
 
-      <p v-if="error" class="text-[0.775rem] text-[#ff7070]">{{ error }}</p>
+      <p v-if="error" class="text-[0.775rem] text-[var(--c-ff7070)]">{{ error }}</p>
 
       <button
         type="submit"
         :disabled="busy"
-        class="mt-1 rounded-md border border-[#2a4a8a] bg-[#1e3a6e] px-3 py-2 text-[0.85rem] text-[#7ab0ff] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:cursor-not-allowed disabled:opacity-60"
+        class="mt-1 rounded-md border border-[var(--c-2a4a8a)] bg-[var(--c-1e3a6e)] px-3 py-2 text-[0.85rem] text-[var(--c-7ab0ff)] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)] disabled:cursor-not-allowed disabled:opacity-60"
       >
         {{ busy ? 'Please wait…' : mode === 'setup' ? 'Create account' : mode === 'register' ? 'Join' : 'Sign in' }}
       </button>

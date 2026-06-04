@@ -815,16 +815,16 @@ const replyBody = computed(() => {
 
 <template>
   <!-- Loading / not connected -->
-  <div v-if="checkingConnection" class="flex flex-col items-center justify-center h-full gap-3 text-[#484848]">
-    <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" />
+  <div v-if="checkingConnection" class="flex flex-col items-center justify-center h-full gap-3 text-[var(--c-484848)]">
+    <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" />
   </div>
 
-  <div v-else-if="!connected" class="flex flex-col items-center justify-center h-full gap-3 text-[#484848]">
+  <div v-else-if="!connected" class="flex flex-col items-center justify-center h-full gap-3 text-[var(--c-484848)]">
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="opacity-35 mb-1">
       <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
       <polyline points="22,6 12,13 2,6"/>
     </svg>
-    <p class="text-[0.9375rem] font-semibold text-[#585858]">No email account connected</p>
+    <p class="text-[0.9375rem] font-semibold text-[var(--c-585858)]">No email account connected</p>
     <p class="text-[0.8125rem] text-center max-w-[24rem] leading-normal">Connect your Microsoft 365 account in Settings → Integrations.</p>
   </div>
 
@@ -833,8 +833,8 @@ const replyBody = computed(() => {
 
     <!-- Commitment suggestion toasts -->
     <div v-if="suggestionsList.length" class="absolute bottom-3 right-3 z-50 flex flex-col gap-2 max-w-[26rem]">
-      <div v-for="s in suggestionsList" :key="s.id" class="flex flex-col gap-1.5 bg-[#10161a] border border-[#1e3a4a] rounded-lg py-2.5 px-3 shadow-lg">
-        <div class="flex items-center gap-2 text-[0.78rem] text-[#6ab8df]">
+      <div v-for="s in suggestionsList" :key="s.id" class="flex flex-col gap-1.5 bg-[var(--c-10161a)] border border-[var(--c-1e3a4a)] rounded-lg py-2.5 px-3 shadow-lg">
+        <div class="flex items-center gap-2 text-[0.78rem] text-[var(--c-6ab8df)]">
           <svg v-if="s.kind === 'event'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
           </svg>
@@ -843,37 +843,37 @@ const replyBody = computed(() => {
           </svg>
           <span class="font-medium">You committed to something — add {{ s.kind === 'event' ? 'to calendar' : 'a task' }}?</span>
         </div>
-        <p class="text-[0.8125rem] text-[#d0d0d0] leading-snug">{{ s.title }}</p>
-        <p class="text-[0.72rem] text-[#587078]">
+        <p class="text-[0.8125rem] text-[var(--c-d0d0d0)] leading-snug">{{ s.title }}</p>
+        <p class="text-[0.72rem] text-[var(--c-587078)]">
           <template v-if="s.start_at">{{ fmtWhen(s.start_at) }}<template v-if="s.end_at"> – {{ fmtWhen(s.end_at) }}</template></template>
           <template v-else>No due time</template>
           <template v-if="s.context"> · {{ s.context }}</template>
         </p>
         <div class="flex items-center gap-2 mt-0.5">
           <template v-if="acceptedIds.has(s.id)">
-            <span class="text-[0.75rem] text-[#6ecf8e]">Added ✓</span>
+            <span class="text-[0.75rem] text-[var(--c-6ecf8e)]">Added ✓</span>
           </template>
           <template v-else>
-            <button class="bg-[#1e3a2a] text-[#6ecf8e] border border-[#2a5a3a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254a35]" @click="acceptSuggestion(s)">
+            <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254a35)]" @click="acceptSuggestion(s)">
               {{ s.kind === 'event' ? 'Add event' : 'Add task' }}
             </button>
-            <button class="bg-transparent text-[#585858] border border-[#303030] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="dismissSuggestion(s)">Dismiss</button>
+            <button class="bg-transparent text-[var(--c-585858)] border border-[var(--c-303030)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="dismissSuggestion(s)">Dismiss</button>
           </template>
         </div>
       </div>
     </div>
 
     <!-- Left: folder list -->
-    <aside class="min-w-[120px] flex-shrink-0 bg-[#141414] border-r border-[#1e1e1e] flex flex-col p-2 gap-1 overflow-y-auto" :style="{ width: folderPaneWidth + 'px' }">
+    <aside class="min-w-[120px] flex-shrink-0 bg-[var(--c-141414)] border-r border-[var(--c-1e1e1e)] flex flex-col p-2 gap-1 overflow-y-auto" :style="{ width: folderPaneWidth + 'px' }">
       <div class="flex gap-1 mb-1">
-        <button class="flex flex-1 items-center gap-[0.4rem] py-[0.45rem] px-3 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8125rem] font-[inherit] transition-colors duration-[0.12s] justify-center hover:bg-[#254880]" @click="openCompose">
+        <button class="flex flex-1 items-center gap-[0.4rem] py-[0.45rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8125rem] font-[inherit] transition-colors duration-[0.12s] justify-center hover:bg-[var(--c-254880)]" @click="openCompose">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
           Compose
         </button>
         <button
-          class="flex items-center justify-center px-2 bg-surface text-[#808080] border border-raised rounded-md cursor-pointer transition-colors duration-[0.12s] hover:bg-[#222] hover:text-[#c0c0c0] disabled:opacity-50"
+          class="flex items-center justify-center px-2 bg-surface text-[var(--c-808080)] border border-raised rounded-md cursor-pointer transition-colors duration-[0.12s] hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)] disabled:opacity-50"
           title="Refresh folders"
           :disabled="loadingFolders"
           @click="loadFolders"
@@ -889,18 +889,18 @@ const replyBody = computed(() => {
         <button
           v-for="f in folders"
           :key="f.id"
-          :class="['flex items-center justify-between py-[0.4rem] px-[0.625rem] rounded-[0.3rem] bg-transparent border-none text-[0.8125rem] cursor-pointer text-left font-[inherit] transition-colors duration-100 w-full', selectedFolder?.id === f.id ? 'bg-[#1c2a3a] text-[#7ab0ff]' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#c0c0c0]']"
+          :class="['flex items-center justify-between py-[0.4rem] px-[0.625rem] rounded-[0.3rem] bg-transparent border-none text-[0.8125rem] cursor-pointer text-left font-[inherit] transition-colors duration-100 w-full', selectedFolder?.id === f.id ? 'bg-[var(--c-1c2a3a)] text-[var(--c-7ab0ff)]' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-c0c0c0)]']"
           @click="selectFolder(f)"
         >
           <span class="overflow-hidden text-ellipsis whitespace-nowrap">{{ f.displayName }}</span>
-          <span v-if="f.unreadItemCount > 0" class="bg-[#1e3a6e] text-[#7ab0ff] text-[0.65rem] font-semibold py-[0.1rem] px-[0.35rem] rounded-full flex-shrink-0 min-w-[1.2rem] text-center">{{ f.unreadItemCount }}</span>
+          <span v-if="f.unreadItemCount > 0" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] text-[0.65rem] font-semibold py-[0.1rem] px-[0.35rem] rounded-full flex-shrink-0 min-w-[1.2rem] text-center">{{ f.unreadItemCount }}</span>
         </button>
       </nav>
     </aside>
 
     <!-- Divider: folder / list -->
     <div
-      class="w-[4px] flex-shrink-0 bg-surface cursor-col-resize transition-colors duration-150 relative hover:bg-[#3a6adf] active:bg-[#3a6adf]"
+      class="w-[4px] flex-shrink-0 bg-surface cursor-col-resize transition-colors duration-150 relative hover:bg-[var(--c-3a6adf)] active:bg-[var(--c-3a6adf)]"
       @pointerdown="onDividerPointerdown('folder', $event)"
       @pointermove="onDividerPointermove"
       @pointerup="onDividerPointerup"
@@ -909,57 +909,57 @@ const replyBody = computed(() => {
 
     <!-- Middle: message list -->
     <div class="min-w-[200px] flex-shrink-0 flex flex-col overflow-hidden" :style="{ width: listPaneWidth + 'px' }">
-      <div class="py-2 px-[0.875rem] border-b border-[#1e1e1e] flex-shrink-0 flex flex-col gap-[0.4rem]">
-        <span class="text-[0.8125rem] font-semibold text-[#c0c0c0]">{{ selectedFolder?.displayName ?? '' }}</span>
-        <div class="flex items-center gap-[0.375rem] bg-surface border border-[#252525] rounded-[0.3rem] py-1 px-2">
-          <svg class="text-[#484848] flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+      <div class="py-2 px-[0.875rem] border-b border-[var(--c-1e1e1e)] flex-shrink-0 flex flex-col gap-[0.4rem]">
+        <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)]">{{ selectedFolder?.displayName ?? '' }}</span>
+        <div class="flex items-center gap-[0.375rem] bg-surface border border-[var(--c-252525)] rounded-[0.3rem] py-1 px-2">
+          <svg class="text-[var(--c-484848)] flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
           <input
             v-model="searchQuery"
-            class="flex-1 bg-transparent border-none text-[#c0c0c0] text-[0.775rem] font-[inherit] outline-none min-w-0 placeholder:text-[#404040]"
+            class="flex-1 bg-transparent border-none text-[var(--c-c0c0c0)] text-[0.775rem] font-[inherit] outline-none min-w-0 placeholder:text-[var(--c-404040)]"
             placeholder="Search"
             autocomplete="off"
           />
-          <button v-if="searchQuery" class="bg-transparent border-none text-[#484848] cursor-pointer text-[0.65rem] p-0 leading-none flex-shrink-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
+          <button v-if="searchQuery" class="bg-transparent border-none text-[var(--c-484848)] cursor-pointer text-[0.65rem] p-0 leading-none flex-shrink-0 transition-colors duration-100 hover:text-muted" @click="searchQuery = ''">✕</button>
         </div>
       </div>
       <div v-if="searchError" class="p-4 text-danger text-[0.775rem] leading-normal break-words">{{ searchError }}</div>
       <div v-else-if="messagesError" class="p-4 text-danger text-[0.775rem] leading-normal break-words">{{ messagesError }}</div>
-      <div v-else-if="displayedLoading && displayedMessages.length === 0" class="flex-1 flex items-center justify-center text-[#484848] text-[0.8125rem]">
-        <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" />
+      <div v-else-if="displayedLoading && displayedMessages.length === 0" class="flex-1 flex items-center justify-center text-[var(--c-484848)] text-[0.8125rem]">
+        <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" />
       </div>
-      <div v-else-if="displayedMessages.length === 0 && !displayedLoading" class="flex-1 flex items-center justify-center text-[#484848] text-[0.8125rem]">
+      <div v-else-if="displayedMessages.length === 0 && !displayedLoading" class="flex-1 flex items-center justify-center text-[var(--c-484848)] text-[0.8125rem]">
         {{ isSearching ? 'No results.' : 'No messages.' }}
       </div>
       <div v-else class="flex-1 overflow-y-auto flex flex-col">
         <button
           v-for="m in displayedMessages"
           :key="m.id"
-          :class="['py-[0.625rem] px-[0.875rem] border-b border-[#181818] bg-transparent border-l-[3px] cursor-pointer text-left font-[inherit] w-full transition-colors duration-100 flex flex-col gap-[0.2rem]', selectedMessage?.id === m.id ? 'bg-[#141e2a] border-l-[#3a6adf]' : 'border-l-transparent hover:bg-[#161616]']"
+          :class="['py-[0.625rem] px-[0.875rem] border-b border-[var(--c-181818)] bg-transparent border-l-[3px] cursor-pointer text-left font-[inherit] w-full transition-colors duration-100 flex flex-col gap-[0.2rem]', selectedMessage?.id === m.id ? 'bg-[var(--c-141e2a)] border-l-[var(--c-3a6adf)]' : 'border-l-transparent hover:bg-[var(--c-161616)]']"
           @click="selectMessage(m)"
         >
           <div class="flex justify-between items-baseline gap-2">
-            <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[#a0a0a0]']">{{ displayName(m.from.emailAddress) }}</span>
+            <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[var(--c-a0a0a0)]']">{{ displayName(m.from.emailAddress) }}</span>
             <span class="flex items-center gap-1 flex-shrink-0">
               <!-- replied / forwarded -->
-              <svg v-if="replyState(m) === 'reply'" class="text-[#5a9ad0]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Replied">
+              <svg v-if="replyState(m) === 'reply'" class="text-[var(--c-5a9ad0)]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Replied">
                 <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
               </svg>
-              <svg v-else-if="replyState(m) === 'forward'" class="text-[#5a9ad0]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Forwarded">
+              <svg v-else-if="replyState(m) === 'forward'" class="text-[var(--c-5a9ad0)]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Forwarded">
                 <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
               </svg>
               <!-- flagged -->
-              <svg v-if="isFlagged(m)" width="11" height="11" viewBox="0 0 24 24" fill="#d0823a" stroke="#d0823a" stroke-width="1.5" stroke-linejoin="round" title="Flagged">
+              <svg v-if="isFlagged(m)" class="text-[var(--c-d0823a)]" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" title="Flagged">
                 <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15" stroke-linecap="round"/>
               </svg>
-              <span class="text-[0.7rem] text-[#505050]">{{ formatDate(m.receivedDateTime) }}</span>
+              <span class="text-[0.7rem] text-[var(--c-505050)]">{{ formatDate(m.receivedDateTime) }}</span>
             </span>
           </div>
-          <div :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-[#d0d0d0] font-medium' : 'text-muted']">{{ m.subject || '(no subject)' }}</div>
-          <div class="text-[0.75rem] text-[#505050] overflow-hidden text-ellipsis whitespace-nowrap">{{ m.bodyPreview }}</div>
+          <div :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-[var(--c-d0d0d0)] font-medium' : 'text-muted']">{{ m.subject || '(no subject)' }}</div>
+          <div class="text-[0.75rem] text-[var(--c-505050)] overflow-hidden text-ellipsis whitespace-nowrap">{{ m.bodyPreview }}</div>
         </button>
-        <button v-if="displayedHasMore" class="p-[0.625rem] bg-transparent border-none text-[#505050] text-[0.775rem] cursor-pointer font-[inherit] text-center transition-colors duration-100 hover:not-disabled:text-muted disabled:opacity-50" :disabled="displayedLoading" @click="loadMore">
+        <button v-if="displayedHasMore" class="p-[0.625rem] bg-transparent border-none text-[var(--c-505050)] text-[0.775rem] cursor-pointer font-[inherit] text-center transition-colors duration-100 hover:not-disabled:text-muted disabled:opacity-50" :disabled="displayedLoading" @click="loadMore">
           {{ displayedLoading ? 'Loading…' : 'Load more' }}
         </button>
       </div>
@@ -967,7 +967,7 @@ const replyBody = computed(() => {
 
     <!-- Divider: list / reading -->
     <div
-      class="w-[4px] flex-shrink-0 bg-surface cursor-col-resize transition-colors duration-150 relative hover:bg-[#3a6adf] active:bg-[#3a6adf]"
+      class="w-[4px] flex-shrink-0 bg-surface cursor-col-resize transition-colors duration-150 relative hover:bg-[var(--c-3a6adf)] active:bg-[var(--c-3a6adf)]"
       @pointerdown="onDividerPointerdown('list', $event)"
       @pointermove="onDividerPointermove"
       @pointerup="onDividerPointerup"
@@ -978,91 +978,91 @@ const replyBody = computed(() => {
     <div class="flex-1 overflow-y-auto flex flex-col min-w-0">
 
       <!-- Empty state -->
-      <div v-if="view === 'none'" class="flex-1 flex items-center justify-center text-[#383838] text-[0.8125rem]">
+      <div v-if="view === 'none'" class="flex-1 flex items-center justify-center text-[var(--c-383838)] text-[0.8125rem]">
         Select a message to read
       </div>
 
       <!-- Compose new -->
       <div v-else-if="view === 'compose'" class="flex-1 flex flex-col py-4 px-5">
-        <div class="text-[0.8125rem] font-semibold text-[#808080] uppercase tracking-[0.06em] mb-3">New Message</div>
+        <div class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em] mb-3">New Message</div>
         <form class="flex flex-col gap-2" @submit.prevent="sendEmail">
-          <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-            <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">To</span>
-            <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="recipient@example.com" required />
-            <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[#5a7da0] hover:text-[#7ab0ff] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
+          <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+            <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
+            <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="recipient@example.com" required />
+            <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[var(--c-5a7da0)] hover:text-[var(--c-7ab0ff)] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
           </label>
           <template v-if="showCcBcc">
-            <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-              <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Cc</span>
-              <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="cc@example.com" />
+            <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Cc</span>
+              <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="cc@example.com" />
             </label>
-            <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-              <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Bcc</span>
-              <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="bcc@example.com" />
+            <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Bcc</span>
+              <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="bcc@example.com" />
             </label>
           </template>
-          <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-            <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Subject</span>
-            <input v-model="composeForm.subject" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="Subject" />
+          <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+            <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Subject</span>
+            <input v-model="composeForm.subject" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="Subject" />
           </label>
-          <textarea v-model="composeForm.body" class="flex-1 min-h-[180px] resize-none bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[#404040]" placeholder="Write your message…" required />
+          <textarea v-model="composeForm.body" class="flex-1 min-h-[180px] resize-none bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[var(--c-404040)]" placeholder="Write your message…" required />
           <div class="flex items-center gap-2 pt-1">
-            <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="sending">{{ sending ? 'Sending…' : 'Send' }}</button>
-            <button type="button" class="bg-transparent text-[#585858] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
-            <span v-if="sendMsg" class="text-[0.775rem] text-[#707070]">{{ sendMsg }}</span>
+            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending">{{ sending ? 'Sending…' : 'Send' }}</button>
+            <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
+            <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
           </div>
         </form>
       </div>
 
       <!-- Message detail -->
       <div v-else-if="view === 'message'" class="flex flex-col flex-1">
-        <div v-if="loadingMessage" class="flex-1 flex items-center justify-center"><span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" /></div>
+        <div v-if="loadingMessage" class="flex-1 flex items-center justify-center"><span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" /></div>
         <template v-else-if="selectedMessage">
           <!-- Header -->
-          <div class="pt-4 px-5 pb-3 border-b border-[#1e1e1e] flex-shrink-0">
+          <div class="pt-4 px-5 pb-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
             <h2 class="text-[0.9375rem] font-semibold text-fg mb-[0.625rem] leading-[1.35]">{{ selectedMessage.subject || '(no subject)' }}</h2>
             <div class="flex flex-col gap-1">
               <div class="flex gap-[0.625rem] text-[0.775rem]">
-                <span class="text-[#505050] min-w-[3rem] flex-shrink-0">From</span>
-                <span class="text-[#a0a0a0]">
+                <span class="text-[var(--c-505050)] min-w-[3rem] flex-shrink-0">From</span>
+                <span class="text-[var(--c-a0a0a0)]">
                   {{ selectedMessage.from.emailAddress.name }}
-                  <span class="text-[#585858] ml-1">&lt;{{ selectedMessage.from.emailAddress.address }}&gt;</span>
+                  <span class="text-[var(--c-585858)] ml-1">&lt;{{ selectedMessage.from.emailAddress.address }}&gt;</span>
                 </span>
               </div>
               <div class="flex gap-[0.625rem] text-[0.775rem]">
-                <span class="text-[#505050] min-w-[3rem] flex-shrink-0">To</span>
-                <span class="text-[#a0a0a0]">
+                <span class="text-[var(--c-505050)] min-w-[3rem] flex-shrink-0">To</span>
+                <span class="text-[var(--c-a0a0a0)]">
                   {{ selectedMessage.toRecipients.map(r => r.emailAddress.address).join(', ') }}
                 </span>
               </div>
               <div v-if="selectedMessage.ccRecipients.length" class="flex gap-[0.625rem] text-[0.775rem]">
-                <span class="text-[#505050] min-w-[3rem] flex-shrink-0">CC</span>
-                <span class="text-[#a0a0a0]">
+                <span class="text-[var(--c-505050)] min-w-[3rem] flex-shrink-0">CC</span>
+                <span class="text-[var(--c-a0a0a0)]">
                   {{ selectedMessage.ccRecipients.map(r => r.emailAddress.address).join(', ') }}
                 </span>
               </div>
               <div class="flex gap-[0.625rem] text-[0.775rem]">
-                <span class="text-[#505050] min-w-[3rem] flex-shrink-0">Date</span>
-                <span class="text-[#a0a0a0]">{{ new Date(selectedMessage.receivedDateTime).toLocaleString() }}</span>
+                <span class="text-[var(--c-505050)] min-w-[3rem] flex-shrink-0">Date</span>
+                <span class="text-[var(--c-a0a0a0)]">{{ new Date(selectedMessage.receivedDateTime).toLocaleString() }}</span>
               </div>
             </div>
           </div>
 
           <!-- Attachments -->
-          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[#1e1e1e] flex-shrink-0">
+          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
             <button
               v-for="att in visibleAttachments"
               :key="att.id"
-              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[#222] hover:border-[#3a3a3a]"
+              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:border-[var(--c-3a3a3a)]"
               :title="`Open ${att.name}`"
               @click="openAttachment(att)"
             >
-              <svg class="text-[#7ab0ff] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="text-[var(--c-7ab0ff)] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
               <span class="flex flex-col min-w-0">
-                <span class="text-[0.78rem] text-[#d0d0d0] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
-                <span class="text-[0.68rem] text-[#585858]">{{ formatSize(att.size) }}</span>
+                <span class="text-[0.78rem] text-[var(--c-d0d0d0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
+                <span class="text-[0.68rem] text-[var(--c-585858)]">{{ formatSize(att.size) }}</span>
               </span>
             </button>
           </div>
@@ -1080,42 +1080,42 @@ const replyBody = computed(() => {
               :class="bodyReady ? 'opacity-100' : 'opacity-0'"
               @load="onIframeLoad"
             />
-            <pre v-else class="text-[0.8125rem] text-[#c0c0c0] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
+            <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
           </div>
 
           <!-- Reply area -->
-          <div v-if="!showReply" class="py-3 px-5 border-t border-[#1e1e1e] flex-shrink-0 flex gap-2 items-center flex-wrap">
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#23304a] text-[#a0c8ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#2a3c5c] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
+          <div v-if="!showReply" class="py-3 px-5 border-t border-[var(--c-1e1e1e)] flex-shrink-0 flex gap-2 items-center flex-wrap">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-2a3c5c)] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
               </svg>
               {{ asking ? 'Asking…' : 'Ask AI' }}
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#254880]" @click="aiReply">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
               </svg>
               AI reply
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0]" @click="startReply('reply')">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('reply')">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
               </svg>
               Reply
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0]" @click="startReply('replyAll')">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('replyAll')">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="7 17 2 12 7 7"/><polyline points="12 17 7 12 12 7"/><path d="M22 18v-1a4 4 0 0 0-4-4H7"/>
               </svg>
               Reply all
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0]" @click="startReply('forward')">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('forward')">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
               </svg>
               Forward
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1e3a2a] text-[#6ecf8e] border border-[#2a5a3a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#254a35] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254a35)] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
@@ -1123,7 +1123,7 @@ const replyBody = computed(() => {
             </button>
             <button
               v-if="selectionText"
-              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[#1a2a1e] text-[#8edfae] border border-[#2a5a3a] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[#1f3526] disabled:opacity-60"
+              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1a2a1e)] text-[var(--c-8edfae)] border border-[var(--c-2a5a3a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-1f3526)] disabled:opacity-60"
               :disabled="selectionTaskState === 'saving'"
               :title="`Create a task from the selected text: “${selectionText.slice(0, 80)}”`"
               @click="createTaskFromSelection"
@@ -1138,7 +1138,7 @@ const replyBody = computed(() => {
             <div v-if="providersList.length > 1" class="relative ml-auto">
               <button
                 type="button"
-                class="inline-flex items-center gap-[0.2rem] py-[0.35rem] px-2 bg-surface text-[#909090] border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0]"
+                class="inline-flex items-center gap-[0.2rem] py-[0.35rem] px-2 bg-surface text-[var(--c-909090)] border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
                 :title="`AI model: ${aiProvider}`"
                 @click="providerMenuOpen = !providerMenuOpen"
               >
@@ -1150,51 +1150,51 @@ const replyBody = computed(() => {
               </button>
               <template v-if="providerMenuOpen">
                 <div class="fixed inset-0 z-[40]" @click="providerMenuOpen = false" />
-                <div class="absolute right-0 bottom-full mb-1.5 z-[41] min-w-[12rem] bg-[#1c1c1c] border border-[#303030] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
-                  <div class="px-3 py-1 text-[0.62rem] uppercase tracking-[0.06em] text-[#585858]">AI model</div>
+                <div class="absolute right-0 bottom-full mb-1.5 z-[41] min-w-[12rem] bg-[var(--c-1c1c1c)] border border-[var(--c-303030)] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
+                  <div class="px-3 py-1 text-[0.62rem] uppercase tracking-[0.06em] text-[var(--c-585858)]">AI model</div>
                   <button
                     v-for="p in providersList"
                     :key="p.name"
                     type="button"
-                    class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-[0.78rem] font-[inherit] cursor-pointer hover:bg-[#262626]"
+                    class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-[0.78rem] font-[inherit] cursor-pointer hover:bg-[var(--c-262626)]"
                     @click="aiProvider = p.name; providerMenuOpen = false"
                   >
-                    <svg class="flex-shrink-0" :class="p.name === aiProvider ? 'text-[#7ab0ff]' : 'text-transparent'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span :class="p.name === aiProvider ? 'text-[#7ab0ff]' : 'text-[#c0c0c0]'">{{ p.name }}</span>
+                    <svg class="flex-shrink-0" :class="p.name === aiProvider ? 'text-[var(--c-7ab0ff)]' : 'text-transparent'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span :class="p.name === aiProvider ? 'text-[var(--c-7ab0ff)]' : 'text-[var(--c-c0c0c0)]'">{{ p.name }}</span>
                   </button>
                 </div>
               </template>
             </div>
           </div>
 
-          <form v-else class="flex flex-col gap-2 border-t border-[#1e1e1e] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
+          <form v-else class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
             <div class="flex items-center gap-2 mb-3">
-              <span class="text-[0.8125rem] font-semibold text-[#808080] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
-              <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[#7ab0ff]">
-                <span class="inline-block w-[11px] h-[11px] border-2 border-[#2a4a8a] border-t-[#7ab0ff] rounded-full animate-[spin_0.7s_linear_infinite]" />
+              <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
+              <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[var(--c-7ab0ff)]">
+                <span class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
                 {{ aiWarming ? 'Loading model (first use can take a while)…' : 'Drafting…' }}
               </span>
             </div>
-            <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-              <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">To</span>
-              <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="recipient@example.com" required />
-              <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[#5a7da0] hover:text-[#7ab0ff] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
+            <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
+              <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="recipient@example.com" required />
+              <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[var(--c-5a7da0)] hover:text-[var(--c-7ab0ff)] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
             </label>
             <template v-if="showCcBcc">
-              <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-                <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Cc</span>
-                <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="cc@example.com" />
+              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Cc</span>
+                <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="cc@example.com" />
               </label>
-              <label class="flex items-center gap-[0.625rem] border-b border-[#1e1e1e] pb-[0.4rem]">
-                <span class="text-[0.775rem] text-[#585858] min-w-[3.5rem] flex-shrink-0">Bcc</span>
-                <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[#404040]" placeholder="bcc@example.com" />
+              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Bcc</span>
+                <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="bcc@example.com" />
               </label>
             </template>
-            <textarea v-model="composeForm.body" class="flex-1 min-h-[120px] resize-none bg-transparent border-none text-[#d0d0d0] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[#404040]" :placeholder="(replyMode === 'forward' ? 'Add a message…' : 'Write your reply…') + replyBody" :required="replyMode !== 'forward'" />
+            <textarea v-model="composeForm.body" class="flex-1 min-h-[120px] resize-none bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[var(--c-404040)]" :placeholder="(replyMode === 'forward' ? 'Add a message…' : 'Write your reply…') + replyBody" :required="replyMode !== 'forward'" />
             <div class="flex items-center gap-2 pt-1">
-              <button type="submit" class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="sending || aiDrafting">{{ sending ? 'Sending…' : replyMode === 'forward' ? 'Send Forward' : 'Send Reply' }}</button>
-              <button type="button" class="bg-transparent text-[#585858] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="showReply = false">Cancel</button>
-              <span v-if="sendMsg" class="text-[0.775rem] text-[#707070]">{{ sendMsg }}</span>
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending || aiDrafting">{{ sending ? 'Sending…' : replyMode === 'forward' ? 'Send Forward' : 'Send Reply' }}</button>
+              <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="showReply = false">Cancel</button>
+              <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
             </div>
           </form>
         </template>

@@ -27,11 +27,11 @@ async function remove(id: string) {
     </div>
     <ul v-if="store.sessions.length" class="list-none flex flex-col gap-1.5">
       <li v-for="s in store.sessions" :key="s.id" class="flex items-center gap-3 bg-surface rounded-md py-[0.6rem] px-[0.8rem]">
-        <button class="flex-1 bg-none border-none text-[#d0d0d0] text-left cursor-pointer text-sm font-[inherit] hover:text-[#fff]" @click="open(s.id)">{{ s.title }}</button>
-        <span class="text-xs text-[#505050] whitespace-nowrap">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
-        <button class="bg-none border-none text-[#505050] cursor-pointer text-xs py-[0.2rem] px-[0.4rem] rounded-[0.2rem] hover:text-[#d08080]" @click="remove(s.id)">✕</button>
+        <button class="flex-1 bg-none border-none text-[var(--c-d0d0d0)] text-left cursor-pointer text-sm font-[inherit] hover:text-[var(--c-ffffff)]" @click="open(s.id)">{{ s.title }}</button>
+        <span class="text-xs text-[var(--c-505050)] whitespace-nowrap">{{ new Date(s.updated_at).toLocaleDateString() }}</span>
+        <button class="bg-none border-none text-[var(--c-505050)] cursor-pointer text-xs py-[0.2rem] px-[0.4rem] rounded-[0.2rem] hover:text-[var(--c-d08080)]" @click="remove(s.id)">✕</button>
       </li>
     </ul>
-    <p v-else class="text-[#505050] text-sm">No chats yet.</p>
+    <p v-else class="text-[var(--c-505050)] text-sm">No chats yet.</p>
   </div>
 </template>

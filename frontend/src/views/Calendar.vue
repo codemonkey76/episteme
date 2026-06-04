@@ -177,31 +177,31 @@ async function saveEvent() {
 
 <template>
   <!-- Checking / not connected -->
-  <div v-if="checking" class="flex items-center justify-center h-full text-[#484848]">
-    <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[#505050] rounded-full animate-[spin_0.7s_linear_infinite]" />
+  <div v-if="checking" class="flex items-center justify-center h-full text-[var(--c-484848)]">
+    <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" />
   </div>
-  <div v-else-if="!connected" class="flex flex-col items-center justify-center h-full gap-3 text-[#484848]">
+  <div v-else-if="!connected" class="flex flex-col items-center justify-center h-full gap-3 text-[var(--c-484848)]">
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="opacity-35">
       <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
     </svg>
-    <p class="text-[0.9375rem] font-semibold text-[#585858]">No calendar connected</p>
+    <p class="text-[0.9375rem] font-semibold text-[var(--c-585858)]">No calendar connected</p>
     <p class="text-[0.8125rem] text-center max-w-[24rem] leading-normal">Connect your Microsoft 365 account in Settings → Integrations (re-connect if you set it up before calendar support).</p>
   </div>
 
   <!-- Month grid -->
   <div v-else class="flex flex-col h-full bg-bg overflow-hidden">
     <!-- Toolbar -->
-    <div class="flex items-center gap-2 px-3 py-2 border-b border-[#1e1e1e] shrink-0">
-      <button class="w-6 h-6 flex items-center justify-center rounded text-[#808080] hover:bg-[#222] hover:text-[#c0c0c0]" title="Previous month" @click="prevMonth">‹</button>
-      <span class="text-[0.875rem] font-semibold text-[#d0d0d0] min-w-[9rem] text-center tabular-nums">{{ monthLabel }}</span>
-      <button class="w-6 h-6 flex items-center justify-center rounded text-[#808080] hover:bg-[#222] hover:text-[#c0c0c0]" title="Next month" @click="nextMonth">›</button>
-      <button class="ml-1 text-[0.75rem] text-[#808080] border border-raised rounded px-2 py-1 hover:bg-[#222] hover:text-[#c0c0c0]" @click="goToday">Today</button>
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-1e1e1e)] shrink-0">
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[var(--c-808080)] hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Previous month" @click="prevMonth">‹</button>
+      <span class="text-[0.875rem] font-semibold text-[var(--c-d0d0d0)] min-w-[9rem] text-center tabular-nums">{{ monthLabel }}</span>
+      <button class="w-6 h-6 flex items-center justify-center rounded text-[var(--c-808080)] hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Next month" @click="nextMonth">›</button>
+      <button class="ml-1 text-[0.75rem] text-[var(--c-808080)] border border-raised rounded px-2 py-1 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="goToday">Today</button>
       <div class="ml-auto flex items-center gap-1.5">
-        <button class="flex items-center gap-[0.35rem] bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254880]" @click="startAdd">
+        <button class="flex items-center gap-[0.35rem] bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="startAdd">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New event
         </button>
-        <button class="flex items-center justify-center bg-surface text-[#808080] border border-raised rounded px-2 py-1 cursor-pointer transition-colors duration-100 hover:bg-[#222] hover:text-[#c0c0c0] disabled:opacity-50" title="Refresh" :disabled="loading" @click="load">
+        <button class="flex items-center justify-center bg-surface text-[var(--c-808080)] border border-raised rounded px-2 py-1 cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)] disabled:opacity-50" title="Refresh" :disabled="loading" @click="load">
           <svg :class="loading ? 'animate-[spin_0.7s_linear_infinite]' : ''" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
@@ -210,75 +210,75 @@ async function saveEvent() {
     </div>
 
     <!-- Weekday header -->
-    <div class="grid grid-cols-7 shrink-0 border-b border-[#1e1e1e]">
-      <div v-for="w in WEEKDAYS" :key="w" class="px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.05em] text-[#585858] text-center">{{ w }}</div>
+    <div class="grid grid-cols-7 shrink-0 border-b border-[var(--c-1e1e1e)]">
+      <div v-for="w in WEEKDAYS" :key="w" class="px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.05em] text-[var(--c-585858)] text-center">{{ w }}</div>
     </div>
 
     <!-- Grid -->
-    <div class="flex-1 min-h-0 grid grid-cols-7 grid-rows-6 gap-px bg-[#1a1a1a]">
+    <div class="flex-1 min-h-0 grid grid-cols-7 grid-rows-6 gap-px bg-[var(--c-1a1a1a)]">
       <button
         v-for="d in gridDays"
         :key="d.toISOString()"
         :class="['flex flex-col items-stretch text-left p-1 overflow-hidden transition-colors duration-100',
-                 inMonth(d) ? 'bg-bg' : 'bg-[#101010]',
-                 isSelected(d) ? 'ring-1 ring-inset ring-[#3a6adf]' : '']"
+                 inMonth(d) ? 'bg-bg' : 'bg-[var(--c-101010)]',
+                 isSelected(d) ? 'ring-1 ring-inset ring-[var(--c-3a6adf)]' : '']"
         @click="selectDay(d)"
       >
         <span :class="['self-end text-[0.7rem] leading-none mb-1 w-[1.3rem] h-[1.3rem] flex items-center justify-center rounded-full',
-                       isToday(d) ? 'bg-[#3a6adf] text-white font-semibold' : inMonth(d) ? 'text-[#b0b0b0]' : 'text-[#454545]']">{{ d.getDate() }}</span>
+                       isToday(d) ? 'bg-[var(--c-3a6adf)] text-white font-semibold' : inMonth(d) ? 'text-[var(--c-b0b0b0)]' : 'text-[var(--c-454545)]']">{{ d.getDate() }}</span>
         <div class="flex flex-col gap-[0.1rem] overflow-hidden">
           <span
             v-for="ev in dayEvents(d).slice(0, 2)"
             :key="ev.id"
-            class="text-[0.62rem] leading-[1.2] line-clamp-2 break-words rounded px-1 py-[0.1rem] bg-[#1c2a3a] text-[#9cc0f0]"
+            class="text-[0.62rem] leading-[1.2] line-clamp-2 break-words rounded px-1 py-[0.1rem] bg-[var(--c-1c2a3a)] text-[var(--c-9cc0f0)]"
             :title="`${timeRange(ev)} — ${ev.subject}`"
           >
-            <span v-if="!ev.is_all_day" class="text-[#6a8ec0]">{{ startTime(ev) }} </span>{{ ev.subject }}
+            <span v-if="!ev.is_all_day" class="text-[var(--c-6a8ec0)]">{{ startTime(ev) }} </span>{{ ev.subject }}
           </span>
-          <span v-if="dayEvents(d).length > 2" class="text-[0.6rem] text-[#585858] px-1">+{{ dayEvents(d).length - 2 }} more</span>
+          <span v-if="dayEvents(d).length > 2" class="text-[0.6rem] text-[var(--c-585858)] px-1">+{{ dayEvents(d).length - 2 }} more</span>
         </div>
       </button>
     </div>
 
-    <div v-if="error" class="px-4 py-1.5 text-danger text-[0.75rem] border-t border-[#1e1e1e] shrink-0">{{ error }}</div>
+    <div v-if="error" class="px-4 py-1.5 text-danger text-[0.75rem] border-t border-[var(--c-1e1e1e)] shrink-0">{{ error }}</div>
 
     <!-- Selected day detail -->
-    <div class="shrink-0 border-t border-[#1e1e1e] bg-[#0f0f0f] h-[160px] flex flex-col">
+    <div class="shrink-0 border-t border-[var(--c-1e1e1e)] bg-[var(--c-0f0f0f)] h-[160px] flex flex-col">
       <div class="flex items-center justify-between px-4 py-2 shrink-0">
-        <span class="text-[0.8rem] font-semibold text-[#c0c0c0]">{{ selectedDayLabel }}</span>
-        <button v-if="!adding" class="text-[0.72rem] text-[#7ab0ff] hover:underline" @click="startAdd">+ Add</button>
+        <span class="text-[0.8rem] font-semibold text-[var(--c-c0c0c0)]">{{ selectedDayLabel }}</span>
+        <button v-if="!adding" class="text-[0.72rem] text-[var(--c-7ab0ff)] hover:underline" @click="startAdd">+ Add</button>
       </div>
 
       <!-- Add form -->
       <div v-if="adding" class="flex flex-col gap-2 px-4 pb-3 overflow-y-auto">
-        <input v-model="form.subject" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Event title" />
+        <input v-model="form.subject" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Event title" />
         <div class="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted">
           <input v-model="form.date" type="date" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
           <template v-if="!form.allDay">
             <input v-model="form.start" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
-            <span class="text-[#585858]">–</span>
+            <span class="text-[var(--c-585858)]">–</span>
             <input v-model="form.end" type="time" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit]" />
           </template>
-          <label class="flex items-center gap-1.5 cursor-pointer"><input v-model="form.allDay" type="checkbox" class="accent-[#3a6adf]" /> All day</label>
+          <label class="flex items-center gap-1.5 cursor-pointer"><input v-model="form.allDay" type="checkbox" class="accent-[var(--c-3a6adf)]" /> All day</label>
           <label class="flex items-center gap-1.5">Remind <input v-model.number="form.reminder" type="number" min="-1" class="w-[3.5rem] bg-surface text-fg border border-raised rounded px-1.5 py-1 text-xs font-[inherit]" /> min</label>
-          <input v-model="form.location" class="flex-1 min-w-[8rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit] outline-none focus:border-[#3a6adf] placeholder:text-[#404040]" placeholder="Location (optional)" />
+          <input v-model="form.location" class="flex-1 min-w-[8rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-xs font-[inherit] outline-none focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Location (optional)" />
         </div>
         <div class="flex items-center gap-2">
-          <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:not-disabled:bg-[#254880] disabled:opacity-50" :disabled="saving || !form.subject.trim()" @click="saveEvent">{{ saving ? 'Saving…' : 'Create' }}</button>
-          <button class="bg-transparent text-[#585858] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
+          <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="saving || !form.subject.trim()" @click="saveEvent">{{ saving ? 'Saving…' : 'Create' }}</button>
+          <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
         </div>
       </div>
 
       <!-- Event list for the day -->
       <div v-else class="flex-1 overflow-y-auto px-4 pb-3">
-        <div v-if="selectedDayEvents.length === 0" class="text-[0.78rem] text-[#484848] py-1">No events.</div>
-        <div v-for="ev in selectedDayEvents" :key="ev.id" class="group flex items-start gap-3 py-1.5 border-b border-[#161616] last:border-0">
-          <span class="text-[0.72rem] text-[#7ab0ff] min-w-[5.5rem] shrink-0 pt-[0.1rem] tabular-nums">{{ timeRange(ev) }}</span>
+        <div v-if="selectedDayEvents.length === 0" class="text-[0.78rem] text-[var(--c-484848)] py-1">No events.</div>
+        <div v-for="ev in selectedDayEvents" :key="ev.id" class="group flex items-start gap-3 py-1.5 border-b border-[var(--c-161616)] last:border-0">
+          <span class="text-[0.72rem] text-[var(--c-7ab0ff)] min-w-[5.5rem] shrink-0 pt-[0.1rem] tabular-nums">{{ timeRange(ev) }}</span>
           <div class="flex-1 min-w-0">
-            <p class="text-[0.8125rem] text-[#d0d0d0] break-words">{{ ev.subject }}</p>
-            <p v-if="ev.location" class="text-[0.7rem] text-[#585858]">📍 {{ ev.location }}</p>
+            <p class="text-[0.8125rem] text-[var(--c-d0d0d0)] break-words">{{ ev.subject }}</p>
+            <p v-if="ev.location" class="text-[0.7rem] text-[var(--c-585858)]">📍 {{ ev.location }}</p>
           </div>
-          <button class="text-[#606060] hover:text-[#d08080] p-1 cursor-pointer bg-none border-none opacity-0 group-hover:opacity-100 transition-opacity duration-100" title="Delete" @click="remove(ev)">
+          <button class="text-[var(--c-606060)] hover:text-[var(--c-d08080)] p-1 cursor-pointer bg-none border-none opacity-0 group-hover:opacity-100 transition-opacity duration-100" title="Delete" @click="remove(ev)">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </div>

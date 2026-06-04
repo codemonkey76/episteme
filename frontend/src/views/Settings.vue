@@ -38,26 +38,26 @@ async function deleteProvider(name: string) {
       <ul v-if="providers.length" class="list-none flex flex-col gap-[0.4rem]">
         <li v-for="p in providers" :key="p.name" class="flex justify-between items-center bg-surface rounded-md px-3 py-2 text-sm">
           <span>{{ p.name }} — {{ p.provider }} / {{ p.model_id }}</span>
-          <button @click="deleteProvider(p.name)" class="bg-[#2a4a7a] text-fg border-none rounded-md px-[0.8rem] py-[0.4rem] cursor-pointer text-[0.85rem] self-start">Remove</button>
+          <button @click="deleteProvider(p.name)" class="bg-[var(--c-2a4a7a)] text-fg border-none rounded-md px-[0.8rem] py-[0.4rem] cursor-pointer text-[0.85rem] self-start">Remove</button>
         </li>
       </ul>
-      <p v-else class="text-[#606060] text-sm">No providers configured.</p>
+      <p v-else class="text-[var(--c-606060)] text-sm">No providers configured.</p>
 
       <form @submit.prevent="saveProvider" class="flex flex-col gap-2 bg-surface p-4 rounded-lg">
-        <h3 class="text-[0.9rem] text-[#a0a0a0]">Add / update provider</h3>
-        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[#a0a0a0]">Name <input v-model="newProvider.name" required class="bg-[#111] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
-        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[#a0a0a0]">Provider
-          <select v-model="newProvider.provider" class="bg-[#111] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm">
+        <h3 class="text-[0.9rem] text-[var(--c-a0a0a0)]">Add / update provider</h3>
+        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[var(--c-a0a0a0)]">Name <input v-model="newProvider.name" required class="bg-[var(--c-111111)] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
+        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[var(--c-a0a0a0)]">Provider
+          <select v-model="newProvider.provider" class="bg-[var(--c-111111)] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm">
             <option>anthropic</option>
             <option>openai</option>
             <option>ollama</option>
             <option>openai_compatible</option>
           </select>
         </label>
-        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[#a0a0a0]">Model ID <input v-model="newProvider.model_id" required class="bg-[#111] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
-        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[#a0a0a0]">Base URL <input v-model="newProvider.base_url" class="bg-[#111] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
-        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[#a0a0a0]">API Key <input v-model="newProvider.api_key" type="password" class="bg-[#111] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
-        <button type="submit" class="bg-[#2a4a7a] text-fg border-none rounded-md px-[0.8rem] py-[0.4rem] cursor-pointer text-[0.85rem] self-start">Save</button>
+        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[var(--c-a0a0a0)]">Model ID <input v-model="newProvider.model_id" required class="bg-[var(--c-111111)] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
+        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[var(--c-a0a0a0)]">Base URL <input v-model="newProvider.base_url" class="bg-[var(--c-111111)] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
+        <label class="flex flex-col gap-[0.2rem] text-[0.8rem] text-[var(--c-a0a0a0)]">API Key <input v-model="newProvider.api_key" type="password" class="bg-[var(--c-111111)] text-fg border border-raised rounded px-2 py-[0.35rem] text-sm" /></label>
+        <button type="submit" class="bg-[var(--c-2a4a7a)] text-fg border-none rounded-md px-[0.8rem] py-[0.4rem] cursor-pointer text-[0.85rem] self-start">Save</button>
       </form>
     </section>
 
@@ -68,7 +68,7 @@ async function deleteProvider(name: string) {
           <span>{{ s.name }}</span>
         </li>
       </ul>
-      <p v-else class="text-[#606060] text-sm">No MCP servers configured.</p>
+      <p v-else class="text-[var(--c-606060)] text-sm">No MCP servers configured.</p>
     </section>
   </div>
 </template>
