@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useAuthStore } from '../stores/auth'
@@ -170,6 +170,26 @@ const userList = ref<api.UserAccount[]>([])
 const inviteList = ref<api.Invite[]>([])
 const inviteLabelInput = ref('')
 const copiedCode = ref('')
+
+// Redeemed invites vanish (the new account in the user list is the record);
+// only pending, unexpired codes stay actionable.
+const pendingInvites = computed(() =>
+  inviteList.value.filter(i => !i.used_by && new Date(i.expires_at) > new Date()),
+)
+
+let usersPollTimer: number | null = null
+watch(activeTab, (tab) => {
+  if (usersPollTimer !== null) {
+    window.clearInterval(usersPollTimer)
+    usersPollTimer = null
+  }
+  if (tab === 'users' && isAdmin.value) {
+    usersPollTimer = window.setInterval(loadUsers, 8000)
+  }
+})
+onUnmounted(() => {
+  if (usersPollTimer !== null) window.clearInterval(usersPollTimer)
+})
 
 function inviteLink(inv: api.Invite): string {
   return `${window.location.origin}/?invite=${inv.code}`
@@ -882,20 +902,19 @@ async function logout() {
             <input v-model="inviteLabelInput" class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" placeholder="Who's this for? (label, optional)" @keyup.enter="createInvite" />
             <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]" @click="createInvite">Create invite</button>
           </div>
-          <ul v-if="inviteList.length" class="list-none flex flex-col gap-1.5">
-            <li v-for="inv in inviteList" :key="inv.code" class="flex flex-col gap-1 bg-[#111] border border-[#222] rounded-md px-3 py-2">
+          <ul v-if="pendingInvites.length" class="list-none flex flex-col gap-1.5">
+            <li v-for="inv in pendingInvites" :key="inv.code" class="flex flex-col gap-1 bg-[#111] border border-[#222] rounded-md px-3 py-2">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-[0.8125rem] text-[#d0d0d0]">{{ inv.label || '(no label)' }}</span>
-                <span v-if="inv.used_by" class="text-[0.72rem] text-[#6ecf8e]">joined as {{ inv.used_by }}</span>
-                <div v-else class="flex items-center gap-1.5">
+                <div class="flex items-center gap-1.5">
                   <button class="bg-[#1a2a1e] text-[#8edfae] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#1f3526]" @click="copyInvite(inv)">{{ copiedCode === inv.code ? 'Copied ✓' : 'Copy link' }}</button>
                   <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515]" @click="revokeInvite(inv)">Revoke</button>
                 </div>
               </div>
-              <span v-if="!inv.used_by" class="text-[0.7rem] text-[#585858] break-all">{{ inviteLink(inv) }} · expires {{ new Date(inv.expires_at).toLocaleDateString() }}</span>
+              <span class="text-[0.7rem] text-[#585858] break-all">{{ inviteLink(inv) }} · expires {{ new Date(inv.expires_at).toLocaleDateString() }}</span>
             </li>
           </ul>
-          <p v-else class="text-[#484848] text-[0.8125rem]">No invites yet. Create one and email the link.</p>
+          <p v-else class="text-[#484848] text-[0.8125rem]">No pending invites. Create one and email the link — it disappears here once redeemed.</p>
         </section>
       </div>
 
