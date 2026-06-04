@@ -4,11 +4,15 @@ import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useWindowsStore } from '../stores/windows'
 import { useSessionsStore } from '../stores/sessions'
+import { useTasksStore } from '../stores/tasks'
+import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
 
 const logs = useLogsStore()
 const windows = useWindowsStore()
 const sessions = useSessionsStore()
+const tasksStore = useTasksStore()
+const calStore = useCalendarStore()
 
 // ── Connection state ──────────────────────────────────────────────────────────
 const connected = ref(false)
@@ -32,6 +36,8 @@ onMounted(async () => {
     providersList.value = providers
     if (providers.length) aiProvider.value = providers[0].name
   } catch { /* no providers configured; AI reply will surface the error */ }
+  // Pick up suggestions left over from earlier sends.
+  if (connected.value) await loadSuggestions()
 })
 
 // ── Folders ───────────────────────────────────────────────────────────────────
@@ -427,6 +433,65 @@ async function askAi() {
 // preferences from the diff. Cleared whenever a compose form is (re)opened.
 const aiDraftOriginal = ref('')
 
+// ── Commitment suggestions ────────────────────────────────────────────────────
+// Detected asynchronously after a send; shown as accept/dismiss toasts.
+const suggestionsList = ref<api.Suggestion[]>([])
+const acceptedIds = ref<Set<string>>(new Set())
+let suggestionPollTimer: number | null = null
+
+async function loadSuggestions() {
+  try {
+    const res = await api.suggestions.listPending()
+    // Merge: keep cards already shown (incl. just-accepted ones mid-fade).
+    const known = new Set(suggestionsList.value.map(s => s.id))
+    for (const s of res.suggestions) {
+      if (!known.has(s.id)) suggestionsList.value.push(s)
+    }
+  } catch { /* cosmetic — never disturb the mail flow */ }
+}
+
+// Detection takes the model a few seconds; poll briefly after each send.
+function pollSuggestionsAfterSend() {
+  if (suggestionPollTimer !== null) window.clearInterval(suggestionPollTimer)
+  let polls = 0
+  suggestionPollTimer = window.setInterval(async () => {
+    polls += 1
+    await loadSuggestions()
+    if (polls >= 15 && suggestionPollTimer !== null) {
+      window.clearInterval(suggestionPollTimer)
+      suggestionPollTimer = null
+    }
+  }, 3000)
+}
+
+async function acceptSuggestion(s: api.Suggestion) {
+  try {
+    await api.suggestions.accept(s.id)
+    acceptedIds.value.add(s.id)
+    if (s.kind === 'event') calStore.notifyChanged()
+    else tasksStore.notifyChanged()
+    window.setTimeout(() => {
+      suggestionsList.value = suggestionsList.value.filter(x => x.id !== s.id)
+    }, 1500)
+  } catch (e: unknown) {
+    logs.error('Email', `Failed to accept suggestion: ${e instanceof Error ? e.message : e}`)
+    suggestionsList.value = suggestionsList.value.filter(x => x.id !== s.id)
+  }
+}
+
+async function dismissSuggestion(s: api.Suggestion) {
+  suggestionsList.value = suggestionsList.value.filter(x => x.id !== s.id)
+  try {
+    await api.suggestions.dismiss(s.id)
+  } catch { /* row stays pending; it'll reappear next mount */ }
+}
+
+function fmtWhen(iso: string): string {
+  return new Date(iso).toLocaleString([], {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+}
+
 function startReply(mode: ReplyMode) {
   const m = selectedMessage.value
   if (!m) return
@@ -481,15 +546,16 @@ async function sendEmail() {
     } else {
       payload.subject = composeForm.value.subject
     }
+    // Provider powers post-send analysis (style learning + commitment
+    // detection) — sent with every send, AI-drafted or not.
+    if (aiProvider.value) payload.ai_provider = aiProvider.value
     // Started as an AI draft → let the backend learn from the edits.
-    if (aiDraftOriginal.value) {
-      payload.ai_draft = aiDraftOriginal.value
-      payload.ai_provider = aiProvider.value
-    }
+    if (aiDraftOriginal.value) payload.ai_draft = aiDraftOriginal.value
     const res = await api.email.send(payload)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', 'Email sent successfully')
     sendMsg.value = 'Sent.'
+    if (aiProvider.value) pollSuggestionsAfterSend()
     if (!showReply.value) {
       view.value = 'none'
     } else {
@@ -552,6 +618,7 @@ function onDividerPointerup() {
 onUnmounted(() => {
   document.body.style.cursor = ''
   document.body.style.userSelect = ''
+  if (suggestionPollTimer !== null) window.clearInterval(suggestionPollTimer)
 })
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -655,7 +722,39 @@ const replyBody = computed(() => {
   </div>
 
   <!-- 3-pane layout -->
-  <div v-else class="flex h-full overflow-hidden bg-bg">
+  <div v-else class="relative flex h-full overflow-hidden bg-bg">
+
+    <!-- Commitment suggestion toasts -->
+    <div v-if="suggestionsList.length" class="absolute bottom-3 right-3 z-50 flex flex-col gap-2 max-w-[26rem]">
+      <div v-for="s in suggestionsList" :key="s.id" class="flex flex-col gap-1.5 bg-[#10161a] border border-[#1e3a4a] rounded-lg py-2.5 px-3 shadow-lg">
+        <div class="flex items-center gap-2 text-[0.78rem] text-[#6ab8df]">
+          <svg v-if="s.kind === 'event'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+          <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          <span class="font-medium">You committed to something — add {{ s.kind === 'event' ? 'to calendar' : 'a task' }}?</span>
+        </div>
+        <p class="text-[0.8125rem] text-[#d0d0d0] leading-snug">{{ s.title }}</p>
+        <p class="text-[0.72rem] text-[#587078]">
+          <template v-if="s.start_at">{{ fmtWhen(s.start_at) }}<template v-if="s.end_at"> – {{ fmtWhen(s.end_at) }}</template></template>
+          <template v-else>No due time</template>
+          <template v-if="s.context"> · {{ s.context }}</template>
+        </p>
+        <div class="flex items-center gap-2 mt-0.5">
+          <template v-if="acceptedIds.has(s.id)">
+            <span class="text-[0.75rem] text-[#6ecf8e]">Added ✓</span>
+          </template>
+          <template v-else>
+            <button class="bg-[#1e3a2a] text-[#6ecf8e] border border-[#2a5a3a] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[#254a35]" @click="acceptSuggestion(s)">
+              {{ s.kind === 'event' ? 'Add event' : 'Add task' }}
+            </button>
+            <button class="bg-transparent text-[#585858] border border-[#303030] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="dismissSuggestion(s)">Dismiss</button>
+          </template>
+        </div>
+      </div>
+    </div>
 
     <!-- Left: folder list -->
     <aside class="min-w-[120px] flex-shrink-0 bg-[#141414] border-r border-[#1e1e1e] flex flex-col p-2 gap-1 overflow-y-auto" :style="{ width: folderPaneWidth + 'px' }">

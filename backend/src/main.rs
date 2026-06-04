@@ -8,6 +8,7 @@ mod db;
 mod error;
 mod integrations;
 mod memory;
+mod suggestions;
 mod model_router;
 mod tools;
 mod mcp_host;

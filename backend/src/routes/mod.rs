@@ -20,6 +20,7 @@ mod logs;
 mod memories;
 mod tasks;
 mod notes;
+mod suggestions;
 mod sessions;
 mod settings;
 
@@ -98,6 +99,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/notes", post(notes::create))
         .route("/api/notes/:id", put(notes::update))
         .route("/api/notes/:id", delete(notes::delete))
+        .route("/api/suggestions", get(suggestions::list_pending))
+        .route("/api/suggestions/:id/accept", post(suggestions::accept))
+        .route("/api/suggestions/:id/dismiss", post(suggestions::dismiss))
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))

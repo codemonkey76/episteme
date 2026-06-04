@@ -427,6 +427,21 @@ pub async fn send_email(
     let ai_draft = payload.ai_draft.clone().filter(|d| !d.trim().is_empty());
     let ai_provider = payload.ai_provider.clone();
     let sent_body = payload.body.clone();
+    let send_context = format!(
+        "{} to {}{}",
+        match payload.action.as_deref() {
+            Some("forward") => "Forward",
+            Some(_) => "Reply",
+            None => "Email",
+        },
+        payload.to.join(", "),
+        payload
+            .subject
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| format!(": {s}"))
+            .unwrap_or_default(),
+    );
 
     let to = recipients(&payload.to);
     let cc = recipients(&payload.cc);
@@ -482,16 +497,26 @@ pub async fn send_email(
             .map_err(|e| AppError::Internal(e.into()))?;
     }
 
-    // The send succeeded — if it started life as an AI draft and the user
-    // changed it, learn writing-style preferences from the edits. Detached
-    // and best-effort; never affects the send result.
-    if let (Some(draft), Some(provider_name)) = (ai_draft, ai_provider) {
+    // The send succeeded — kick off detached, best-effort analysis that must
+    // never affect the send result:
+    //  - style learning, when the send started as an AI draft the user edited
+    //  - commitment detection on what was sent ("I'll do X on Saturday…")
+    if let Some(provider_name) = ai_provider {
         let providers: Vec<ProviderConfig> =
             db::settings::get(&state.db, "providers").await.ok().flatten().unwrap_or_default();
         if let Some(provider) = providers.into_iter().find(|p| p.name == provider_name) {
+            if let Some(draft) = ai_draft {
+                let st = Arc::clone(&state);
+                let prov = provider.clone();
+                let sent = sent_body.clone();
+                tokio::spawn(async move {
+                    crate::memory::extract_style(&st, prov, draft, sent).await;
+                });
+            }
             let st = Arc::clone(&state);
             tokio::spawn(async move {
-                crate::memory::extract_style(&st, provider, draft, sent_body).await;
+                crate::suggestions::detect_commitments(&st, provider, sent_body, send_context)
+                    .await;
             });
         }
     }

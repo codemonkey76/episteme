@@ -476,6 +476,25 @@ export const notes = {
   remove: (id: string) => fetch(BASE + `/notes/${id}`, { method: 'DELETE' }),
 }
 
+// Suggestions (commitments detected in sent emails)
+export interface Suggestion {
+  id: string
+  kind: 'task' | 'event'
+  title: string
+  start_at: string | null
+  end_at: string | null
+  context: string | null
+  status: string
+  created_at: string
+}
+
+export const suggestions = {
+  listPending: () => json<{ suggestions: Suggestion[] }>('/suggestions'),
+  accept: (id: string) =>
+    json<{ kind: string }>(`/suggestions/${id}/accept`, { method: 'POST' }),
+  dismiss: (id: string) => fetch(BASE + `/suggestions/${id}/dismiss`, { method: 'POST' }),
+}
+
 // Email auto-categorizer
 export interface CategorizerConfig {
   enabled: boolean
