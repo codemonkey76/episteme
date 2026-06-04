@@ -295,13 +295,24 @@ class _MessageScreenState extends State<MessageScreen> {
                           ],
                         );
                       },
+                      // HTML email is authored for light backgrounds — render
+                      // it on "paper" (same as the web's white iframe) so
+                      // hardcoded dark text stays readable in the dark app.
                       child: d.bodyIsHtml
-                          ? HtmlWidget(
-                              renderedHtml ?? d.body,
-                              textStyle: const TextStyle(
-                                  color: Palette.fg,
-                                  fontSize: 14,
-                                  height: 1.45),
+                          ? Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: HtmlWidget(
+                                renderedHtml ?? d.body,
+                                textStyle: const TextStyle(
+                                    color: Color(0xFF1A1A1A),
+                                    fontSize: 14,
+                                    height: 1.45),
+                              ),
                             )
                           : Text(d.body,
                               style: const TextStyle(
