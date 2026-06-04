@@ -72,6 +72,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/integrations/email/callback", get(integrations::callback))
         .route("/api/email/folders", get(email::list_folders))
         .route("/api/email/folders/:id/messages", get(email::list_messages))
+        .route("/api/email/folders/:id/read-all", post(email::mark_all_read))
         .route("/api/email/search", get(email::search_messages))
         .route("/api/email/messages/:id", get(email::get_message))
         .route("/api/email/messages/:id/attachments", get(email::list_attachments))

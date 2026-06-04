@@ -287,6 +287,10 @@ export const email = {
     json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}`),
   getMessage: (messageId: string) =>
     json<MessageDetail>(`/email/messages/${messageId}`),
+  markAllRead: (folderId: string) =>
+    json<{ marked: number }>(`/email/folders/${encodeURIComponent(folderId)}/read-all`, {
+      method: 'POST',
+    }),
   markRead: (messageId: string) =>
     fetch(BASE + `/email/messages/${messageId}/read`, { method: 'PATCH' }),
   // "No response needed" — complete the flag and file to Processed.

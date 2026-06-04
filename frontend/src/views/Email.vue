@@ -119,6 +119,29 @@ async function loadMessages(folderId: string, skip = 0) {
   }
 }
 
+const markingAllRead = ref(false)
+
+async function markAllRead() {
+  const folder = selectedFolder.value
+  if (!folder || markingAllRead.value) return
+  markingAllRead.value = true
+  try {
+    const res = await api.email.markAllRead(folder.id)
+    // Reflect locally without a full reload.
+    messages.value = messages.value.map(m => ({ ...m, isRead: true }))
+    searchResults.value = searchResults.value.map(m => ({ ...m, isRead: true }))
+    const f = folders.value.find(f => f.id === folder.id)
+    if (f) f.unreadItemCount = 0
+    logs.info('Email', `Marked ${res.marked} message(s) as read in "${folder.displayName}"`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Failed to mark all as read'
+    messagesError.value = msg
+    logs.error('Email', msg)
+  } finally {
+    markingAllRead.value = false
+  }
+}
+
 async function loadMore() {
   if (isSearching.value) {
     await runSearch(searchQuery.value.trim(), searchNextLink.value)
@@ -910,7 +933,21 @@ const replyBody = computed(() => {
     <!-- Middle: message list -->
     <div class="min-w-[200px] flex-shrink-0 flex flex-col overflow-hidden" :style="{ width: listPaneWidth + 'px' }">
       <div class="py-2 px-[0.875rem] border-b border-[var(--c-1e1e1e)] flex-shrink-0 flex flex-col gap-[0.4rem]">
-        <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)]">{{ selectedFolder?.displayName ?? '' }}</span>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ selectedFolder?.displayName ?? '' }}</span>
+          <button
+            v-if="selectedFolder && selectedFolder.unreadItemCount > 0"
+            class="flex items-center gap-1 bg-transparent border-none text-[var(--c-585858)] cursor-pointer text-[0.7rem] font-[inherit] p-0 flex-shrink-0 transition-colors duration-100 hover:text-[var(--c-7ab0ff)] disabled:opacity-50"
+            :disabled="markingAllRead"
+            title="Mark every message in this folder as read"
+            @click="markAllRead"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="18 7 11 14 8 11"/><polyline points="13 7 6 14 3 11"/>
+            </svg>
+            {{ markingAllRead ? 'Marking…' : 'Mark all read' }}
+          </button>
+        </div>
         <div class="flex items-center gap-[0.375rem] bg-surface border border-[var(--c-252525)] rounded-[0.3rem] py-1 px-2">
           <svg class="text-[var(--c-484848)] flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>

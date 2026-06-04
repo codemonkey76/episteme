@@ -521,6 +521,79 @@ pub async fn mark_read(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// POST /api/email/folders/:id/read-all — mark every unread message in the
+// folder as read. Pages unread ids and PATCHes them in Graph $batch chunks
+// (20 per batch, the Graph limit); patched messages drop out of the filter,
+// so re-running the same query walks the whole folder.
+pub async fn mark_all_read(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(folder_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
+    let mut marked = 0usize;
+
+    // Safety cap: 40 rounds × 100 messages = 4000 per call; the UI reports
+    // the count, so a truly huge folder just needs another click.
+    for _ in 0..40 {
+        let page = graph_get(
+            &state,
+            user_id,
+            &format!("{GRAPH}/me/mailFolders/{folder_id}/messages"),
+            &[("$filter", "isRead eq false"), ("$select", "id"), ("$top", "100")],
+        )
+        .await?;
+        let ids: Vec<String> = page["value"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        if ids.is_empty() {
+            break;
+        }
+
+        for chunk in ids.chunks(20) {
+            let requests: Vec<Value> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    serde_json::json!({
+                        "id": (i + 1).to_string(),
+                        "method": "PATCH",
+                        "url": format!("/me/messages/{id}"),
+                        "headers": { "Content-Type": "application/json" },
+                        "body": { "isRead": true },
+                    })
+                })
+                .collect();
+            let res = graph_post(
+                &state,
+                user_id,
+                &format!("{GRAPH}/$batch"),
+                &serde_json::json!({ "requests": requests }),
+            )
+            .await?;
+            // $batch returns 200 with per-request statuses; count real successes.
+            marked += res["responses"]
+                .as_array()
+                .map(|rs| {
+                    rs.iter()
+                        .filter(|r| r["status"].as_u64().map(|s| (200..300).contains(&s)).unwrap_or(false))
+                        .count()
+                })
+                .unwrap_or(chunk.len());
+        }
+
+        if ids.len() < 100 {
+            break;
+        }
+    }
+
+    if marked > 0 {
+        state.log("email", "info", format!("Marked {marked} message(s) as read")).await;
+    }
+    Ok(Json(serde_json::json!({ "marked": marked })))
+}
+
 // POST /api/email/send
 #[derive(Deserialize)]
 pub struct SendBody {
