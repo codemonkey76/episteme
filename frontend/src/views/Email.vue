@@ -570,6 +570,10 @@ async function sendEmail() {
     if (showReply.value && selectedMessage.value) {
       payload.reply_to_message_id = selectedMessage.value.id
       payload.action = replyMode.value
+      // Subject + latest message text give commitment detection enough
+      // context to resolve terse replies into specific task titles.
+      payload.subject = composeForm.value.subject
+      payload.reply_context = latestMessageText(selectedMessage.value).slice(0, 2000)
     } else {
       payload.subject = composeForm.value.subject
     }

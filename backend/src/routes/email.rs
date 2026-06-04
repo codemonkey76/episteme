@@ -477,6 +477,9 @@ pub struct SendBody {
     ai_draft: Option<String>,
     /// Provider that produced the draft (reused for style extraction).
     ai_provider: Option<String>,
+    /// Plain text of the message being replied to — context for commitment
+    /// detection so short replies ("I'll get this done tonight") resolve.
+    reply_context: Option<String>,
 }
 
 /// Map plain addresses to Graph recipient objects.
@@ -504,6 +507,7 @@ pub async fn send_email(
         .reply_to_message_id
         .clone()
         .filter(|_| payload.action.as_deref() != Some("forward"));
+    let reply_context = payload.reply_context.clone();
     let send_context = format!(
         "{} to {}{}",
         match payload.action.as_deref() {
@@ -597,8 +601,14 @@ pub async fn send_email(
             }
             let st = Arc::clone(&state);
             tokio::spawn(async move {
-                crate::suggestions::detect_commitments(&st, provider, sent_body, send_context)
-                    .await;
+                crate::suggestions::detect_commitments(
+                    &st,
+                    provider,
+                    sent_body,
+                    send_context,
+                    reply_context,
+                )
+                .await;
             });
         }
     }

@@ -260,6 +260,9 @@ export interface SendEmailPayload {
   /// diffs it against `body` to learn writing-style preferences.
   ai_draft?: string
   ai_provider?: string
+  /// Plain text of the message being replied to — context so commitment
+  /// detection can resolve terse replies ("I'll get this done tonight").
+  reply_context?: string
 }
 
 export interface Attachment {

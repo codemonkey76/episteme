@@ -31,6 +31,10 @@ Wednesday 10 March, \"by Friday\" means Friday 12 March (two days later), never 
 after that.\n\n\
 Times must be RFC3339 with the user's UTC offset, resolved against the current date/time \
 given below.\n\n\
+Titles must be specific and self-contained: resolve pronouns and vague references (\"this\", \
+\"it\", \"that\") using the subject line and the message being replied to. \"I'll get this \
+done tonight\" in a thread about cancelling the Jobs server → \"Cancel the Jobs server\", \
+never \"Get this done\".\n\n\
 Respond with ONLY a JSON array, no prose, no code fences. Each element: \
 {\"kind\": \"task\"|\"event\", \"title\": \"<short imperative description>\", \
 \"start\": \"<RFC3339>\"?, \"end\": \"<RFC3339>\"?}. If there are no commitments, return [].";
@@ -62,6 +66,27 @@ fn normalize_kind(kind: &str, start: &Option<String>) -> &'static str {
     }
 }
 
+/// Drop legal-disclaimer / signature boilerplate paragraphs (Exclaimer-style
+/// footers repeated through a thread) — pure noise for commitment detection.
+fn strip_boilerplate(text: &str) -> String {
+    const MARKERS: [&str; 5] = [
+        "confidential and intended solely",
+        "if you have received this email in error",
+        "received it by mistake",
+        "presence of viruses",
+        "accepts no liability",
+    ];
+    text.split("\n\n")
+        .filter(|para| {
+            let p = para.to_lowercase();
+            !MARKERS.iter().any(|m| p.contains(m))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string()
+}
+
 /// Extract the JSON array, tolerating code fences / surrounding prose.
 fn parse(raw: &str) -> anyhow::Result<Vec<Detected>> {
     let start = raw.find('[').ok_or_else(|| anyhow::anyhow!("no JSON array in model output"))?;
@@ -73,11 +98,14 @@ fn parse(raw: &str) -> anyhow::Result<Vec<Detected>> {
 }
 
 /// Scan a sent email for commitments and store pending suggestions.
+/// `reply_context` is the message being replied to, so terse replies
+/// ("I'll get this done tonight") resolve to something specific.
 pub async fn detect_commitments(
     state: &AppState,
     provider: ProviderConfig,
     body: String,
     context: String,
+    reply_context: Option<String>,
 ) {
     if body.trim().is_empty() {
         return;
@@ -86,9 +114,18 @@ pub async fn detect_commitments(
     let tz = state.home_tz().await;
     let now = Utc::now().with_timezone(&tz);
     let body_capped: String = body.chars().take(BODY_LIMIT).collect();
+    let replied = reply_context
+        .as_deref()
+        .map(strip_boilerplate)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let capped: String = s.chars().take(BODY_LIMIT / 2).collect();
+            format!("\n\nThe message being replied to (context only — do NOT extract the other party's commitments from it):\n\n{capped}")
+        })
+        .unwrap_or_default();
     let user = format!(
         "The current date and time is {} in the user's timezone ({}, UTC{}).\n\n\
-Email the user sent ({context}):\n\n{body_capped}",
+Email the user sent ({context}):\n\n{body_capped}{replied}",
         now.format("%A, %-d %B %Y, %-I:%M %p"),
         tz.name(),
         now.format("%:z"),
@@ -173,6 +210,16 @@ mod tests {
         );
         assert_eq!(to_utc(&Some("garbage".into())), None);
         assert_eq!(to_utc(&None), None);
+    }
+
+    #[test]
+    fn strips_disclaimer_paragraphs() {
+        let text = "Sorry Shane, he wants it done after hours.\n\n\
+This email and any files transmitted with it are confidential and intended solely for the \
+use of the individual or entity to whom they are addressed. The company accepts no liability \
+for any damage caused by any virus transmitted by this email.";
+        let cleaned = strip_boilerplate(text);
+        assert_eq!(cleaned, "Sorry Shane, he wants it done after hours.");
     }
 
     #[test]
