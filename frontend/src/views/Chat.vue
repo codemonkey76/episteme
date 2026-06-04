@@ -272,12 +272,13 @@ function toolCallLabels(content: string): string[] {
         <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
       </select>
       <span v-else class="text-[0.75rem] text-[#585858] whitespace-nowrap">No providers configured</span>
+      <!-- Stays enabled while a reply streams so the next message can be
+           drafted; send() ignores Enter until the turn finishes. -->
       <textarea
         v-model="input"
         @keydown="onKeydown"
-        placeholder="Message… (Enter to send, Shift+Enter for newline)"
+        :placeholder="sending ? 'Type your next message while the model responds…' : 'Message… (Enter to send, Shift+Enter for newline)'"
         rows="3"
-        :disabled="sending"
         class="flex-1 bg-surface text-[inherit] border border-raised rounded-md p-2 font-[inherit] text-[0.9rem] resize-none"
       />
       <div class="flex flex-col gap-1">
