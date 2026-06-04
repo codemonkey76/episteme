@@ -11,7 +11,14 @@ const isAdmin = computed(() => authStore.role === 'admin')
 const props = defineProps<{ initialTab?: string }>()
 
 type Tab = 'account' | 'providers' | 'mcp' | 'tools' | 'integrations' | 'appearance' | 'users' | 'system'
-const activeTab = ref<Tab>((props.initialTab as Tab) ?? 'account')
+const ADMIN_TABS: Tab[] = ['providers', 'mcp', 'tools', 'users', 'system']
+
+// A persisted window may restore with an admin tab (e.g. after the admin
+// impersonates a member and the page reloads) — fall back to Account.
+function clampTab(tab: Tab): Tab {
+  return !isAdmin.value && ADMIN_TABS.includes(tab) ? 'account' : tab
+}
+const activeTab = ref<Tab>(clampTab((props.initialTab as Tab) ?? 'account'))
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 const providers = ref<api.ProviderConfig[]>([])

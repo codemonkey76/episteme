@@ -136,7 +136,10 @@ pub async fn require_auth(
 pub async fn require_admin(req: Request, next: Next) -> Response {
     match req.extensions().get::<CurrentUser>() {
         Some(CurrentUser(user)) if user.is_admin() => next.run(req).await,
-        _ => AppError::Unauthorized("admin access required".into()).into_response(),
+        // 403, not 401: the session is valid, the user just isn't an admin.
+        // (A 401 here would make the frontend treat an impersonated member
+        // session as logged-out the moment any admin poll fires.)
+        _ => AppError::Forbidden("admin access required".into()).into_response(),
     }
 }
 
