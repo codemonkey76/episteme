@@ -936,9 +936,9 @@ const replyBody = computed(() => {
         <div class="flex items-center justify-between gap-2">
           <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ selectedFolder?.displayName ?? '' }}</span>
           <button
-            v-if="selectedFolder && selectedFolder.unreadItemCount > 0"
-            class="flex items-center gap-1 bg-transparent border-none text-[var(--c-585858)] cursor-pointer text-[0.7rem] font-[inherit] p-0 flex-shrink-0 transition-colors duration-100 hover:text-[var(--c-7ab0ff)] disabled:opacity-50"
-            :disabled="markingAllRead"
+            v-if="selectedFolder"
+            class="flex items-center gap-1 bg-transparent border-none text-[var(--c-585858)] cursor-pointer text-[0.7rem] font-[inherit] p-0 flex-shrink-0 transition-colors duration-100 hover:not-disabled:text-[var(--c-7ab0ff)] disabled:opacity-40 disabled:cursor-default"
+            :disabled="markingAllRead || selectedFolder.unreadItemCount === 0"
             title="Mark every message in this folder as read"
             @click="markAllRead"
           >
