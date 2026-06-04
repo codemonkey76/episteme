@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="80%">
+      <stop offset="0%" stop-color="#162033"/>
+      <stop offset="100%" stop-color="#0d0d0d"/>
+    </radialGradient>
+    <linearGradient id="stroke" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a8ccff"/>
+      <stop offset="100%" stop-color="#5a8adf"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- epsilon: one continuous stroke — small top arc into larger bottom arc,
+       meeting at a left-of-center waist -->
+  <path d="M 336 158 A 76 76 0 1 0 256 252 A 88 88 0 1 0 340 358"
+        fill="none" stroke="url(#stroke)" stroke-width="54" stroke-linecap="round"/>
+  <!-- knowledge node on the upper terminal -->
+  <circle cx="336" cy="158" r="34" fill="#0d0d0d"/>
+  <circle cx="336" cy="158" r="20" fill="#a8ccff"/>
+</svg>

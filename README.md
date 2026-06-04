@@ -1,3 +1,5 @@
+<img src="assets/icon-96.png" align="left" width="72" height="72" alt="Episteme icon" style="margin-right: 12px">
+
 # Episteme
 
 A self-hosted AI workspace. One interface over local and cloud models, with an agentic tool-using loop and human-in-the-loop approvals for irreversible actions.
