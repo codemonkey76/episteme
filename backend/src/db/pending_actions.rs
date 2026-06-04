@@ -58,6 +58,20 @@ pub async fn list_pending(pool: &SqlitePool, session_id: &str) -> Result<Vec<Pen
     Ok(rows)
 }
 
+/// Does this pending action belong to one of the user's sessions?
+pub async fn owned_by(pool: &SqlitePool, id: &str, user_id: &str) -> Result<bool> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pending_actions p
+         JOIN sessions s ON s.id = p.session_id
+         WHERE p.id = ? AND s.user_id = ?",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(n > 0)
+}
+
 pub async fn resolve(pool: &SqlitePool, id: &str, approved: bool) -> Result<()> {
     let status = if approved { "approved" } else { "rejected" };
     let now = Utc::now().to_rfc3339();
