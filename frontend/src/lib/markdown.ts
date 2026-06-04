@@ -18,6 +18,12 @@ function inlineMd(s: string): string {
   return s
 }
 
+// Inline-only rendering for single-line contexts (e.g. task titles) where block
+// elements like lists or headings would break the layout.
+export function renderInlineMarkdown(src: string): string {
+  return inlineMd(escapeHtml(src))
+}
+
 export function renderMarkdown(src: string): string {
   const lines = escapeHtml(src).split('\n')
   const out: string[] = []
