@@ -46,6 +46,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Everything else requires a valid session cookie.
     let protected = Router::new()
         .route("/api/auth/change-password", post(auth::change_password))
+        .route("/api/auth/stop-impersonating", post(auth::stop_impersonating))
         .route("/api/sessions/:id/chat", post(chat::stream))
         .route("/api/sessions", get(sessions::list))
         .route("/api/sessions", post(sessions::create))
@@ -115,6 +116,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/logs", delete(logs::clear))
         .route("/api/logs/stream", get(logs::stream))
         .route("/api/users", get(users::list))
+        .route("/api/users/:id/impersonate", post(users::impersonate))
         .route("/api/users/:id/disable", post(users::disable))
         .route("/api/users/:id/enable", post(users::enable))
         .route("/api/users/:id", delete(users::delete))

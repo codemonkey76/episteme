@@ -7,6 +7,7 @@ interface State {
   authenticated: boolean
   username: string | null
   role: 'admin' | 'member' | null
+  impersonator: string | null
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -16,6 +17,7 @@ export const useAuthStore = defineStore('auth', {
     authenticated: false,
     username: null,
     role: null,
+    impersonator: null,
   }),
   actions: {
     /// Drop to the login screen whenever any API call returns 401.
@@ -31,6 +33,7 @@ export const useAuthStore = defineStore('auth', {
       this.authenticated = s.authenticated
       this.username = s.username
       this.role = s.role
+      this.impersonator = s.impersonator
       this.loaded = true
     },
     async login(username: string, password: string) {
@@ -58,6 +61,18 @@ export const useAuthStore = defineStore('auth', {
       this.authenticated = false
       this.username = null
       this.role = null
+      this.impersonator = null
+    },
+    async impersonate(id: string) {
+      await api.users.impersonate(id)
+      await this.refresh()
+      // Fresh identity → reload so every store refetches as the new user.
+      window.location.reload()
+    },
+    async stopImpersonating() {
+      await api.auth.stopImpersonating()
+      await this.refresh()
+      window.location.reload()
     },
   },
 })

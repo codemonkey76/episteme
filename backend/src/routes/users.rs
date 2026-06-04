@@ -85,6 +85,27 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// POST /api/users/:id/impersonate — act as a member to set things up for
+// them (e.g. connect their mailbox). Session lasts 1 hour; the banner and
+// stop endpoint come from the impersonator recorded on the session.
+pub async fn impersonate(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(actor)): Extension<CurrentUser>,
+    jar: axum_extra::extract::CookieJar,
+    Path(id): Path<String>,
+) -> AppResult<(axum_extra::extract::CookieJar, Json<Value>)> {
+    let target = target_member(&state, &actor, &id).await?;
+    if target.status != "active" {
+        return Err(AppError::BadRequest("enable the account first".into()));
+    }
+    let cookie =
+        crate::routes::auth::start_impersonated_session(&state, &target.id, &actor.id).await?;
+    state
+        .log("auth", "warn", format!("{} is impersonating {}", actor.username, target.username))
+        .await;
+    Ok((jar.add(cookie), Json(json!({ "ok": true, "username": target.username }))))
+}
+
 // ── Invites ──────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

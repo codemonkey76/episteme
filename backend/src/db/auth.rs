@@ -121,16 +121,43 @@ pub async fn create_session(
     created_at: &str,
     expires_at: &str,
 ) -> Result<()> {
+    create_session_as(pool, token, user_id, created_at, expires_at, None).await
+}
+
+/// Create a session, optionally recording the admin impersonating `user_id`.
+pub async fn create_session_as(
+    pool: &SqlitePool,
+    token: &str,
+    user_id: &str,
+    created_at: &str,
+    expires_at: &str,
+    impersonator_id: Option<&str>,
+) -> Result<()> {
     sqlx::query(
-        "INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO auth_sessions (token, user_id, created_at, expires_at, impersonator_id)
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(token)
     .bind(user_id)
     .bind(created_at)
     .bind(expires_at)
+    .bind(impersonator_id)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// The impersonating admin for a session token, if any.
+pub async fn session_impersonator(pool: &SqlitePool, token: &str) -> Result<Option<User>> {
+    Ok(sqlx::query_as::<_, User>(
+        "SELECT u.id, u.username, u.password_hash, u.created_at, u.role, u.status
+         FROM auth_sessions s
+         JOIN auth_users u ON u.id = s.impersonator_id
+         WHERE s.token = ?",
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// Resolve a session token to its user, enforcing expiry (`now` as RFC3339).

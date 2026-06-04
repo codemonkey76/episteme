@@ -563,6 +563,7 @@ export interface AuthStatus {
   authenticated: boolean
   username: string | null
   role: 'admin' | 'member' | null
+  impersonator: string | null
 }
 
 export interface UserAccount {
@@ -584,6 +585,8 @@ export interface Invite {
 
 export const users = {
   list: () => json<{ users: UserAccount[] }>('/users'),
+  impersonate: (id: string) =>
+    json<{ ok: true; username: string }>(`/users/${id}/impersonate`, { method: 'POST' }),
   disable: (id: string) => fetch(BASE + `/users/${id}/disable`, { method: 'POST' }),
   enable: (id: string) => fetch(BASE + `/users/${id}/enable`, { method: 'POST' }),
   remove: (id: string) => fetch(BASE + `/users/${id}`, { method: 'DELETE' }),
@@ -602,6 +605,8 @@ export const invites = {
 
 export const auth = {
   status: () => json<AuthStatus>('/auth/status'),
+  stopImpersonating: () =>
+    json<{ ok: true; username: string }>('/auth/stop-impersonating', { method: 'POST' }),
   checkInvite: (code: string) =>
     json<{ valid: boolean; label: string | null }>(`/auth/invite/${encodeURIComponent(code)}`),
   register: (code: string, username: string, password: string) =>

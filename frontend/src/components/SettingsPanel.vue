@@ -867,6 +867,7 @@ async function logout() {
                 <span v-if="u.status === 'disabled'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[#df7a7a] border-[#df7a7a55]">disabled</span>
               </div>
               <div v-if="u.role !== 'admin'" class="flex items-center gap-1.5 shrink-0">
+                <button v-if="u.status === 'active'" class="bg-[#16202e] text-[#9ab4d4] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#1c2a3c]" title="Act as this user to set things up for them" @click="authStore.impersonate(u.id)">Impersonate</button>
                 <button v-if="u.status === 'active'" class="bg-[#2a2418] text-[#e0b060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#3a3020]" @click="setUserStatus(u, 'disable')">Disable</button>
                 <button v-else class="bg-[#1e3a2a] text-[#6ecf8e] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#254a35]" @click="setUserStatus(u, 'enable')">Enable</button>
                 <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteUser(u)">Delete</button>

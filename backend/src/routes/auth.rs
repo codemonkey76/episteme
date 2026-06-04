@@ -90,6 +90,28 @@ async fn start_session(state: &AppState, user_id: &str) -> AppResult<Cookie<'sta
     Ok(session_cookie(token))
 }
 
+/// Short-lived session acting as `user_id`, with the admin recorded so the
+/// UI can show a banner and offer the way back.
+pub(crate) async fn start_impersonated_session(
+    state: &AppState,
+    user_id: &str,
+    admin_id: &str,
+) -> AppResult<Cookie<'static>> {
+    let token = gen_token();
+    let now = Utc::now();
+    let expires = now + Duration::hours(1);
+    db::auth::create_session_as(
+        &state.db,
+        &token,
+        user_id,
+        &now.to_rfc3339(),
+        &expires.to_rfc3339(),
+        Some(admin_id),
+    )
+    .await?;
+    Ok(session_cookie(token))
+}
+
 // ── Middleware ──────────────────────────────────────────────────────────────
 
 /// Reject any request without a valid session cookie. On success, the resolved
@@ -130,12 +152,16 @@ pub async fn status(
     let mut authenticated = false;
     let mut username = None;
     let mut role = None;
+    let mut impersonator = None;
     if let Some(token) = jar.get(COOKIE_NAME).map(|c| c.value().to_string()) {
         let now = Utc::now().to_rfc3339();
         if let Ok(Some(user)) = db::auth::session_user(&state.db, &token, &now).await {
             authenticated = true;
             username = Some(user.username);
             role = Some(user.role);
+            if let Ok(Some(admin)) = db::auth::session_impersonator(&state.db, &token).await {
+                impersonator = Some(admin.username);
+            }
         }
     }
 
@@ -144,6 +170,7 @@ pub async fn status(
         "authenticated": authenticated,
         "username": username,
         "role": role,
+        "impersonator": impersonator,
     })))
 }
 
@@ -273,6 +300,27 @@ pub async fn login(
 
     let cookie = start_session(&state, &user.id).await?;
     Ok((jar.add(cookie), Json(json!({ "ok": true, "username": user.username }))))
+}
+
+/// Protected: end an impersonated session and return to the admin account.
+pub async fn stop_impersonating(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+) -> AppResult<(CookieJar, Json<Value>)> {
+    let token = jar
+        .get(COOKIE_NAME)
+        .map(|c| c.value().to_string())
+        .ok_or_else(|| AppError::Unauthorized("not signed in".into()))?;
+    let admin = db::auth::session_impersonator(&state.db, &token)
+        .await?
+        .ok_or_else(|| AppError::BadRequest("not impersonating".into()))?;
+
+    db::auth::delete_session(&state.db, &token).await?;
+    let cookie = start_session(&state, &admin.id).await?;
+    state
+        .log("auth", "info", format!("impersonation ended; back to {}", admin.username))
+        .await;
+    Ok((jar.add(cookie), Json(json!({ "ok": true, "username": admin.username }))))
 }
 
 /// Public: clear the session (no-op if already logged out).
