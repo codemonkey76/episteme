@@ -71,13 +71,34 @@ onMounted(async () => {
   })
 })
 
+// Messages typed while a reply is streaming wait here and auto-send in
+// order when the turn finishes.
+const queued = ref<string[]>([])
+
+watch(sending, (now) => {
+  if (!now && queued.value.length > 0) {
+    const next = queued.value.shift()!
+    // Next tick so the finished turn's UI settles before the new one starts.
+    nextTick(() => sendText(next))
+  }
+})
+
 async function send() {
-  if (!input.value.trim() || sending.value || !store.activeSession) return
+  const text = input.value.trim()
+  if (!text || !store.activeSession) return
+  input.value = ''
+  if (sending.value) {
+    queued.value.push(text)
+    return
+  }
+  await sendText(text)
+}
+
+async function sendText(text: string) {
+  if (sending.value || !store.activeSession) return
   let calendarTouched = false
   let tasksTouched = false
   let notesTouched = false
-  const text = input.value.trim()
-  input.value = ''
   sending.value = true
   error.value = null
 
@@ -257,6 +278,18 @@ function toolCallLabels(content: string): string[] {
       </div>
     </div>
     <div v-if="error" class="bg-[#5a2a2a] text-[#e0c0c0] text-[0.8rem] py-[0.4rem] px-4">{{ error }}</div>
+    <!-- Messages queued while the model responds -->
+    <div v-if="queued.length" class="flex flex-wrap gap-1.5 px-3 pt-2 items-center">
+      <span class="text-[0.7rem] text-[#585858] uppercase tracking-[0.05em]">Queued</span>
+      <span
+        v-for="(q, i) in queued"
+        :key="i"
+        class="inline-flex items-center gap-1.5 bg-[#16202e] border border-[#24344a] text-[#9ab4d4] rounded-full px-2.5 py-[0.2rem] text-[0.75rem] max-w-[18rem]"
+      >
+        <span class="truncate">{{ q }}</span>
+        <button class="bg-none border-none cursor-pointer text-[#587098] hover:text-[#9ab4d4] p-0 leading-none" title="Remove from queue" @click="queued.splice(i, 1)">✕</button>
+      </span>
+    </div>
     <div class="flex gap-2 p-3 border-t border-raised items-end">
       <button class="bg-surface text-[#5a8adf] border border-raised rounded-md py-2 px-[0.6rem] cursor-pointer flex items-center flex-shrink-0 transition-colors duration-100 hover:not-disabled:bg-[#222] hover:not-disabled:text-[#7ab0ff] disabled:opacity-40" title="New chat" :disabled="sending" @click="newSession">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
@@ -277,7 +310,7 @@ function toolCallLabels(content: string): string[] {
       <textarea
         v-model="input"
         @keydown="onKeydown"
-        :placeholder="sending ? 'Type your next message while the model responds…' : 'Message… (Enter to send, Shift+Enter for newline)'"
+        :placeholder="sending ? 'Type away — Enter queues it for when the reply finishes…' : 'Message… (Enter to send, Shift+Enter for newline)'"
         rows="3"
         class="flex-1 bg-surface text-[inherit] border border-raised rounded-md p-2 font-[inherit] text-[0.9rem] resize-none"
       />
