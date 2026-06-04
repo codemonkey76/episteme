@@ -666,17 +666,37 @@ function fmtWhen(iso: string): string {
 
 // "No response needed" — file straight to Processed and close the reader.
 const markingDone = ref(false)
+// ── Auto-advance ────────────────────────────────────────────────────────────────
+// After completing an action on a message (Done, Reply), jump straight to the
+// next item in the list so mail can be worked through without re-selecting.
+function neighbourOf(id: string): api.MessageSummary | null {
+  const list = displayedMessages.value
+  const i = list.findIndex(m => m.id === id)
+  if (i === -1) return null
+  return list[i + 1] ?? list[i - 1] ?? null // next, or previous when last
+}
+
+async function advanceTo(next: api.MessageSummary | null) {
+  const target = next ? displayedMessages.value.find(x => x.id === next.id) : null
+  if (target) {
+    await selectMessage(target)
+  } else {
+    view.value = 'none'
+    selectedMessage.value = null
+  }
+}
+
 async function markDone() {
   const m = selectedMessage.value
   if (!m || markingDone.value) return
   markingDone.value = true
+  const next = neighbourOf(m.id)
   try {
     const res = await api.email.markDone(m.id, mbox.value)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', `Marked done: ${m.subject ?? '(no subject)'}`)
-    view.value = 'none'
-    selectedMessage.value = null
     await loadFolders()
+    await advanceTo(next)
   } catch (e: unknown) {
     logs.error('Email', `Mark done failed: ${e instanceof Error ? e.message : e}`)
   } finally {
@@ -766,12 +786,16 @@ async function sendEmail() {
       }
       showReply.value = false
       // Replies get filed to "Processed" server-side a moment later — refresh
-      // so the original drops out of the Inbox list and counts update.
+      // so the original drops out of the Inbox list and counts update. Auto-
+      // advance to the next message right away (forwards leave the original in
+      // place, so they stay put).
       if (replyMode.value !== 'forward') {
+        const next = neighbourOf(id ?? '')
         window.setTimeout(() => {
           if (selectedFolder.value) loadMessages(selectedFolder.value.id)
           loadFolders()
         }, 3000)
+        await advanceTo(next)
       }
     }
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
