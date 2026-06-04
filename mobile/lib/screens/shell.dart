@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 
 import '../main.dart';
 import '../state/auth.dart';
+import '../state/notes.dart';
+import '../state/tasks.dart';
+import 'chat_tab.dart';
 import 'notes_tab.dart';
 import 'tasks_tab.dart';
 
@@ -15,14 +18,14 @@ class ShellScreen extends StatefulWidget {
 }
 
 class _ShellScreenState extends State<ShellScreen> {
-  int _tab = 3; // Tasks first until Chat lands in phase 2.
+  int _tab = 0;
 
   static const _titles = ['Chat', 'Email', 'Calendar', 'Tasks', 'Notes'];
 
   @override
   Widget build(BuildContext context) {
     final pages = [
-      const _ComingSoon(label: 'Chat', phase: 'phase 2'),
+      const ChatTab(),
       const _ComingSoon(label: 'Email', phase: 'phase 3'),
       const _ComingSoon(label: 'Calendar', phase: 'phase 3'),
       const TasksTab(),
@@ -48,7 +51,13 @@ class _ShellScreenState extends State<ShellScreen> {
       body: IndexedStack(index: _tab, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
+        onDestinationSelected: (i) {
+          setState(() => _tab = i);
+          // Data changes server-side (chat tools, the web app, auto-sort) —
+          // refresh a data tab whenever it's brought back into view.
+          if (i == 3) context.read<TasksStore>().load();
+          if (i == 4) context.read<NotesStore>().load();
+        },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
           NavigationDestination(icon: Icon(Icons.mail_outline), label: 'Email'),
