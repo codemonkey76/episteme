@@ -101,8 +101,8 @@ fn localize_task(task: &db::tasks::Task, tz: chrono_tz::Tz) -> Value {
     v
 }
 
-pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value> {
-    let tz = state.home_tz().await;
+pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
+    let tz = state.home_tz(user_id).await;
     match name {
         "list_tasks" => {
             let status = match args["status"].as_str() {
@@ -110,7 +110,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
                 Some("all") => None,
                 Some(s) => Some(s),
             };
-            let tasks = db::tasks::list(&state.db, status, None, 200).await?;
+            let tasks = db::tasks::list(&state.db, user_id, status, None, 200).await?;
             let tasks: Vec<Value> = tasks.iter().map(|t| localize_task(t, tz)).collect();
             Ok(json!({ "tasks": tasks }))
         }
@@ -128,6 +128,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             };
             let task = db::tasks::insert(
                 &state.db,
+                user_id,
                 title,
                 args["notes"].as_str(),
                 due_at.as_deref(),
@@ -161,7 +162,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
                         .map(str::to_string),
                 }
             };
-            let task = db::tasks::update(&state.db, id, patch)
+            let task = db::tasks::update(&state.db, user_id, id, patch)
                 .await?
                 .ok_or_else(|| anyhow!("no task with id '{id}'"))?;
             Ok(json!({ "updated": localize_task(&task, tz) }))
@@ -170,7 +171,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             let id = args["task_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("task_id is required"))?;
-            db::tasks::delete(&state.db, id).await?;
+            db::tasks::delete(&state.db, user_id, id).await?;
             Ok(json!({ "deleted": id }))
         }
         other => Err(anyhow!("unknown task tool '{other}'")),

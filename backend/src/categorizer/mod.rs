@@ -23,6 +23,13 @@ use crate::state::AppState;
 
 const CONFIG_KEY: &str = "email_categorizer";
 const STATE_KEY: &str = "email_categorizer_state";
+
+fn config_key(user_id: &str) -> String {
+    format!("{CONFIG_KEY}:{user_id}")
+}
+fn state_key(user_id: &str) -> String {
+    format!("{STATE_KEY}:{user_id}")
+}
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 /// Cap on remembered message ids so flagged/left-in-inbox mail isn't re-scanned.
 const MAX_PROCESSED: usize = 1000;
@@ -108,19 +115,23 @@ exactly once.";
 
 // ── Config accessors (used by HTTP routes) ─────────────────────────────────────
 
-pub async fn get_config(pool: &sqlx::SqlitePool) -> Result<CategorizerConfig> {
-    Ok(db::settings::get(pool, CONFIG_KEY).await?.unwrap_or_default())
+pub async fn get_config(pool: &sqlx::SqlitePool, user_id: &str) -> Result<CategorizerConfig> {
+    Ok(db::settings::get(pool, &config_key(user_id)).await?.unwrap_or_default())
 }
 
-pub async fn set_config(pool: &sqlx::SqlitePool, cfg: &CategorizerConfig) -> Result<()> {
-    db::settings::set(pool, CONFIG_KEY, cfg).await
+pub async fn set_config(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    cfg: &CategorizerConfig,
+) -> Result<()> {
+    db::settings::set(pool, &config_key(user_id), cfg).await
 }
 
 // ── Core run ───────────────────────────────────────────────────────────────────
 
-/// Scan the inbox and apply categorization once. Runs regardless of the
-/// `enabled` flag (the worker gates on `enabled`; manual "Run now" does not).
-pub async fn run_once(state: &AppState) -> Result<RunSummary> {
+/// Scan one user's inbox and apply categorization once. Runs regardless of
+/// the `enabled` flag (the worker gates on `enabled`; manual "Run now" does not).
+pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
     use std::sync::atomic::Ordering;
 
     // Acquire the single-run lock; bail if another run is already in flight.
@@ -139,7 +150,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
     }
     let _guard = Guard;
 
-    let cfg = get_config(&state.db).await?;
+    let cfg = get_config(&state.db, user_id).await?;
 
     let provider = resolve_provider(state, &cfg.provider).await?;
 
@@ -147,6 +158,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
     let top = cfg.batch_limit.clamp(1, 50).to_string();
     let inbox = email::graph_get(
         state,
+        user_id,
         &format!("{GRAPH}/me/mailFolders/inbox/messages"),
         &[
             ("$select", "id,subject,from,bodyPreview,receivedDateTime,isRead"),
@@ -158,7 +170,8 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
 
     let messages = inbox["value"].as_array().cloned().unwrap_or_default();
 
-    let mut st: PersistState = db::settings::get(&state.db, STATE_KEY).await?.unwrap_or_default();
+    let mut st: PersistState =
+        db::settings::get(&state.db, &state_key(user_id)).await?.unwrap_or_default();
     let seen: std::collections::HashSet<&str> =
         st.processed_ids.iter().map(String::as_str).collect();
 
@@ -224,7 +237,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
         match category.as_str() {
             "attention" | "none" | "" => {
                 if category == "attention" {
-                    match email::flag_message(state, id).await {
+                    match email::flag_message(state, user_id, id).await {
                         Ok(()) => {
                             summary.flagged += 1;
                             log_event(state, "info", format!("Flagged: {subject}"));
@@ -243,7 +256,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
                 // Resolve (and cache) the destination folder id.
                 let folder_id = match folder_ids.get(folder_name) {
                     Some(fid) => fid.clone(),
-                    None => match email::ensure_folder(state, folder_name).await {
+                    None => match email::ensure_folder(state, user_id, folder_name).await {
                         Ok(fid) => {
                             folder_ids.insert(folder_name, fid.clone());
                             fid
@@ -255,7 +268,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
                         }
                     },
                 };
-                match email::move_message(state, id, &folder_id).await {
+                match email::move_message(state, user_id, id, &folder_id).await {
                     Ok(()) => {
                         summary.moved += 1;
                         log_event(state, "info", format!("Moved to {folder_name}: {subject}"));
@@ -276,7 +289,7 @@ pub async fn run_once(state: &AppState) -> Result<RunSummary> {
     while st.processed_ids.len() > MAX_PROCESSED {
         st.processed_ids.pop_front();
     }
-    db::settings::set(&state.db, STATE_KEY, &st).await?;
+    db::settings::set(&state.db, &state_key(user_id), &st).await?;
 
     summary.message = format!(
         "Scanned {}, moved {}, flagged {}, left {}.",
@@ -339,23 +352,33 @@ fn log_event(state: &AppState, level: &str, message: String) {
 pub fn spawn_worker(state: Arc<AppState>) {
     tokio::spawn(async move {
         loop {
-            let cfg = get_config(&state.db).await.unwrap_or_default();
-            let interval = cfg.interval_secs.max(60);
+            // Iterate every account: each user has their own config, mailbox
+            // connection, and processed-id state. The shortest enabled
+            // interval drives the loop cadence.
+            let users = crate::db::auth::list_users(&state.db).await.unwrap_or_default();
+            let mut next_interval: u64 = 300;
 
-            if cfg.enabled {
-                match run_once(&state).await {
+            for user in &users {
+                let cfg = get_config(&state.db, &user.id).await.unwrap_or_default();
+                if !cfg.enabled {
+                    continue;
+                }
+                next_interval = next_interval.min(cfg.interval_secs.max(60));
+                match run_once(&state, &user.id).await {
                     Ok(s) if s.scanned > 0 => {
-                        tracing::info!("categorizer: {}", s.message);
+                        tracing::info!("categorizer[{}]: {}", user.username, s.message);
                     }
                     Ok(_) => {}
+                    // not_connected just means this user hasn't linked a mailbox.
+                    Err(e) if e.to_string().contains("not_connected") => {}
                     Err(e) => {
-                        tracing::warn!("categorizer run failed: {e}");
-                        log_event(&state, "error", format!("Run failed: {e}"));
+                        tracing::warn!("categorizer run failed for {}: {e}", user.username);
+                        log_event(&state, "error", format!("Run failed ({}): {e}", user.username));
                     }
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(interval)).await;
+            tokio::time::sleep(Duration::from_secs(next_interval)).await;
         }
     });
 }

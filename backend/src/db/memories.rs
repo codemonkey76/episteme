@@ -17,6 +17,7 @@ pub struct Memory {
 
 pub async fn insert(
     pool: &SqlitePool,
+    user_id: &str,
     content: &str,
     category: &str,
     source: &str,
@@ -25,10 +26,11 @@ pub async fn insert(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO memories (id, content, category, source, session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memories (id, user_id, content, category, source, session_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(user_id)
     .bind(content)
     .bind(category)
     .bind(source)
@@ -53,19 +55,21 @@ pub async fn insert(
 /// substring. Mirrors the dynamic-WHERE approach in `db::logs::list`.
 pub async fn list(
     pool: &SqlitePool,
+    user_id: &str,
     category: Option<&str>,
     q: Option<&str>,
     limit: i64,
 ) -> Result<Vec<Memory>> {
     let mut sql = String::from(
         "SELECT id, content, category, source, session_id, created_at, updated_at
-         FROM memories WHERE 1=1",
+         FROM memories WHERE user_id = ?",
     );
     if category.is_some() { sql.push_str(" AND category = ?"); }
     if q.is_some()        { sql.push_str(" AND content LIKE ?"); }
     sql.push_str(" ORDER BY created_at DESC LIMIT ?");
 
     let mut qb = sqlx::query_as::<_, Memory>(&sql);
+    qb = qb.bind(user_id);
     if let Some(c) = category { qb = qb.bind(c.to_string()); }
     if let Some(s) = q        { qb = qb.bind(format!("%{s}%")); }
     qb = qb.bind(limit);
@@ -74,27 +78,35 @@ pub async fn list(
 }
 
 /// Newest `limit` memories — used to build the system-prompt injection.
-pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Memory>> {
-    list(pool, None, None, limit).await
+pub async fn list_recent(pool: &SqlitePool, user_id: &str, limit: i64) -> Result<Vec<Memory>> {
+    list(pool, user_id, None, None, limit).await
 }
 
-pub async fn update(pool: &SqlitePool, id: &str, content: &str, category: &str) -> Result<()> {
+pub async fn update(
+    pool: &SqlitePool,
+    user_id: &str,
+    id: &str,
+    content: &str,
+    category: &str,
+) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "UPDATE memories SET content = ?, category = ?, updated_at = ? WHERE id = ?",
+        "UPDATE memories SET content = ?, category = ?, updated_at = ? WHERE id = ? AND user_id = ?",
     )
     .bind(content)
     .bind(category)
     .bind(&now)
     .bind(id)
+    .bind(user_id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM memories WHERE id = ?")
+pub async fn delete(pool: &SqlitePool, user_id: &str, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM memories WHERE id = ? AND user_id = ?")
         .bind(id)
+        .bind(user_id)
         .execute(pool)
         .await?;
     Ok(())

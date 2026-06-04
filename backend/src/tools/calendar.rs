@@ -61,7 +61,7 @@ pub fn handles(name: &str) -> bool {
     )
 }
 
-pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value> {
+pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
     match name {
         "list_calendar_events" => {
             let start = match args["start"].as_str() {
@@ -79,9 +79,9 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
                     start + Duration::days(days)
                 }
             };
-            let events = calendar::list_events(state, start, end).await?;
+            let events = calendar::list_events(state, user_id, start, end).await?;
             // Localize times for the model — it should never see UTC.
-            let tz = state.home_tz().await;
+            let tz = state.home_tz(user_id).await;
             let events: Vec<Value> = events
                 .into_iter()
                 .map(|e| localize_event(serde_json::to_value(e).unwrap_or_default(), tz))
@@ -106,9 +106,9 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
                 body: args["body"].as_str().map(str::to_string),
                 reminder_minutes_before: args["reminder_minutes_before"].as_i64(),
             };
-            let created = calendar::create_event(state, ev).await?;
+            let created = calendar::create_event(state, user_id, ev).await?;
             // Echo the result in local time so the model confirms correctly.
-            let tz = state.home_tz().await;
+            let tz = state.home_tz(user_id).await;
             let created = localize_event(serde_json::to_value(created).unwrap_or_default(), tz);
             Ok(json!({ "created": created }))
         }
@@ -116,7 +116,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             let id = args["event_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("event_id is required"))?;
-            calendar::delete_event(state, id).await?;
+            calendar::delete_event(state, user_id, id).await?;
             Ok(json!({ "deleted": id }))
         }
         other => Err(anyhow!("unknown calendar tool '{other}'")),

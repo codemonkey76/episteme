@@ -5,16 +5,20 @@ use axum::{
 };
 use std::sync::Arc;
 
+use axum::Extension;
+
 use crate::calendar::{self, NewEvent};
 use crate::db;
 use crate::error::{AppError, AppResult};
+use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
 // GET /api/suggestions
 pub async fn list_pending(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let suggestions = db::suggestions::list_pending(&state.db)
+    let suggestions = db::suggestions::list_pending(&state.db, &user.id)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(serde_json::json!({ "suggestions": suggestions })))
@@ -23,9 +27,10 @@ pub async fn list_pending(
 // POST /api/suggestions/:id/accept — create the task/event, resolve the row.
 pub async fn accept(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let s = db::suggestions::get(&state.db, &id)
+    let s = db::suggestions::get(&state.db, &user.id, &id)
         .await
         .map_err(AppError::Internal)?
         .ok_or(AppError::NotFound)?;
@@ -40,6 +45,7 @@ pub async fn accept(
         })?;
         let ev = calendar::create_event(
             &state,
+            &user.id,
             NewEvent {
                 subject: s.title.clone(),
                 start,
@@ -56,6 +62,7 @@ pub async fn accept(
     } else {
         let task = db::tasks::insert(
             &state.db,
+            &user.id,
             &s.title,
             s.context.as_deref(),
             s.start_at.as_deref(),
@@ -66,7 +73,7 @@ pub async fn accept(
         serde_json::json!({ "kind": "task", "task": task })
     };
 
-    db::suggestions::resolve(&state.db, &id, "accepted")
+    db::suggestions::resolve(&state.db, &user.id, &id, "accepted")
         .await
         .map_err(AppError::Internal)?;
     state
@@ -78,9 +85,10 @@ pub async fn accept(
 // POST /api/suggestions/:id/dismiss
 pub async fn dismiss(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    db::suggestions::resolve(&state.db, &id, "dismissed")
+    db::suggestions::resolve(&state.db, &user.id, &id, "dismissed")
         .await
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)

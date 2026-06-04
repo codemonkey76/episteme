@@ -28,6 +28,7 @@ pub struct TaskPatch {
 
 pub async fn insert(
     pool: &SqlitePool,
+    user_id: &str,
     title: &str,
     notes: Option<&str>,
     due_at: Option<&str>,
@@ -36,10 +37,11 @@ pub async fn insert(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO tasks (id, title, notes, due_at, priority, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+        "INSERT INTO tasks (id, user_id, title, notes, due_at, priority, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
     )
     .bind(&id)
+    .bind(user_id)
     .bind(title)
     .bind(notes)
     .bind(due_at)
@@ -65,13 +67,14 @@ pub async fn insert(
 /// then newest created. Optional status filter and title/notes substring.
 pub async fn list(
     pool: &SqlitePool,
+    user_id: &str,
     status: Option<&str>,
     q: Option<&str>,
     limit: i64,
 ) -> Result<Vec<Task>> {
     let mut sql = String::from(
         "SELECT id, title, notes, due_at, priority, status, created_at, updated_at
-         FROM tasks WHERE 1=1",
+         FROM tasks WHERE user_id = ?",
     );
     if status.is_some() { sql.push_str(" AND status = ?"); }
     if q.is_some()      { sql.push_str(" AND (title LIKE ? OR notes LIKE ?)"); }
@@ -81,6 +84,7 @@ pub async fn list(
     );
 
     let mut qb = sqlx::query_as::<_, Task>(&sql);
+    qb = qb.bind(user_id);
     if let Some(s) = status { qb = qb.bind(s.to_string()); }
     if let Some(s) = q {
         let like = format!("%{s}%");
@@ -91,19 +95,25 @@ pub async fn list(
     Ok(qb.fetch_all(pool).await?)
 }
 
-pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<Task>> {
+pub async fn get(pool: &SqlitePool, user_id: &str, id: &str) -> Result<Option<Task>> {
     Ok(sqlx::query_as::<_, Task>(
         "SELECT id, title, notes, due_at, priority, status, created_at, updated_at
-         FROM tasks WHERE id = ?",
+         FROM tasks WHERE id = ? AND user_id = ?",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(pool)
     .await?)
 }
 
 /// Apply a partial update and return the resulting row (None if id unknown).
-pub async fn update(pool: &SqlitePool, id: &str, patch: TaskPatch) -> Result<Option<Task>> {
-    let Some(mut task) = get(pool, id).await? else {
+pub async fn update(
+    pool: &SqlitePool,
+    user_id: &str,
+    id: &str,
+    patch: TaskPatch,
+) -> Result<Option<Task>> {
+    let Some(mut task) = get(pool, user_id, id).await? else {
         return Ok(None);
     };
     if let Some(t) = patch.title { task.title = t; }
@@ -129,9 +139,10 @@ pub async fn update(pool: &SqlitePool, id: &str, patch: TaskPatch) -> Result<Opt
     Ok(Some(task))
 }
 
-pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM tasks WHERE id = ?")
+pub async fn delete(pool: &SqlitePool, user_id: &str, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM tasks WHERE id = ? AND user_id = ?")
         .bind(id)
+        .bind(user_id)
         .execute(pool)
         .await?;
     Ok(())

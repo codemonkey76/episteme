@@ -21,6 +21,7 @@ pub enum AgentEvent {
 /// Run one agent turn for the given session, streaming `AgentEvent`s through `tx`.
 pub async fn run_turn(
     state: Arc<AppState>,
+    user_id: String,
     session_id: String,
     provider: ProviderConfig,
     tx: mpsc::Sender<AgentEvent>,
@@ -57,9 +58,9 @@ pub async fn run_turn(
         .unwrap_or_default();
 
     // Prepend stored memories so the model has cross-session context.
-    crate::memory::inject(&mut history, &state.db).await;
+    crate::memory::inject(&mut history, &state.db, &user_id).await;
     // Then the tool/date preamble at the very front.
-    history.insert(0, crate::tools::system_preamble(&state).await);
+    history.insert(0, crate::tools::system_preamble(&state, &user_id).await);
 
     // Per-tool approval policies (tool name → "ask"); absent = auto-execute.
     let policies: std::collections::HashMap<String, String> =
@@ -164,8 +165,10 @@ pub async fn run_turn(
                 let st = Arc::clone(&state);
                 let prov = provider.clone();
                 let sess = session_id.clone();
+                let uid = user_id.clone();
                 tokio::spawn(async move {
-                    crate::memory::extract(&st, prov, user_text, assistant_text, Some(sess)).await;
+                    crate::memory::extract(&st, &uid, prov, user_text, assistant_text, Some(sess))
+                        .await;
                 });
                 return Ok(());
             }
@@ -225,7 +228,8 @@ pub async fn run_turn(
                     let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
                     let result = if crate::tools::is_native(&call.fn_name) {
-                        crate::tools::execute(&state, &call.fn_name, call.fn_arguments.clone()).await
+                        crate::tools::execute(&state, &user_id, &call.fn_name, call.fn_arguments.clone())
+                            .await
                     } else {
                         // Resolve the peer under the lock, but run the (possibly
                         // slow) tool call without holding it.

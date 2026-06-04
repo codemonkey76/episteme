@@ -86,11 +86,11 @@ fn snippet(content: &str) -> String {
     }
 }
 
-pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value> {
+pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
     match name {
         "list_notes" => {
             let q = args["q"].as_str().filter(|s| !s.is_empty());
-            let notes = db::notes::list(&state.db, q, 100).await?;
+            let notes = db::notes::list(&state.db, user_id, q, 100).await?;
             let notes: Vec<Value> = notes
                 .iter()
                 .map(|n| {
@@ -108,7 +108,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             let id = args["note_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("note_id is required"))?;
-            let note = db::notes::get(&state.db, id)
+            let note = db::notes::get(&state.db, user_id, id)
                 .await?
                 .ok_or_else(|| anyhow!("no note with id '{id}'"))?;
             Ok(serde_json::to_value(note)?)
@@ -120,7 +120,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             let content = args["content"]
                 .as_str()
                 .ok_or_else(|| anyhow!("content is required"))?;
-            let note = db::notes::insert(&state.db, title, content).await?;
+            let note = db::notes::insert(&state.db, user_id, title, content).await?;
             Ok(json!({ "created": note }))
         }
         "update_note" => {
@@ -128,7 +128,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
                 .as_str()
                 .ok_or_else(|| anyhow!("note_id is required"))?;
             let content = if let Some(extra) = args["append"].as_str().filter(|s| !s.is_empty()) {
-                let existing = db::notes::get(&state.db, id)
+                let existing = db::notes::get(&state.db, user_id, id)
                     .await?
                     .ok_or_else(|| anyhow!("no note with id '{id}'"))?;
                 Some(format!("{}\n\n{extra}", existing.content.trim_end()))
@@ -137,6 +137,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             };
             let note = db::notes::update(
                 &state.db,
+                user_id,
                 id,
                 args["title"].as_str().map(str::to_string),
                 content,
@@ -149,7 +150,7 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
             let id = args["note_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("note_id is required"))?;
-            db::notes::delete(&state.db, id).await?;
+            db::notes::delete(&state.db, user_id, id).await?;
             Ok(json!({ "deleted": id }))
         }
         other => Err(anyhow!("unknown note tool '{other}'")),

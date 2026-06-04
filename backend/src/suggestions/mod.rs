@@ -102,6 +102,7 @@ fn parse(raw: &str) -> anyhow::Result<Vec<Detected>> {
 /// ("I'll get this done tonight") resolve to something specific.
 pub async fn detect_commitments(
     state: &AppState,
+    user_id: &str,
     provider: ProviderConfig,
     body: String,
     context: String,
@@ -111,7 +112,7 @@ pub async fn detect_commitments(
         return;
     }
 
-    let tz = state.home_tz().await;
+    let tz = state.home_tz(user_id).await;
     let now = Utc::now().with_timezone(&tz);
     let body_capped: String = body.chars().take(BODY_LIMIT).collect();
     let replied = reply_context
@@ -172,6 +173,7 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
 
         match db::suggestions::insert(
             &state.db,
+            user_id,
             kind,
             title,
             start_at.as_deref(),

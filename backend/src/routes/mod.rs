@@ -21,6 +21,7 @@ mod memories;
 mod tasks;
 mod notes;
 mod suggestions;
+mod users;
 mod sessions;
 mod settings;
 
@@ -38,7 +39,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
-        .route("/api/auth/logout", post(auth::logout));
+        .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/invite/:code", get(auth::check_invite))
+        .route("/api/auth/register", post(auth::register));
 
     // Everything else requires a valid session cookie.
     let protected = Router::new()
@@ -70,10 +73,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/integrations/email/config", delete(integrations::disconnect))
         .route("/api/integrations/email/connect", get(integrations::connect))
         .route("/api/integrations/email/callback", get(integrations::callback))
-        .route("/api/logs", post(logs::create))
-        .route("/api/logs", get(logs::list))
-        .route("/api/logs", delete(logs::clear))
-        .route("/api/logs/stream", get(logs::stream))
         .route("/api/email/folders", get(email::list_folders))
         .route("/api/email/folders/:id/messages", get(email::list_messages))
         .route("/api/email/search", get(email::search_messages))
@@ -108,8 +107,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/calendar/events/:id", delete(calendar::delete_event))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
+    // Admin-only management routes (auth + role check).
+    let admin = Router::new()
+        // Logs are instance-wide (every user's activity) — admin only.
+        .route("/api/logs", post(logs::create))
+        .route("/api/logs", get(logs::list))
+        .route("/api/logs", delete(logs::clear))
+        .route("/api/logs/stream", get(logs::stream))
+        .route("/api/users", get(users::list))
+        .route("/api/users/:id/disable", post(users::disable))
+        .route("/api/users/:id/enable", post(users::enable))
+        .route("/api/users/:id", delete(users::delete))
+        .route("/api/admin/invites", post(users::create_invite))
+        .route("/api/admin/invites", get(users::list_invites))
+        .route("/api/admin/invites/:code", delete(users::revoke_invite))
+        .route_layer(middleware::from_fn(auth::require_admin))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
+
     public
         .merge(protected)
+        .merge(admin)
         .layer(cors)
         .with_state(state)
         .fallback_service(

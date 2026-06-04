@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
     let pool = db::init(&db_url).await?;
 
     let state = Arc::new(AppState::new(pool));
+    integrations::microsoft::migrate_legacy(&state).await;
     categorizer::spawn_worker(state.clone());
     spawn_mcp_connect(state.clone());
     let app = routes::router(state);

@@ -36,15 +36,15 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
 }
 
 /// Execute a native tool, returning a JSON result for the model.
-pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value> {
+pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
     if calendar::handles(name) {
-        return calendar::execute(state, name, args).await;
+        return calendar::execute(state, user_id, name, args).await;
     }
     if tasks::handles(name) {
-        return tasks::execute(state, name, args).await;
+        return tasks::execute(state, user_id, name, args).await;
     }
     if notes::handles(name) {
-        return notes::execute(state, name, args).await;
+        return notes::execute(state, user_id, name, args).await;
     }
     Err(anyhow!("unknown native tool '{name}'"))
 }
@@ -52,8 +52,8 @@ pub async fn execute(state: &AppState, name: &str, args: Value) -> Result<Value>
 /// A system message giving the model fully resolved local "now" (weekday,
 /// date, time, offset) plus tool guidance — so it never has to do timezone
 /// or day-of-week arithmetic itself.
-pub async fn system_preamble(state: &AppState) -> ChatMessage {
-    let tz = state.home_tz().await;
+pub async fn system_preamble(state: &AppState, user_id: &str) -> ChatMessage {
+    let tz = state.home_tz(user_id).await;
     let now = Utc::now().with_timezone(&tz);
     let text = format!(
         "You are a helpful assistant with access to the user's Microsoft 365 calendar, \

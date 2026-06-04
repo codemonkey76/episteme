@@ -562,10 +562,53 @@ export interface AuthStatus {
   setup_required: boolean
   authenticated: boolean
   username: string | null
+  role: 'admin' | 'member' | null
+}
+
+export interface UserAccount {
+  id: string
+  username: string
+  role: 'admin' | 'member'
+  status: 'active' | 'disabled'
+  created_at: string
+}
+
+export interface Invite {
+  code: string
+  label: string
+  created_at: string
+  expires_at: string
+  used_by: string | null
+  used_at: string | null
+}
+
+export const users = {
+  list: () => json<{ users: UserAccount[] }>('/users'),
+  disable: (id: string) => fetch(BASE + `/users/${id}/disable`, { method: 'POST' }),
+  enable: (id: string) => fetch(BASE + `/users/${id}/enable`, { method: 'POST' }),
+  remove: (id: string) => fetch(BASE + `/users/${id}`, { method: 'DELETE' }),
+}
+
+export const invites = {
+  create: (label: string) =>
+    json<{ invite: Invite }>('/admin/invites', {
+      method: 'POST',
+      body: JSON.stringify({ label }),
+    }),
+  list: () => json<{ invites: Invite[] }>('/admin/invites'),
+  revoke: (code: string) =>
+    fetch(BASE + `/admin/invites/${code}`, { method: 'DELETE' }),
 }
 
 export const auth = {
   status: () => json<AuthStatus>('/auth/status'),
+  checkInvite: (code: string) =>
+    json<{ valid: boolean; label: string | null }>(`/auth/invite/${encodeURIComponent(code)}`),
+  register: (code: string, username: string, password: string) =>
+    json<{ ok: true; username: string }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ code, username, password }),
+    }),
   setup: (username: string, password: string) =>
     json<{ ok: true; username: string }>('/auth/setup', {
       method: 'POST',

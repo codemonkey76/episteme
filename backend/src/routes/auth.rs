@@ -110,6 +110,14 @@ pub async fn require_auth(
     AppError::Unauthorized("authentication required".into()).into_response()
 }
 
+/// Layered after `require_auth` on admin-only routes.
+pub async fn require_admin(req: Request, next: Next) -> Response {
+    match req.extensions().get::<CurrentUser>() {
+        Some(CurrentUser(user)) if user.is_admin() => next.run(req).await,
+        _ => AppError::Unauthorized("admin access required".into()).into_response(),
+    }
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 /// Public: tells the frontend whether to show setup, login, or the app.
@@ -121,11 +129,13 @@ pub async fn status(
 
     let mut authenticated = false;
     let mut username = None;
+    let mut role = None;
     if let Some(token) = jar.get(COOKIE_NAME).map(|c| c.value().to_string()) {
         let now = Utc::now().to_rfc3339();
         if let Ok(Some(user)) = db::auth::session_user(&state.db, &token, &now).await {
             authenticated = true;
             username = Some(user.username);
+            role = Some(user.role);
         }
     }
 
@@ -133,6 +143,7 @@ pub async fn status(
         "setup_required": setup_required,
         "authenticated": authenticated,
         "username": username,
+        "role": role,
     })))
 }
 
@@ -163,7 +174,70 @@ pub async fn setup(
 
     let id = Uuid::new_v4().to_string();
     let hash = hash_password(&body.password)?;
-    db::auth::create_user(&state.db, &id, username, &hash, &Utc::now().to_rfc3339()).await?;
+    db::auth::create_user(&state.db, &id, username, &hash, &Utc::now().to_rfc3339(), "admin")
+        .await?;
+
+    let cookie = start_session(&state, &id).await?;
+    Ok((jar.add(cookie), Json(json!({ "ok": true, "username": username }))))
+}
+
+/// Public: is this invite code redeemable? Lets the register page show the
+/// form (with the label as a greeting) or a clear invalid/expired message.
+pub async fn check_invite(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(code): axum::extract::Path<String>,
+) -> AppResult<Json<Value>> {
+    let invite = db::invites::get_valid(&state.db, &code).await?;
+    Ok(Json(json!({
+        "valid": invite.is_some(),
+        "label": invite.map(|i| i.label),
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct RegisterBody {
+    code: String,
+    username: String,
+    password: String,
+}
+
+/// Public: redeem a single-use invite — the invite is the approval, so the
+/// account is active immediately and a session starts right away.
+pub async fn register(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    Json(body): Json<RegisterBody>,
+) -> AppResult<(CookieJar, Json<Value>)> {
+    let username = body.username.trim();
+    if username.is_empty() {
+        return Err(AppError::BadRequest("username is required".into()));
+    }
+    if body.password.len() < MIN_PASSWORD_LEN {
+        return Err(AppError::BadRequest(format!(
+            "password must be at least {MIN_PASSWORD_LEN} characters"
+        )));
+    }
+    if db::auth::get_user_by_username(&state.db, username).await?.is_some() {
+        return Err(AppError::Conflict("that username is taken".into()));
+    }
+    // Validate before creating; claim atomically after, so a racing second
+    // registration on the same code can't slip through.
+    if db::invites::get_valid(&state.db, &body.code).await?.is_none() {
+        return Err(AppError::Unauthorized("invite code is invalid or expired".into()));
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let hash = hash_password(&body.password)?;
+    db::auth::create_user(&state.db, &id, username, &hash, &Utc::now().to_rfc3339(), "member")
+        .await?;
+    if !db::invites::mark_used(&state.db, &body.code, &id).await? {
+        // Lost the race — roll the account back.
+        let _ = db::auth::delete_user(&state.db, &id).await;
+        return Err(AppError::Unauthorized("invite code is invalid or expired".into()));
+    }
+    state
+        .log("auth", "info", format!("invite redeemed: {username} joined"))
+        .await;
 
     let cookie = start_session(&state, &id).await?;
     Ok((jar.add(cookie), Json(json!({ "ok": true, "username": username }))))
@@ -193,6 +267,9 @@ pub async fn login(
         return Err(AppError::Unauthorized("invalid username or password".into()));
     }
     let user = user.expect("ok implies user exists");
+    if user.status != "active" {
+        return Err(AppError::Unauthorized("this account is disabled".into()));
+    }
 
     let cookie = start_session(&state, &user.id).await?;
     Ok((jar.add(cookie), Json(json!({ "ok": true, "username": user.username }))))

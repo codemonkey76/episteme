@@ -6,8 +6,11 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
+use axum::Extension;
+
 use crate::db::{self, tasks::TaskPatch};
 use crate::error::{AppError, AppResult};
+use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
 const PRIORITIES: [&str; 3] = ["low", "normal", "high"];
@@ -34,6 +37,7 @@ pub struct ListQuery {
 // GET /api/tasks?status=&q=&limit=
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Query(params): Query<ListQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
     // Treat "all" / empty as no filter.
@@ -42,7 +46,7 @@ pub async fn list(
         .as_deref()
         .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("all"));
     let q = params.q.as_deref().filter(|s| !s.is_empty());
-    let tasks = db::tasks::list(&state.db, status, q, params.limit.unwrap_or(500))
+    let tasks = db::tasks::list(&state.db, &user.id, status, q, params.limit.unwrap_or(500))
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(serde_json::json!({ "tasks": tasks })))
@@ -59,12 +63,14 @@ pub struct CreateTask {
 // POST /api/tasks
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<CreateTask>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
     let priority = body.priority.as_deref().unwrap_or("normal");
     validate(priority, &PRIORITIES, "priority")?;
     let task = db::tasks::insert(
         &state.db,
+        &user.id,
         &body.title,
         body.notes.as_deref(),
         body.due_at.as_deref(),
@@ -101,6 +107,7 @@ pub struct UpdateTask {
 // PUT /api/tasks/:id
 pub async fn update(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
     Json(body): Json<UpdateTask>,
 ) -> AppResult<Json<serde_json::Value>> {
@@ -117,7 +124,7 @@ pub async fn update(
         priority: body.priority,
         status: body.status,
     };
-    let task = db::tasks::update(&state.db, &id, patch)
+    let task = db::tasks::update(&state.db, &user.id, &id, patch)
         .await
         .map_err(AppError::Internal)?
         .ok_or(AppError::NotFound)?;
@@ -127,8 +134,9 @@ pub async fn update(
 // DELETE /api/tasks/:id
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    db::tasks::delete(&state.db, &id).await.map_err(AppError::Internal)?;
+    db::tasks::delete(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

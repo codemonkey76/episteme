@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
+import * as api from '../api'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -10,7 +11,18 @@ const confirm = ref('')
 const error = ref('')
 const busy = ref(false)
 
-const mode = computed(() => (auth.setupRequired ? 'setup' : 'login'))
+// Invite link: https://<domain>/?invite=<code> → registration mode.
+const inviteCode = ref(new URLSearchParams(window.location.search).get('invite') ?? '')
+const inviteState = ref<'none' | 'checking' | 'valid' | 'invalid'>(
+  inviteCode.value ? 'checking' : 'none',
+)
+const inviteLabel = ref('')
+
+const mode = computed(() => {
+  if (auth.setupRequired) return 'setup'
+  if (inviteState.value === 'valid' || inviteState.value === 'checking') return 'register'
+  return 'login'
+})
 
 onMounted(async () => {
   auth.register()
@@ -20,11 +32,23 @@ onMounted(async () => {
     // Network/backend down — show the login form rather than a blank page.
     auth.loaded = true
   }
+  if (inviteCode.value && !auth.authenticated) {
+    try {
+      const res = await api.auth.checkInvite(inviteCode.value)
+      inviteState.value = res.valid ? 'valid' : 'invalid'
+      inviteLabel.value = res.label ?? ''
+    } catch {
+      inviteState.value = 'invalid'
+    }
+    if (inviteState.value === 'invalid') {
+      error.value = 'This invite link is invalid or has expired — ask for a new one.'
+    }
+  }
 })
 
 async function submit() {
   error.value = ''
-  if (mode.value === 'setup') {
+  if (mode.value === 'setup' || mode.value === 'register') {
     if (password.value.length < 8) {
       error.value = 'Password must be at least 8 characters.'
       return
@@ -38,6 +62,10 @@ async function submit() {
   try {
     if (mode.value === 'setup') {
       await auth.setup(username.value.trim(), password.value)
+    } else if (mode.value === 'register') {
+      await auth.registerWithInvite(inviteCode.value, username.value.trim(), password.value)
+      // Drop the invite param so a refresh lands on the app, not the form.
+      window.history.replaceState({}, '', '/')
     } else {
       await auth.login(username.value.trim(), password.value)
     }
@@ -68,12 +96,14 @@ async function submit() {
     >
       <div class="flex flex-col gap-1">
         <h1 class="text-[1.05rem] font-semibold text-fg">
-          {{ mode === 'setup' ? 'Create your account' : 'Sign in' }}
+          {{ mode === 'setup' ? 'Create your account' : mode === 'register' ? 'Join Episteme' : 'Sign in' }}
         </h1>
         <p class="text-[0.78rem] text-[#707070]">
           {{ mode === 'setup'
             ? 'Set the admin username and password for this Episteme instance.'
-            : 'Enter your credentials to continue.' }}
+            : mode === 'register'
+              ? (inviteLabel ? `You've been invited (“${inviteLabel}”) — pick a username and password.` : 'You\'ve been invited — pick a username and password.')
+              : 'Enter your credentials to continue.' }}
         </p>
       </div>
 
@@ -93,13 +123,13 @@ async function submit() {
         <input
           v-model="password"
           type="password"
-          :autocomplete="mode === 'setup' ? 'new-password' : 'current-password'"
+          :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
           required
           class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[#3a6adf] focus:outline-none"
         />
       </label>
 
-      <label v-if="mode === 'setup'" class="flex flex-col gap-1 text-[0.775rem] text-muted">
+      <label v-if="mode === 'setup' || mode === 'register'" class="flex flex-col gap-1 text-[0.775rem] text-muted">
         Confirm password
         <input
           v-model="confirm"
@@ -117,7 +147,7 @@ async function submit() {
         :disabled="busy"
         class="mt-1 rounded-md border border-[#2a4a8a] bg-[#1e3a6e] px-3 py-2 text-[0.85rem] text-[#7ab0ff] transition-[background] duration-[120ms] hover:bg-[#254880] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {{ busy ? 'Please wait…' : mode === 'setup' ? 'Create account' : 'Sign in' }}
+        {{ busy ? 'Please wait…' : mode === 'setup' ? 'Create account' : mode === 'register' ? 'Join' : 'Sign in' }}
       </button>
     </form>
   </div>

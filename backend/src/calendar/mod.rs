@@ -52,10 +52,11 @@ fn graph_dt_to_rfc3339(v: &Value) -> String {
 /// recurring series). Times returned in UTC.
 pub async fn list_events(
     state: &AppState,
+    user_id: &str,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<Vec<CalendarEvent>> {
-    let token = microsoft::get_valid_token(state).await?;
+    let token = microsoft::get_valid_token(state, user_id).await?;
     let url = format!("{GRAPH}/me/calendarView");
 
     let response = state
@@ -115,7 +116,7 @@ pub struct NewEvent {
 
 /// Create an event. `start`/`end` are RFC3339 (offset honored); end defaults to
 /// one hour after start when omitted.
-pub async fn create_event(state: &AppState, ev: NewEvent) -> Result<CalendarEvent> {
+pub async fn create_event(state: &AppState, user_id: &str, ev: NewEvent) -> Result<CalendarEvent> {
     let start_utc = to_utc(&ev.start)?;
     let end_utc = match ev.end.as_deref() {
         Some(e) => to_utc(e)?,
@@ -141,7 +142,7 @@ pub async fn create_event(state: &AppState, ev: NewEvent) -> Result<CalendarEven
         payload["reminderMinutesBeforeStart"] = serde_json::json!(mins);
     }
 
-    let created = graph_post(state, &format!("{GRAPH}/me/events"), &payload)
+    let created = graph_post(state, user_id, &format!("{GRAPH}/me/events"), &payload)
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
 
@@ -156,8 +157,8 @@ pub async fn create_event(state: &AppState, ev: NewEvent) -> Result<CalendarEven
     })
 }
 
-pub async fn delete_event(state: &AppState, id: &str) -> Result<()> {
-    graph_delete(state, &format!("{GRAPH}/me/events/{id}"))
+pub async fn delete_event(state: &AppState, user_id: &str, id: &str) -> Result<()> {
+    graph_delete(state, user_id, &format!("{GRAPH}/me/events/{id}"))
         .await
         .map_err(|e| anyhow!(e.to_string()))
 }

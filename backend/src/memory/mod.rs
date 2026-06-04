@@ -24,8 +24,8 @@ const DEDUP_LIMIT: i64 = 200;
 const VALID_CATEGORIES: [&str; 6] = ["preference", "fact", "feedback", "project", "style", "other"];
 
 /// Prepend a system message listing stored memories, if any exist.
-pub async fn inject(history: &mut Vec<ChatMessage>, pool: &SqlitePool) {
-    let memories = match db::memories::list_recent(pool, INJECT_LIMIT).await {
+pub async fn inject(history: &mut Vec<ChatMessage>, pool: &SqlitePool, user_id: &str) {
+    let memories = match db::memories::list_recent(pool, user_id, INJECT_LIMIT).await {
         Ok(m) if !m.is_empty() => m,
         _ => return,
     };
@@ -62,6 +62,7 @@ worth remembering, return [].";
 /// logged and swallowed — this must never affect the chat turn.
 pub async fn extract(
     state: &AppState,
+    user_id: &str,
     provider: ProviderConfig,
     user_text: String,
     assistant_text: String,
@@ -94,7 +95,7 @@ pub async fn extract(
             return;
         }
     };
-    save_extracted(state, items, session_id.as_deref(), None).await;
+    save_extracted(state, user_id, items, session_id.as_deref(), None).await;
 }
 
 /// Validate, dedup, and persist extracted memories. `force_category` pins
@@ -102,6 +103,7 @@ pub async fn extract(
 /// the model's per-item categorization.
 async fn save_extracted(
     state: &AppState,
+    user_id: &str,
     items: Vec<Extracted>,
     session_id: Option<&str>,
     force_category: Option<&str>,
@@ -111,7 +113,8 @@ async fn save_extracted(
     }
 
     // Pull recent memories once for dedup.
-    let existing = db::memories::list_recent(&state.db, DEDUP_LIMIT).await.unwrap_or_default();
+    let existing =
+        db::memories::list_recent(&state.db, user_id, DEDUP_LIMIT).await.unwrap_or_default();
 
     for item in items {
         let content = item.content.trim();
@@ -126,7 +129,7 @@ async fn save_extracted(
             None => normalize_category(&item.category),
         };
 
-        match db::memories::insert(&state.db, content, &category, "auto", session_id).await {
+        match db::memories::insert(&state.db, user_id, content, &category, "auto", session_id).await {
             Ok(_) => log_event(state, format!("Remembered [{category}]: {content}")),
             Err(e) => tracing::warn!("failed to save memory: {e}"),
         }
@@ -156,7 +159,13 @@ fn truncate_chars(s: &str, limit: usize) -> String {
 
 /// Best-effort extraction of writing-style lessons from an edited AI draft.
 /// Detached and swallowed like `extract` — must never affect the email send.
-pub async fn extract_style(state: &AppState, provider: ProviderConfig, draft: String, sent: String) {
+pub async fn extract_style(
+    state: &AppState,
+    user_id: &str,
+    provider: ProviderConfig,
+    draft: String,
+    sent: String,
+) {
     if draft.trim().is_empty() || draft.trim() == sent.trim() {
         return;
     }
@@ -186,7 +195,7 @@ pub async fn extract_style(state: &AppState, provider: ProviderConfig, draft: St
         }
     };
 
-    save_extracted(state, items, None, Some("style")).await;
+    save_extracted(state, user_id, items, None, Some("style")).await;
 }
 
 /// Extract the JSON array, tolerating code fences / surrounding prose.

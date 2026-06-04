@@ -13,8 +13,11 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Extension;
+
 use crate::agent::{self, AgentEvent};
 use crate::db;
+use crate::routes::auth::CurrentUser;
 use crate::error::{AppError, AppResult};
 use crate::integrations::microsoft;
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig, StreamChunk};
@@ -25,10 +28,11 @@ const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 
 pub async fn graph_get(
     state: &AppState,
+    user_id: &str,
     url: &str,
     params: &[(&str, &str)],
 ) -> AppResult<Value> {
-    let token = microsoft::get_valid_token(state)
+    let token = microsoft::get_valid_token(state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -61,8 +65,8 @@ pub async fn graph_get(
 
 /// POST a JSON body to Graph and return the parsed response. Used by the
 /// categorizer worker for folder creation and message moves.
-pub async fn graph_post(state: &AppState, url: &str, body: &Value) -> AppResult<Value> {
-    let token = microsoft::get_valid_token(state)
+pub async fn graph_post(state: &AppState, user_id: &str, url: &str, body: &Value) -> AppResult<Value> {
+    let token = microsoft::get_valid_token(state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -91,8 +95,8 @@ pub async fn graph_post(state: &AppState, url: &str, body: &Value) -> AppResult<
 }
 
 /// DELETE a Graph resource. Treats any 2xx as success.
-pub async fn graph_delete(state: &AppState, url: &str) -> AppResult<()> {
-    let token = microsoft::get_valid_token(state)
+pub async fn graph_delete(state: &AppState, user_id: &str, url: &str) -> AppResult<()> {
+    let token = microsoft::get_valid_token(state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -114,9 +118,10 @@ pub async fn graph_delete(state: &AppState, url: &str) -> AppResult<()> {
 
 /// Return the id of the mail folder named `name`, creating it under the mailbox
 /// root if it doesn't already exist. Matching is case-insensitive on displayName.
-pub async fn ensure_folder(state: &AppState, name: &str) -> AppResult<String> {
+pub async fn ensure_folder(state: &AppState, user_id: &str, name: &str) -> AppResult<String> {
     let existing = graph_get(
         state,
+        user_id,
         &format!("{GRAPH}/me/mailFolders"),
         &[("$top", "100"), ("$select", "id,displayName")],
     )
@@ -134,6 +139,7 @@ pub async fn ensure_folder(state: &AppState, name: &str) -> AppResult<String> {
 
     let created = graph_post(
         state,
+        user_id,
         &format!("{GRAPH}/me/mailFolders"),
         &serde_json::json!({ "displayName": name }),
     )
@@ -146,9 +152,10 @@ pub async fn ensure_folder(state: &AppState, name: &str) -> AppResult<String> {
 }
 
 /// Move a message into the destination folder.
-pub async fn move_message(state: &AppState, message_id: &str, dest_folder_id: &str) -> AppResult<()> {
+pub async fn move_message(state: &AppState, user_id: &str, message_id: &str, dest_folder_id: &str) -> AppResult<()> {
     graph_post(
         state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}/move"),
         &serde_json::json!({ "destinationId": dest_folder_id }),
     )
@@ -157,17 +164,17 @@ pub async fn move_message(state: &AppState, message_id: &str, dest_folder_id: &s
 }
 
 /// Set the follow-up flag on a message, leaving it in place.
-pub async fn flag_message(state: &AppState, message_id: &str) -> AppResult<()> {
-    set_flag_status(state, message_id, "flagged").await
+pub async fn flag_message(state: &AppState, user_id: &str, message_id: &str) -> AppResult<()> {
+    set_flag_status(state, user_id, message_id, "flagged").await
 }
 
 /// Mark a message's follow-up flag as completed (✓ in Outlook).
-pub async fn complete_flag(state: &AppState, message_id: &str) -> AppResult<()> {
-    set_flag_status(state, message_id, "complete").await
+pub async fn complete_flag(state: &AppState, user_id: &str, message_id: &str) -> AppResult<()> {
+    set_flag_status(state, user_id, message_id, "complete").await
 }
 
-async fn set_flag_status(state: &AppState, message_id: &str, status: &str) -> AppResult<()> {
-    let token = microsoft::get_valid_token(state)
+async fn set_flag_status(state: &AppState, user_id: &str, message_id: &str, status: &str) -> AppResult<()> {
+    let token = microsoft::get_valid_token(state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -191,10 +198,10 @@ async fn set_flag_status(state: &AppState, message_id: &str, status: &str) -> Ap
 /// flagged) and file it out of the Inbox into "Processed" so the inbox only
 /// holds mail still awaiting action. Detached, best-effort — failures log to
 /// the Logs window and never affect the send.
-async fn file_replied_message(state: Arc<AppState>, message_id: String) {
+async fn file_replied_message(state: Arc<AppState>, user_id: String, message_id: String) {
     // Only file mail that's actually in the Inbox — replying to something in
     // another folder (search results, sorted mail) shouldn't relocate it.
-    let _ = process_message(&state, &message_id, true).await;
+    let _ = process_message(&state, &user_id, &message_id, true).await;
 }
 
 /// Complete the follow-up flag (when flagged) and move the message to the
@@ -203,11 +210,13 @@ async fn file_replied_message(state: Arc<AppState>, message_id: String) {
 /// except Processed itself.
 async fn process_message(
     state: &Arc<AppState>,
+    user_id: &str,
     message_id: &str,
     inbox_only: bool,
 ) -> Result<(), ()> {
     let msg = match graph_get(
         state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}"),
         &[("$select", "parentFolderId,flag,subject")],
     )
@@ -224,13 +233,13 @@ async fn process_message(
     let subject = msg["subject"].as_str().unwrap_or("(no subject)").to_string();
 
     if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
-        match complete_flag(state, message_id).await {
+        match complete_flag(state, user_id, message_id).await {
             Ok(()) => state.log("email", "info", format!("Flag completed: {subject}")).await,
             Err(_) => state.log("email", "warn", format!("Flag completion failed: {subject}")).await,
         }
     }
 
-    let folder_id = match ensure_folder(state, "Processed").await {
+    let folder_id = match ensure_folder(state, user_id, "Processed").await {
         Ok(id) => id,
         Err(_) => {
             state.log("email", "warn", "filing: Processed folder unavailable").await;
@@ -244,6 +253,7 @@ async fn process_message(
     if inbox_only {
         let inbox = match graph_get(
             state,
+            user_id,
             &format!("{GRAPH}/me/mailFolders/inbox"),
             &[("$select", "id")],
         )
@@ -257,7 +267,7 @@ async fn process_message(
         }
     }
 
-    match move_message(state, message_id, &folder_id).await {
+    match move_message(state, user_id, message_id, &folder_id).await {
         Ok(()) => {
             state.log("email", "info", format!("Filed to Processed: {subject}")).await;
             Ok(())
@@ -273,18 +283,25 @@ async fn process_message(
 // the flag and file to Processed, regardless of current folder.
 pub async fn mark_done(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    process_message(&state, &message_id, false)
+    let user_id = user.id.as_str();
+    process_message(&state, user_id, &message_id, false)
         .await
         .map_err(|()| AppError::Internal(anyhow::anyhow!("filing failed — see Logs")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // GET /api/email/folders
-pub async fn list_folders(State(state): State<Arc<AppState>>) -> AppResult<Json<Value>> {
+pub async fn list_folders(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
     let res = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/mailFolders"),
         &[
             ("$top", "30"),
@@ -305,9 +322,11 @@ pub struct SearchQuery {
 
 pub async fn search_messages(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Query(params): Query<SearchQuery>,
 ) -> AppResult<Json<Value>> {
-    let token = microsoft::get_valid_token(&state)
+    let user_id = user.id.as_str();
+    let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -364,14 +383,17 @@ pub struct MessagesQuery {
 
 pub async fn list_messages(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(folder_id): Path<String>,
     Query(q): Query<MessagesQuery>,
 ) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
     let skip = q.skip.unwrap_or(0).to_string();
     let top = q.top.unwrap_or(30).min(50).to_string();
 
     let res = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/mailFolders/{folder_id}/messages"),
         &[
             ("$select", "id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag"),
@@ -390,10 +412,13 @@ pub async fn list_messages(
 // GET /api/email/messages/:id
 pub async fn get_message(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
     let res = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}"),
         &[("$select", "id,subject,from,toRecipients,ccRecipients,body,receivedDateTime,isRead,hasAttachments")],
     )
@@ -404,8 +429,10 @@ pub async fn get_message(
 // GET /api/email/messages/:id/attachments — metadata only (no bytes).
 pub async fn list_attachments(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
     // Only base `attachment` fields: `contentId` lives on the fileAttachment
     // subtype (selecting it 400s) and the default response includes the heavy
     // `contentBytes`. The frontend resolves inline `cid:` references by name
@@ -413,6 +440,7 @@ pub async fn list_attachments(
     // fallback over inline attachments for opaque OWA-style content-IDs.
     let res = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
@@ -424,9 +452,11 @@ pub async fn list_attachments(
 // through with their content type so the browser can render or download them.
 pub async fn get_attachment_raw(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path((message_id, att_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let token = microsoft::get_valid_token(&state)
+    let user_id = user.id.as_str();
+    let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -467,9 +497,11 @@ pub async fn get_attachment_raw(
 // PATCH /api/email/messages/:id/read
 pub async fn mark_read(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    let token = microsoft::get_valid_token(&state)
+    let user_id = user.id.as_str();
+    let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -524,9 +556,11 @@ fn recipients(addrs: &[String]) -> Vec<Value> {
 
 pub async fn send_email(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(payload): Json<SendBody>,
 ) -> AppResult<StatusCode> {
-    let token = microsoft::get_valid_token(&state)
+    let user_id = user.id.as_str();
+    let token = microsoft::get_valid_token(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
 
@@ -617,7 +651,7 @@ pub async fn send_email(
     //  - commitment detection on what was sent ("I'll do X on Saturday…")
     if let Some(id) = replied_id {
         let st = Arc::clone(&state);
-        tokio::spawn(file_replied_message(st, id));
+        tokio::spawn(file_replied_message(st, user.id.clone(), id));
     }
     if let Some(provider_name) = ai_provider {
         let providers: Vec<ProviderConfig> =
@@ -627,14 +661,17 @@ pub async fn send_email(
                 let st = Arc::clone(&state);
                 let prov = provider.clone();
                 let sent = sent_body.clone();
+                let uid = user.id.clone();
                 tokio::spawn(async move {
-                    crate::memory::extract_style(&st, prov, draft, sent).await;
+                    crate::memory::extract_style(&st, &uid, prov, draft, sent).await;
                 });
             }
             let st = Arc::clone(&state);
+            let uid = user.id.clone();
             tokio::spawn(async move {
                 crate::suggestions::detect_commitments(
                     &st,
+                    &uid,
                     provider,
                     sent_body,
                     send_context,
@@ -660,8 +697,10 @@ pub struct AiDraftBody {
 
 pub async fn ai_draft(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(payload): Json<AiDraftBody>,
 ) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let user_id = user.id.as_str();
     let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
         .await
         .map_err(AppError::Internal)?
@@ -682,7 +721,7 @@ tone, and directly address anything the email asks.",
     );
 
     // Apply style lessons learned from the user's past edits to AI drafts.
-    let style_memories = db::memories::list(&state.db, Some("style"), None, 20)
+    let style_memories = db::memories::list(&state.db, user_id, Some("style"), None, 20)
         .await
         .unwrap_or_default();
     if !style_memories.is_empty() {
@@ -759,9 +798,11 @@ const MAX_IMAGE_B64: usize = 5_000_000;
 // (body text + inline images) and stream the agent's advice.
 pub async fn advise(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
     Json(payload): Json<AdviseBody>,
 ) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let user_id = user.id.as_str();
     let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
         .await
         .map_err(AppError::Internal)?
@@ -774,6 +815,7 @@ pub async fn advise(
     // Message metadata + body.
     let msg = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}"),
         &[("$select", "subject,from,body")],
     )
@@ -791,6 +833,7 @@ pub async fn advise(
     // Inline images → base64 (Graph's contentBytes is already base64).
     let attachments = graph_get(
         &state,
+        user_id,
         &format!("{GRAPH}/me/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
@@ -810,6 +853,7 @@ pub async fn advise(
             // it 400s); the single-attachment GET returns it by default.
             let full = graph_get(
                 &state,
+                user_id,
                 &format!("{GRAPH}/me/messages/{message_id}/attachments/{att_id}"),
                 &[],
             )
@@ -847,7 +891,13 @@ pub async fn advise(
 
     // Stream the agent's reply, mirroring routes::chat::stream.
     let (tx, rx) = mpsc::channel::<AgentEvent>(64);
-    tokio::spawn(agent::run_turn(Arc::clone(&state), payload.session_id, provider, tx));
+    tokio::spawn(agent::run_turn(
+        Arc::clone(&state),
+        user.id.clone(),
+        payload.session_id,
+        provider,
+        tx,
+    ));
 
     let event_stream = stream::unfold(rx, |mut rx| async move {
         let event = match rx.recv().await? {
@@ -924,8 +974,10 @@ fn html_to_text(html: &str) -> String {
 // GET /api/email/categorizer
 pub async fn get_categorizer(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<crate::categorizer::CategorizerConfig>> {
-    let cfg = crate::categorizer::get_config(&state.db)
+    let user_id = user.id.as_str();
+    let cfg = crate::categorizer::get_config(&state.db, user_id)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(cfg))
@@ -934,9 +986,11 @@ pub async fn get_categorizer(
 // PUT /api/email/categorizer
 pub async fn put_categorizer(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(cfg): Json<crate::categorizer::CategorizerConfig>,
 ) -> AppResult<Json<crate::categorizer::CategorizerConfig>> {
-    crate::categorizer::set_config(&state.db, &cfg)
+    let user_id = user.id.as_str();
+    crate::categorizer::set_config(&state.db, user_id, &cfg)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(cfg))
@@ -945,8 +999,10 @@ pub async fn put_categorizer(
 // POST /api/email/categorizer/run — run categorization immediately.
 pub async fn run_categorizer(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<crate::categorizer::RunSummary>> {
-    let summary = crate::categorizer::run_once(&state)
+    let user_id = user.id.as_str();
+    let summary = crate::categorizer::run_once(&state, user_id)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(summary))

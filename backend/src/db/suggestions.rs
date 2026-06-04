@@ -19,6 +19,7 @@ pub struct Suggestion {
 
 pub async fn insert(
     pool: &SqlitePool,
+    user_id: &str,
     kind: &str,
     title: &str,
     start_at: Option<&str>,
@@ -28,10 +29,11 @@ pub async fn insert(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO suggestions (id, kind, title, start_at, end_at, context, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+        "INSERT INTO suggestions (id, user_id, kind, title, start_at, end_at, context, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
     )
     .bind(&id)
+    .bind(user_id)
     .bind(kind)
     .bind(title)
     .bind(start_at)
@@ -54,31 +56,34 @@ pub async fn insert(
     })
 }
 
-pub async fn list_pending(pool: &SqlitePool) -> Result<Vec<Suggestion>> {
+pub async fn list_pending(pool: &SqlitePool, user_id: &str) -> Result<Vec<Suggestion>> {
     Ok(sqlx::query_as::<_, Suggestion>(
         "SELECT id, kind, title, start_at, end_at, context, status, created_at, resolved_at
-         FROM suggestions WHERE status = 'pending' ORDER BY created_at ASC",
+         FROM suggestions WHERE status = 'pending' AND user_id = ? ORDER BY created_at ASC",
     )
+    .bind(user_id)
     .fetch_all(pool)
     .await?)
 }
 
-pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<Suggestion>> {
+pub async fn get(pool: &SqlitePool, user_id: &str, id: &str) -> Result<Option<Suggestion>> {
     Ok(sqlx::query_as::<_, Suggestion>(
         "SELECT id, kind, title, start_at, end_at, context, status, created_at, resolved_at
-         FROM suggestions WHERE id = ?",
+         FROM suggestions WHERE id = ? AND user_id = ?",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(pool)
     .await?)
 }
 
-pub async fn resolve(pool: &SqlitePool, id: &str, status: &str) -> Result<()> {
+pub async fn resolve(pool: &SqlitePool, user_id: &str, id: &str, status: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    sqlx::query("UPDATE suggestions SET status = ?, resolved_at = ? WHERE id = ?")
+    sqlx::query("UPDATE suggestions SET status = ?, resolved_at = ? WHERE id = ? AND user_id = ?")
         .bind(status)
         .bind(&now)
         .bind(id)
+        .bind(user_id)
         .execute(pool)
         .await?;
     Ok(())

@@ -7,7 +7,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::db;
+use axum::Extension;
+
 use crate::error::{AppError, AppResult};
+use crate::routes::auth::CurrentUser;
 use crate::mcp_host::McpServerConfig;
 use crate::model_router::ProviderConfig;
 use crate::state::AppState;
@@ -259,13 +262,15 @@ pub async fn set_tool_policy(
 
 pub async fn get_timezone(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<serde_json::Value>> {
     // `configured` distinguishes an explicit setting from the TZ-env/UTC
     // fallback, so the UI can auto-save a detected zone on first run.
-    let stored: Option<String> = db::settings::get(&state.db, "timezone")
-        .await
-        .map_err(AppError::Internal)?;
-    let tz = state.home_tz().await;
+    let stored: Option<String> =
+        db::settings::get(&state.db, &format!("timezone:{}", user.id))
+            .await
+            .map_err(AppError::Internal)?;
+    let tz = state.home_tz(&user.id).await;
     Ok(Json(serde_json::json!({
         "timezone": tz.name(),
         "configured": stored.is_some(),
@@ -279,6 +284,7 @@ pub struct TimezoneBody {
 
 pub async fn set_timezone(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<TimezoneBody>,
 ) -> AppResult<StatusCode> {
     // Validate before storing — an unparseable zone would silently fall back to UTC.
@@ -288,7 +294,7 @@ pub async fn set_timezone(
             body.timezone
         )));
     }
-    db::settings::set(&state.db, "timezone", &body.timezone)
+    db::settings::set(&state.db, &format!("timezone:{}", user.id), &body.timezone)
         .await
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)

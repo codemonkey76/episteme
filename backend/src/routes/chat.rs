@@ -12,8 +12,11 @@ use tokio::sync::mpsc;
 
 use crate::agent::{self, AgentEvent};
 use crate::db;
+use axum::Extension;
+
 use crate::error::{AppError, AppResult};
 use crate::model_router::ProviderConfig;
+use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -24,9 +27,15 @@ pub struct ChatRequest {
 
 pub async fn stream(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(session_id): Path<String>,
     Json(req): Json<ChatRequest>,
 ) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    // Ownership gate: the session must belong to the caller.
+    db::sessions::get(&state.db, &user.id, &session_id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or(AppError::NotFound)?;
     db::messages::insert(
         &state.db,
         &session_id,
@@ -58,7 +67,9 @@ pub async fn stream(
         tokio::spawn(async move {
             // Surface failures — a silently dropped Err here looks like a dead
             // stream to the client with no trace anywhere.
-            if let Err(e) = agent::run_turn(Arc::clone(&state), session_id, provider, tx).await {
+            if let Err(e) =
+                agent::run_turn(Arc::clone(&state), user.id.clone(), session_id, provider, tx).await
+            {
                 tracing::error!("agent turn failed: {e}");
                 state.log("agent", "error", format!("turn failed: {e}")).await;
             }

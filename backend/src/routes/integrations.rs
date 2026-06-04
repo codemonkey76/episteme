@@ -7,9 +7,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use axum::Extension;
+
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::integrations::microsoft::{MicrosoftEmailConfig, KEY_MICROSOFT_EMAIL};
+use crate::integrations::microsoft::{
+    self, MicrosoftAppConfig, MicrosoftUserTokens, KEY_MICROSOFT_APP,
+};
+use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
 const GRAPH_SCOPES: &str = "openid email profile offline_access \
@@ -52,120 +57,85 @@ fn redirect_uri_from_host(host: &str) -> String {
     format!("{scheme}://{host}/api/integrations/email/callback")
 }
 
-// GET /api/integrations/email/config
+// GET /api/integrations/email/config — app credentials are shared; the
+// connection (tokens/mailbox) is the calling user's own.
 pub async fn get_config(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<Json<EmailConfigStatus>> {
-    let config: Option<MicrosoftEmailConfig> =
-        db::settings::get(&state.db, KEY_MICROSOFT_EMAIL)
+    let app: Option<MicrosoftAppConfig> = db::settings::get(&state.db, KEY_MICROSOFT_APP)
+        .await
+        .map_err(AppError::Internal)?;
+    let tokens: Option<MicrosoftUserTokens> =
+        db::settings::get(&state.db, &microsoft::user_key(&user.id))
             .await
             .map_err(AppError::Internal)?;
 
-    let status = match config {
-        None => EmailConfigStatus {
-            configured: false,
-            connected: false,
-            tenant_id: String::new(),
-            client_id: String::new(),
-            connected_email: None,
-        },
-        Some(c) => {
-            let configured = !c.tenant_id.is_empty()
-                && !c.client_id.is_empty()
-                && !c.client_secret.is_empty();
-            EmailConfigStatus {
-                configured,
-                connected: c.access_token.is_some(),
-                tenant_id: c.tenant_id,
-                client_id: c.client_id,
-                connected_email: c.connected_email,
-            }
-        }
-    };
-
-    Ok(Json(status))
+    let app = app.unwrap_or_default();
+    let configured =
+        !app.tenant_id.is_empty() && !app.client_id.is_empty() && !app.client_secret.is_empty();
+    let tokens = tokens.unwrap_or_default();
+    Ok(Json(EmailConfigStatus {
+        configured,
+        connected: tokens.access_token.is_some(),
+        tenant_id: app.tenant_id,
+        client_id: app.client_id,
+        connected_email: tokens.connected_email,
+    }))
 }
 
-// POST /api/integrations/email/config
+// POST /api/integrations/email/config — shared Azure app credentials;
+// admin-only since every user connects through them.
 pub async fn save_config(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<SaveConfigBody>,
 ) -> AppResult<StatusCode> {
-    let existing: Option<MicrosoftEmailConfig> =
-        db::settings::get(&state.db, KEY_MICROSOFT_EMAIL)
-            .await
-            .map_err(AppError::Internal)?;
+    if !user.is_admin() {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+    let existing: Option<MicrosoftAppConfig> = db::settings::get(&state.db, KEY_MICROSOFT_APP)
+        .await
+        .map_err(AppError::Internal)?;
 
     let existing_secret = existing.as_ref().map(|c| c.client_secret.as_str()).unwrap_or("");
     let new_secret_raw = body.client_secret.as_deref().unwrap_or("").trim().to_string();
-    let new_secret_entered = !new_secret_raw.is_empty();
-    let client_secret = if new_secret_entered {
-        new_secret_raw
-    } else {
+    let client_secret = if new_secret_raw.is_empty() {
         existing_secret.to_string()
+    } else {
+        new_secret_raw
     };
 
-    // Clear OAuth tokens whenever credentials change.
-    let credentials_changed = existing.as_ref().map_or(true, |c| {
-        c.tenant_id != body.tenant_id || c.client_id != body.client_id || new_secret_entered
-    });
-
-    let config = MicrosoftEmailConfig {
+    let config = MicrosoftAppConfig {
         tenant_id: body.tenant_id,
         client_id: body.client_id,
         client_secret,
-        access_token: if credentials_changed { None } else { existing.as_ref().and_then(|c| c.access_token.clone()) },
-        refresh_token: if credentials_changed { None } else { existing.as_ref().and_then(|c| c.refresh_token.clone()) },
-        token_expires_at: if credentials_changed { None } else { existing.as_ref().and_then(|c| c.token_expires_at) },
-        connected_email: if credentials_changed { None } else { existing.as_ref().and_then(|c| c.connected_email.clone()) },
     };
-
-    db::settings::set(&state.db, KEY_MICROSOFT_EMAIL, &config)
+    db::settings::set(&state.db, KEY_MICROSOFT_APP, &config)
         .await
         .map_err(AppError::Internal)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-// DELETE /api/integrations/email/config
+// DELETE /api/integrations/email/config — disconnect the caller's mailbox.
 pub async fn disconnect(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
 ) -> AppResult<StatusCode> {
-    if let Some(mut config) =
-        db::settings::get::<MicrosoftEmailConfig>(&state.db, KEY_MICROSOFT_EMAIL)
-            .await
-            .map_err(AppError::Internal)?
-    {
-        config.access_token = None;
-        config.refresh_token = None;
-        config.token_expires_at = None;
-        config.connected_email = None;
-        db::settings::set(&state.db, KEY_MICROSOFT_EMAIL, &config)
-            .await
-            .map_err(AppError::Internal)?;
-    }
-
+    db::settings::delete(&state.db, &microsoft::user_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 // GET /api/integrations/email/connect  — redirects browser to Microsoft login
 pub async fn connect(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     headers: HeaderMap,
 ) -> AppResult<Redirect> {
-    let config =
-        db::settings::get::<MicrosoftEmailConfig>(&state.db, KEY_MICROSOFT_EMAIL)
-            .await
-            .map_err(AppError::Internal)?
-            .ok_or_else(|| {
-                AppError::Internal(anyhow::anyhow!("Email integration not configured"))
-            })?;
-
-    if config.tenant_id.is_empty() || config.client_id.is_empty() || config.client_secret.is_empty() {
-        return Err(AppError::Internal(anyhow::anyhow!(
-            "Tenant ID, Client ID, and Client Secret must all be set before connecting"
-        )));
-    }
+    let config = microsoft::app_config(&state).await.map_err(AppError::Internal)?;
 
     let host = headers
         .get("host")
@@ -173,8 +143,9 @@ pub async fn connect(
         .unwrap_or("localhost:3000");
 
     let redirect_uri = redirect_uri_from_host(host);
+    // CSRF state doubles as the user binding for the callback.
     let csrf_state = uuid::Uuid::new_v4().to_string();
-    *state.oauth_state.lock().await = Some(csrf_state.clone());
+    state.oauth_state.lock().await.insert(csrf_state.clone(), user.id.clone());
 
     let mut auth_url = url::Url::parse(&format!(
         "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
@@ -222,15 +193,16 @@ async fn callback_inner(
         .code
         .ok_or_else(|| anyhow::anyhow!("no authorization code in callback"))?;
 
-    let expected = state.oauth_state.lock().await.clone();
-    if expected.as_deref() != params.state.as_deref() {
-        anyhow::bail!("CSRF state mismatch — possible replay attack");
-    }
-    *state.oauth_state.lock().await = None;
+    let user_id = {
+        let mut states = state.oauth_state.lock().await;
+        params
+            .state
+            .as_deref()
+            .and_then(|s| states.remove(s))
+            .ok_or_else(|| anyhow::anyhow!("CSRF state mismatch — possible replay attack"))?
+    };
 
-    let config = db::settings::get::<MicrosoftEmailConfig>(&state.db, KEY_MICROSOFT_EMAIL)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("config disappeared between connect and callback"))?;
+    let config = microsoft::app_config(&state).await?;
 
     let host = headers
         .get("host")
@@ -288,17 +260,14 @@ async fn callback_inner(
         .or_else(|| me["userPrincipalName"].as_str())
         .map(|s| s.to_string());
 
-    let updated = MicrosoftEmailConfig {
-        tenant_id: config.tenant_id,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
+    let updated = MicrosoftUserTokens {
         access_token: Some(access_token),
         refresh_token,
         token_expires_at: Some(token_expires_at),
         connected_email,
     };
 
-    db::settings::set(&state.db, KEY_MICROSOFT_EMAIL, &updated).await?;
+    db::settings::set(&state.db, &microsoft::user_key(&user_id), &updated).await?;
 
     Ok(Redirect::temporary("/?integration=email&status=connected"))
 }

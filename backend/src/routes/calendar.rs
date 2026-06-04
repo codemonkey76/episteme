@@ -8,7 +8,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::calendar::{self, NewEvent};
+use axum::Extension;
+
 use crate::error::{AppError, AppResult};
+use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -20,6 +23,7 @@ pub struct RangeQuery {
 // GET /api/calendar/events?start=&end=  (defaults: now .. now+30d)
 pub async fn list_events(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Query(q): Query<RangeQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
     let start = q
@@ -35,7 +39,7 @@ pub async fn list_events(
         .map(|d| d.with_timezone(&Utc))
         .unwrap_or(start + Duration::days(30));
 
-    let events = calendar::list_events(&state, start, end)
+    let events = calendar::list_events(&state, &user.id, start, end)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(serde_json::json!({ "events": events })))
@@ -56,10 +60,12 @@ pub struct CreateEvent {
 // POST /api/calendar/events
 pub async fn create_event(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(b): Json<CreateEvent>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
     let event = calendar::create_event(
         &state,
+        &user.id,
         NewEvent {
             subject: b.subject,
             start: b.start,
@@ -78,8 +84,9 @@ pub async fn create_event(
 // DELETE /api/calendar/events/:id
 pub async fn delete_event(
     State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    calendar::delete_event(&state, &id).await.map_err(AppError::Internal)?;
+    calendar::delete_event(&state, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

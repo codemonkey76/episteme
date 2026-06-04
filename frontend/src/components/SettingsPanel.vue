@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth'
 
 const logs = useLogsStore()
 const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.role === 'admin')
 
 const props = defineProps<{ initialTab?: string }>()
 
@@ -53,14 +54,16 @@ function onProviderTypeChange() {
 }
 
 onMounted(async () => {
-  const [pRes, mRes] = await Promise.all([
-    api.settings.listProviders(),
-    api.settings.listMcpServers(),
-  ])
-  providers.value = pRes.providers
-  mcpServers.value = mRes.mcp_servers
+  try {
+    const [pRes, mRes] = await Promise.all([
+      api.settings.listProviders(),
+      api.settings.listMcpServers(),
+    ])
+    providers.value = pRes.providers
+    mcpServers.value = mRes.mcp_servers
+  } catch { /* members may lack some of these; tabs are role-gated anyway */ }
   await refreshMcpStatus()
-  await loadTools()
+  if (isAdmin.value) await loadTools()
   await loadTimezone()
   await loadEmailConfig()
   await loadCategorizer()
@@ -160,6 +163,55 @@ async function toggleToolPolicy(t: api.ToolInfo) {
   const policy = t.policy === 'ask' ? 'auto' : 'ask'
   t.policy = policy // optimistic
   await api.settings.setToolPolicy(t.name, policy)
+}
+
+// ── Users & invites (admin) ──────────────────────────────────────────────────
+const userList = ref<api.UserAccount[]>([])
+const inviteList = ref<api.Invite[]>([])
+const inviteLabelInput = ref('')
+const copiedCode = ref('')
+
+function inviteLink(inv: api.Invite): string {
+  return `${window.location.origin}/?invite=${inv.code}`
+}
+
+async function loadUsers() {
+  if (!isAdmin.value) return
+  try {
+    userList.value = (await api.users.list()).users
+    inviteList.value = (await api.invites.list()).invites
+  } catch { /* surfaced by individual actions */ }
+}
+
+async function createInvite() {
+  const res = await api.invites.create(inviteLabelInput.value.trim())
+  inviteLabelInput.value = ''
+  inviteList.value.unshift(res.invite)
+  await copyInvite(res.invite)
+}
+
+async function copyInvite(inv: api.Invite) {
+  try {
+    await navigator.clipboard.writeText(inviteLink(inv))
+    copiedCode.value = inv.code
+    setTimeout(() => { if (copiedCode.value === inv.code) copiedCode.value = '' }, 2000)
+  } catch { /* clipboard unavailable; the link is shown inline anyway */ }
+}
+
+async function revokeInvite(inv: api.Invite) {
+  await api.invites.revoke(inv.code)
+  inviteList.value = inviteList.value.filter(i => i.code !== inv.code)
+}
+
+async function setUserStatus(u: api.UserAccount, action: 'disable' | 'enable') {
+  await (action === 'disable' ? api.users.disable(u.id) : api.users.enable(u.id))
+  u.status = action === 'disable' ? 'disabled' : 'active'
+}
+
+async function deleteUser(u: api.UserAccount) {
+  if (!confirm(`Delete ${u.username} and ALL their data? This can't be undone.`)) return
+  await api.users.remove(u.id)
+  userList.value = userList.value.filter(x => x.id !== u.id)
 }
 
 // ── Timezone ──────────────────────────────────────────────────────────────────
@@ -341,19 +393,19 @@ async function logout() {
         </svg>
         Account
       </button>
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'providers' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'providers'">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'providers' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'providers'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
         </svg>
         Providers
       </button>
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'mcp' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'mcp'">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'mcp' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'mcp'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
         MCP Servers
       </button>
-      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'tools' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'tools'; loadTools()">
+      <button v-if="isAdmin" :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'tools' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'tools'; loadTools()">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
         </svg>
@@ -372,9 +424,9 @@ async function logout() {
         Appearance
       </button>
 
-      <div class="flex flex-col gap-0.5 mt-2 pt-2 border-t border-[#252525]">
+      <div v-if="isAdmin" class="flex flex-col gap-0.5 mt-2 pt-2 border-t border-[#252525]">
         <span class="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#484848] px-3 pt-1 pb-1.5 pointer-events-none">Admin</span>
-        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'users' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'users'">
+        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'users' ? 'bg-[#222] text-fg' : 'text-[#808080] hover:bg-[#1e1e1e] hover:text-[#d0d0d0]']" @click="activeTab = 'users'; loadUsers()">
           <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
           </svg>
@@ -805,8 +857,44 @@ async function logout() {
       <!-- Users -->
       <div v-else-if="activeTab === 'users'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">Users</h2>
+
         <section class="flex flex-col gap-3">
-          <p class="text-[#484848] text-[0.8125rem]">User management coming soon.</p>
+          <ul v-if="userList.length" class="list-none flex flex-col gap-1.5">
+            <li v-for="u in userList" :key="u.id" class="flex justify-between items-center bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-4">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ u.username }}</span>
+                <span class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border" :class="u.role === 'admin' ? 'text-[#7ab0ff] border-[#7ab0ff55]' : 'text-[#9a9a9a] border-[#9a9a9a55]'">{{ u.role }}</span>
+                <span v-if="u.status === 'disabled'" class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[#df7a7a] border-[#df7a7a55]">disabled</span>
+              </div>
+              <div v-if="u.role !== 'admin'" class="flex items-center gap-1.5 shrink-0">
+                <button v-if="u.status === 'active'" class="bg-[#2a2418] text-[#e0b060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#3a3020]" @click="setUserStatus(u, 'disable')">Disable</button>
+                <button v-else class="bg-[#1e3a2a] text-[#6ecf8e] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#254a35]" @click="setUserStatus(u, 'enable')">Enable</button>
+                <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515] hover:text-[#d08080]" @click="deleteUser(u)">Delete</button>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <section class="flex flex-col gap-3">
+          <h3 class="text-[0.7rem] font-semibold text-[#585858] uppercase tracking-[0.07em]">Invites</h3>
+          <div class="flex gap-2">
+            <input v-model="inviteLabelInput" class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[#3a6adf]" placeholder="Who's this for? (label, optional)" @keyup.enter="createInvite" />
+            <button class="bg-[#1e3a6e] text-[#7ab0ff] border border-[#2a4a8a] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[#254880]" @click="createInvite">Create invite</button>
+          </div>
+          <ul v-if="inviteList.length" class="list-none flex flex-col gap-1.5">
+            <li v-for="inv in inviteList" :key="inv.code" class="flex flex-col gap-1 bg-[#111] border border-[#222] rounded-md px-3 py-2">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-[0.8125rem] text-[#d0d0d0]">{{ inv.label || '(no label)' }}</span>
+                <span v-if="inv.used_by" class="text-[0.72rem] text-[#6ecf8e]">joined as {{ inv.used_by }}</span>
+                <div v-else class="flex items-center gap-1.5">
+                  <button class="bg-[#1a2a1e] text-[#8edfae] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#1f3526]" @click="copyInvite(inv)">{{ copiedCode === inv.code ? 'Copied ✓' : 'Copy link' }}</button>
+                  <button class="bg-[#1e1010] text-[#a06060] border-none rounded px-2 py-[0.2rem] cursor-pointer text-[0.75rem] font-[inherit] hover:bg-[#2a1515]" @click="revokeInvite(inv)">Revoke</button>
+                </div>
+              </div>
+              <span v-if="!inv.used_by" class="text-[0.7rem] text-[#585858] break-all">{{ inviteLink(inv) }} · expires {{ new Date(inv.expires_at).toLocaleDateString() }}</span>
+            </li>
+          </ul>
+          <p v-else class="text-[#484848] text-[0.8125rem]">No invites yet. Create one and email the link.</p>
         </section>
       </div>
 

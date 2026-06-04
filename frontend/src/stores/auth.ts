@@ -6,6 +6,7 @@ interface State {
   setupRequired: boolean
   authenticated: boolean
   username: string | null
+  role: 'admin' | 'member' | null
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -14,6 +15,7 @@ export const useAuthStore = defineStore('auth', {
     setupRequired: false,
     authenticated: false,
     username: null,
+    role: null,
   }),
   actions: {
     /// Drop to the login screen whenever any API call returns 401.
@@ -28,6 +30,7 @@ export const useAuthStore = defineStore('auth', {
       this.setupRequired = s.setup_required
       this.authenticated = s.authenticated
       this.username = s.username
+      this.role = s.role
       this.loaded = true
     },
     async login(username: string, password: string) {
@@ -35,17 +38,26 @@ export const useAuthStore = defineStore('auth', {
       this.authenticated = true
       this.username = r.username
       this.setupRequired = false
+      await this.refresh() // pick up the role
     },
     async setup(username: string, password: string) {
       const r = await api.auth.setup(username, password)
       this.authenticated = true
       this.username = r.username
       this.setupRequired = false
+      await this.refresh()
+    },
+    async registerWithInvite(code: string, username: string, password: string) {
+      const r = await api.auth.register(code, username, password)
+      this.authenticated = true
+      this.username = r.username
+      await this.refresh()
     },
     async logout() {
       await api.auth.logout()
       this.authenticated = false
       this.username = null
+      this.role = null
     },
   },
 })

@@ -10,8 +10,8 @@ pub struct AppState {
     pub db: SqlitePool,
     pub model_router: ModelRouter,
     pub mcp_host: Arc<Mutex<McpHost>>,
-    /// Temporary CSRF state token for in-flight OAuth flows.
-    pub oauth_state: Arc<Mutex<Option<String>>>,
+    /// In-flight OAuth CSRF states → the user who initiated each connect.
+    pub oauth_state: Arc<Mutex<HashMap<String, String>>>,
     pub http_client: reqwest::Client,
     /// Broadcast channel for real-time log streaming to SSE clients.
     pub log_tx: broadcast::Sender<String>,
@@ -28,7 +28,7 @@ impl AppState {
             db,
             model_router: ModelRouter::new(),
             mcp_host: Arc::new(Mutex::new(McpHost::new())),
-            oauth_state: Arc::new(Mutex::new(None)),
+            oauth_state: Arc::new(Mutex::new(HashMap::new())),
             http_client: reqwest::Client::new(),
             log_tx,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -38,11 +38,12 @@ impl AppState {
     /// The user's home timezone — every model-facing time is resolved into
     /// this so the model never does timezone arithmetic. Falls back to the
     /// `TZ` env var, then UTC, when the setting isn't configured.
-    pub async fn home_tz(&self) -> chrono_tz::Tz {
-        let stored: Option<String> = crate::db::settings::get(&self.db, "timezone")
-            .await
-            .ok()
-            .flatten();
+    pub async fn home_tz(&self, user_id: &str) -> chrono_tz::Tz {
+        let stored: Option<String> =
+            crate::db::settings::get(&self.db, &format!("timezone:{user_id}"))
+                .await
+                .ok()
+                .flatten();
         stored
             .or_else(|| std::env::var("TZ").ok())
             .and_then(|s| s.parse().ok())
