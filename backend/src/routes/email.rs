@@ -1152,12 +1152,15 @@ pub async fn ticket_from_email(
         body_raw.to_string()
     };
 
-    // Match the sender to a helpdesk contact → client_id + user_id.
+    // Match the sender to a helpdesk contact → client_id + user_id. The
+    // contact_email filter does the lookup server-side — the bare /clients
+    // list is capped at 20, so scanning it would miss contacts on clients
+    // past the first page.
     let clients = crate::integrations::helpdesk::request(
         &state,
         user_id,
         reqwest::Method::GET,
-        "/clients",
+        &format!("/clients?contact_email={}", urlencoding::encode(from_addr)),
         None,
     )
     .await
