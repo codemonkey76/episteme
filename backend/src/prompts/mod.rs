@@ -157,6 +157,17 @@ don't type a question. The email itself is appended after it.",
         variables: &[],
         default: "Help me understand this email and tell me what I should do about it.",
     },
+    PromptDef {
+        key: "email_summary",
+        name: "Email summary",
+        description: "System message for the inline AI Summary shown in the reading \
+pane to help draft a reply. The email is appended after it.",
+        variables: &[],
+        default: "Summarise the email below to help the user write a reply. Be brief: \
+2–4 short bullet points covering who it's from, what they want, and any questions, \
+deadlines, or actions the user needs to respond to. If the email quotes earlier \
+messages, focus on the most recent one. Output only the summary — no preamble.",
+    },
 ];
 
 pub fn def(key: &str) -> Option<&'static PromptDef> {

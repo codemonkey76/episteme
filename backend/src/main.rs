@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState::new(pool));
     integrations::microsoft::migrate_legacy(&state).await;
+    integrations::microsoft::migrate_shared_to_per_user(&state).await;
     categorizer::spawn_worker(state.clone());
     spawn_mcp_connect(state.clone());
     let app = routes::router(state);

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import * as api from '../api'
 import { useTasksStore } from '../stores/tasks'
+import { renderMarkdown, renderInlineMarkdown } from '../lib/markdown'
 
 const tasksStore = useTasksStore()
 
@@ -182,7 +183,7 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
     <!-- Add composer -->
     <div v-if="adding" class="flex flex-col gap-2 px-3 py-2.5 border-b border-[var(--c-1e1e1e)] bg-[var(--c-111111)] shrink-0">
       <input v-model="draft.title" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="What needs doing?" @keyup.enter="saveDraft" />
-      <textarea v-model="draft.notes" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Notes (optional)" />
+      <textarea v-model="draft.notes" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Notes (markdown supported)" />
       <div class="flex items-center gap-2 flex-wrap">
         <input v-model="draft.due" type="datetime-local" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer [color-scheme:dark]" />
         <select v-model="draft.priority" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
@@ -208,7 +209,7 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
           <!-- Edit mode -->
           <div v-if="editingId === t.id" class="flex-1 flex flex-col gap-2 min-w-0">
             <input v-model="draft.title" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none focus:border-[var(--c-3a6adf)]" @keyup.enter="saveDraft" />
-            <textarea v-model="draft.notes" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)]" placeholder="Notes (optional)" />
+            <textarea v-model="draft.notes" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)]" placeholder="Notes (markdown supported)" />
             <div class="flex items-center gap-2 flex-wrap">
               <input v-model="draft.due" type="datetime-local" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer [color-scheme:dark]" />
               <select v-model="draft.priority" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
@@ -230,8 +231,8 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             </button>
             <div class="flex-1 min-w-0">
-              <p class="text-[0.8125rem] leading-[1.45] break-words" :class="t.status === 'done' ? 'text-[var(--c-585858)] line-through' : 'text-[var(--c-d0d0d0)]'">{{ t.title }}</p>
-              <p v-if="t.notes" class="text-[0.75rem] text-[var(--c-707070)] leading-[1.4] break-words mt-[0.1rem]">{{ t.notes }}</p>
+              <p class="md-inline text-[0.8125rem] leading-[1.45] break-words" :class="t.status === 'done' ? 'text-[var(--c-585858)] line-through' : 'text-[var(--c-d0d0d0)]'" v-html="renderInlineMarkdown(t.title)" />
+              <div v-if="t.notes" class="md-body text-[0.75rem] text-[var(--c-707070)] leading-[1.4] break-words mt-[0.1rem]" v-html="renderMarkdown(t.notes)" />
               <div class="text-[0.68rem] mt-[0.2rem] flex items-center gap-1.5">
                 <span class="font-semibold uppercase tracking-[0.04em]" :style="{ color: PRIO_COLOR[t.priority] }">{{ t.priority }}</span>
                 <template v-if="t.due_at">
@@ -259,3 +260,30 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered into task titles/notes (v-html → needs :deep). */
+.md-inline :deep(code), .md-body :deep(code) {
+  background: #181818;
+  border: 1px solid #262626;
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.85em;
+}
+.md-inline :deep(a), .md-body :deep(a) { color: #7ab0ff; text-decoration: underline; }
+.md-body :deep(pre.md-pre) {
+  background: #0d0d0d;
+  border: 1px solid #222;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+  margin: 0.3rem 0;
+}
+.md-body :deep(pre.md-pre code) { background: none; border: none; padding: 0; }
+.md-body :deep(.md-h) { font-weight: 600; color: #c8c8c8; margin: 0.25rem 0 0.1rem; }
+.md-body :deep(.md-h1) { font-size: 1.1em; }
+.md-body :deep(.md-h2) { font-size: 1.05em; }
+.md-body :deep(ul.md-ul), .md-body :deep(ol.md-ol) { margin: 0.2rem 0; padding-left: 1.2rem; }
+.md-body :deep(ul.md-ul) { list-style: disc; }
+.md-body :deep(ol.md-ol) { list-style: decimal; }
+</style>

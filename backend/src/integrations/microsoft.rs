@@ -1,15 +1,36 @@
 use serde::{Deserialize, Serialize};
 
-/// Shared Azure app registration (tenant/client/secret) — one per instance,
-/// managed by the admin. Members connect their own mailboxes through it.
+/// Legacy shared Azure app key (pre per-user config) — formerly one app
+/// registration for the whole instance. Migrated at startup to each connected
+/// user's own key, then removed.
 pub const KEY_MICROSOFT_APP: &str = "microsoft_app";
 
 /// Legacy single-user key (pre multi-user); migrated at startup.
 pub const KEY_LEGACY: &str = "microsoft_email";
 
+/// Per-user Azure app registration (tenant/client/secret). Each user brings
+/// their own registration so mailboxes connect independently.
+pub fn app_key(user_id: &str) -> String {
+    format!("microsoft_app:{user_id}")
+}
+
 /// Per-user OAuth tokens + connected mailbox.
 pub fn user_key(user_id: &str) -> String {
     format!("microsoft_email:{user_id}")
+}
+
+/// Per-user list of shared mailboxes the user has added (and we verified they
+/// can access). Selecting one targets `/users/{address}/…` instead of `/me/…`.
+pub fn shared_key(user_id: &str) -> String {
+    format!("microsoft_shared:{user_id}")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedMailbox {
+    pub address: String,
+    /// Optional friendly label; falls back to the address in the UI.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -28,8 +49,11 @@ pub struct MicrosoftUserTokens {
     pub connected_email: Option<String>,
 }
 
-pub async fn app_config(state: &crate::state::AppState) -> anyhow::Result<MicrosoftAppConfig> {
-    crate::db::settings::get::<MicrosoftAppConfig>(&state.db, KEY_MICROSOFT_APP)
+pub async fn app_config(
+    state: &crate::state::AppState,
+    user_id: &str,
+) -> anyhow::Result<MicrosoftAppConfig> {
+    crate::db::settings::get::<MicrosoftAppConfig>(&state.db, &app_key(user_id))
         .await?
         .filter(|c| !c.client_id.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Microsoft integration not configured"))
@@ -54,6 +78,38 @@ pub async fn migrate_legacy(state: &crate::state::AppState) {
     }
     let _ = db::settings::delete(&state.db, KEY_LEGACY).await;
     tracing::info!("migrated Microsoft app credentials to shared config");
+}
+
+/// Migrate the former shared Azure app (single `microsoft_app` key, used by
+/// every member) to per-user config: copy it into the app key of each user who
+/// is currently connected, so their mailbox keeps refreshing, then drop the
+/// shared key. Users who never connected start fresh with their own app.
+/// Idempotent — once the shared key is gone this returns immediately.
+pub async fn migrate_shared_to_per_user(state: &crate::state::AppState) {
+    use crate::db;
+    let Ok(Some(shared)) =
+        db::settings::get::<MicrosoftAppConfig>(&state.db, KEY_MICROSOFT_APP).await
+    else {
+        return;
+    };
+    if !shared.client_id.is_empty() {
+        let users = db::auth::list_users(&state.db).await.unwrap_or_default();
+        for u in users {
+            let connected = matches!(
+                db::settings::get::<MicrosoftUserTokens>(&state.db, &user_key(&u.id)).await,
+                Ok(Some(t)) if t.access_token.is_some()
+            );
+            let has_app = matches!(
+                db::settings::get::<MicrosoftAppConfig>(&state.db, &app_key(&u.id)).await,
+                Ok(Some(c)) if !c.client_id.is_empty()
+            );
+            if connected && !has_app {
+                let _ = db::settings::set(&state.db, &app_key(&u.id), &shared).await;
+            }
+        }
+        tracing::info!("migrated shared Microsoft app credentials to per-user config");
+    }
+    let _ = db::settings::delete(&state.db, KEY_MICROSOFT_APP).await;
 }
 
 /// Returns a valid access token for the given user, refreshing transparently
@@ -85,7 +141,7 @@ pub async fn get_valid_token(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not_connected"))?;
 
-    let app = app_config(state).await?;
+    let app = app_config(state, user_id).await?;
     let token_url = format!(
         "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
         app.tenant_id

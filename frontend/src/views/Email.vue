@@ -3,14 +3,14 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useWindowsStore } from '../stores/windows'
-import { useSessionsStore } from '../stores/sessions'
 import { useTasksStore } from '../stores/tasks'
 import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
+import { currentTheme, THEMES } from '../theme'
+import { renderMarkdown } from '../lib/markdown'
 
 const logs = useLogsStore()
 const windows = useWindowsStore()
-const sessions = useSessionsStore()
 const tasksStore = useTasksStore()
 const calStore = useCalendarStore()
 
@@ -23,6 +23,14 @@ const aiProvider = ref('')
 const providersList = ref<api.ProviderConfig[]>([])
 const providerMenuOpen = ref(false)
 
+// ── Mailbox selection (own vs shared) ──────────────────────────────────────────
+// '' = the user's own mailbox; otherwise a shared mailbox address. Threaded
+// into every Graph-backed call so the whole window operates on the choice.
+const sharedMailboxes = ref<api.SharedMailbox[]>([])
+const currentMailbox = ref('')
+// undefined (not '') is what the API layer expects for "own mailbox".
+const mbox = computed(() => currentMailbox.value || undefined)
+
 onMounted(async () => {
   try {
     const cfg = await api.integrations.email.getConfig()
@@ -30,7 +38,12 @@ onMounted(async () => {
   } finally {
     checkingConnection.value = false
   }
-  if (connected.value) await loadFolders()
+  if (connected.value) {
+    try {
+      sharedMailboxes.value = (await api.integrations.email.listShared()).mailboxes
+    } catch { /* none, or transient — switcher just shows the own mailbox */ }
+    await loadFolders()
+  }
   try {
     const { providers } = await api.settings.listProviders()
     providersList.value = providers
@@ -39,6 +52,19 @@ onMounted(async () => {
   // Pick up suggestions left over from earlier sends.
   if (connected.value) await loadSuggestions()
 })
+
+// Switch the active mailbox: reset the reading state and reload folders.
+async function switchMailbox(address: string) {
+  if (address === currentMailbox.value) return
+  currentMailbox.value = address
+  selectedFolder.value = null
+  selectedMessage.value = null
+  view.value = 'none'
+  searchQuery.value = ''
+  searchResults.value = []
+  searchNextLink.value = null
+  await loadFolders()
+}
 
 // ── Folders ───────────────────────────────────────────────────────────────────
 const FOLDER_ORDER = ['Inbox', 'Drafts', 'Sent Items', 'Deleted Items', 'Junk Email']
@@ -53,7 +79,7 @@ async function loadFolders() {
   folderError.value = ''
   logs.debug('Email', 'Loading mail folders')
   try {
-    const res = await api.email.listFolders()
+    const res = await api.email.listFolders(mbox.value)
     folders.value = [...res.value].sort((a, b) => {
       const ai = FOLDER_ORDER.indexOf(a.displayName)
       const bi = FOLDER_ORDER.indexOf(b.displayName)
@@ -101,7 +127,7 @@ async function loadMessages(folderId: string, skip = 0) {
   const folder = folders.value.find(f => f.id === folderId)
   logs.debug('Email', `Loading messages for "${folder?.displayName ?? folderId}" (skip=${skip})`)
   try {
-    const res = await api.email.listMessages(folderId, skip, PAGE)
+    const res = await api.email.listMessages(folderId, skip, PAGE, mbox.value)
     if (skip === 0) {
       messages.value = res.value
     } else {
@@ -126,7 +152,7 @@ async function markAllRead() {
   if (!folder || markingAllRead.value) return
   markingAllRead.value = true
   try {
-    const res = await api.email.markAllRead(folder.id)
+    const res = await api.email.markAllRead(folder.id, mbox.value)
     // Reflect locally without a full reload.
     messages.value = messages.value.map(m => ({ ...m, isRead: true }))
     searchResults.value = searchResults.value.map(m => ({ ...m, isRead: true }))
@@ -162,6 +188,47 @@ const iframeEl = ref<HTMLIFrameElement | null>(null)
 // see the iframe render at the placeholder height and then jump to full size.
 const bodyReady = ref(false)
 
+// Dark-mode rendering for HTML email bodies. Emails ship their own (usually
+// light-background, dark-text) inline styles, so rather than fight every inline
+// `color:` we invert the whole document. invert(0.87) — not a full invert —
+// softens the extremes the user sees: black text lands on a gentle #dedede
+// instead of harsh white, white backgrounds become a muted #212121. hue-rotate
+// keeps coloured text roughly true; media is inverted back so it looks normal.
+const darkEmail = ref(localStorage.getItem('email:dark') !== '0')
+watch(darkEmail, v => {
+  localStorage.setItem('email:dark', v ? '1' : '0')
+  // The iframe reloads with the new srcdoc; hide it until onIframeLoad re-measures.
+  if (isHtmlBody.value) bodyReady.value = false
+})
+
+// Track the active theme so the dark-email tint follows it live. Themes only
+// swap the `data-theme` attribute on <html>, so observe that.
+const themeKey = ref(currentTheme())
+let themeObserver: MutationObserver | null = null
+onMounted(() => {
+  themeObserver = new MutationObserver(() => { themeKey.value = currentTheme() })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+})
+onUnmounted(() => themeObserver?.disconnect())
+
+function hexToRgba(hex: string, a: number): string {
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
+}
+
+// The inverted email body lands on a neutral grey; a low-opacity overlay in the
+// theme's accent hue (blended through the same invert) nudges it to match the
+// app — purple under Amethyst, blue under Graphite, etc.
+const darkEmailStyle = computed(() => {
+  const accent = THEMES.find(t => t.key === themeKey.value)?.swatch.accent ?? '#4a8aff'
+  return (
+    '<style>html{background:#fff;filter:invert(0.87) hue-rotate(180deg);}' +
+    'img,video,picture,svg,iframe,[style*="background-image"]{filter:invert(1) hue-rotate(180deg);}' +
+    `#__tint{position:fixed;inset:0;pointer-events:none;mix-blend-mode:overlay;background:${hexToRgba(accent, 0.1)};}</style>` +
+    '<div id="__tint"></div>'
+  )
+})
+
 // Attachments for the open message. Inline ones are embedded in the HTML body,
 // so only non-inline attachments are surfaced as chips.
 const attachments = ref<api.Attachment[]>([])
@@ -175,7 +242,7 @@ function openAttachment(att: api.Attachment) {
     title: att.name,
     component: AttachmentViewer,
     props: {
-      url: api.email.attachmentUrl(m.id, att.id),
+      url: api.email.attachmentUrl(m.id, att.id, mbox.value),
       name: att.name,
       contentType: att.contentType,
     },
@@ -238,6 +305,12 @@ const renderedBody = computed(() => {
   })
 })
 
+// Final iframe document: the (cid-rewritten) email body, prefixed with the
+// dark-mode stylesheet when enabled. Toggling reloads the iframe reactively.
+const srcDoc = computed(() =>
+  darkEmail.value ? darkEmailStyle.value + renderedBody.value : renderedBody.value,
+)
+
 // Microsoft Graph returns body.contentType lowercase ("html"/"text"), so
 // compare case-insensitively rather than against a fixed-case literal.
 const isHtmlBody = computed(
@@ -250,7 +323,7 @@ async function selectMessage(summary: api.MessageSummary) {
   loadingMessage.value = true
   attachments.value = []
   try {
-    const detail = await api.email.getMessage(summary.id)
+    const detail = await api.email.getMessage(summary.id, mbox.value)
     selectedMessage.value = detail
     // Fetch attachment metadata in the background so the body renders right away.
     // NOTE: Graph's `hasAttachments` is false when a message has ONLY inline
@@ -259,12 +332,12 @@ async function selectMessage(summary: api.MessageSummary) {
       detail.body?.contentType?.toLowerCase() === 'html' && detail.body.content.includes('cid:')
     if (summary.hasAttachments || hasInlineCid) {
       api.email
-        .listAttachments(summary.id)
+        .listAttachments(summary.id, mbox.value)
         .then(r => { if (selectedMessage.value?.id === summary.id) attachments.value = r.value })
         .catch(() => { /* attachments are non-critical */ })
     }
     if (!summary.isRead) {
-      api.email.markRead(summary.id)
+      api.email.markRead(summary.id, mbox.value)
       const idx = messages.value.findIndex(m => m.id === summary.id)
       if (idx !== -1) {
         messages.value[idx] = { ...messages.value[idx], isRead: true }
@@ -487,44 +560,61 @@ async function aiReply() {
   }
 }
 
-// Hand the email (text + inline images) to a new chat session and stream advice
-// on what to do. Continues as a normal conversation for follow-ups.
-const asking = ref(false)
-async function askAi() {
+// ── AI Summary ──────────────────────────────────────────────────────────────────
+// An inline, toggleable summary of the open email to help draft a reply.
+// Replaces the old "Ask AI" chat hand-off. Streamed; cached per message so
+// re-opening a summarised email is instant; the toggle preference persists.
+const showSummary = ref(localStorage.getItem('email:summary') === '1')
+watch(showSummary, v => localStorage.setItem('email:summary', v ? '1' : '0'))
+const summarizing = ref(false)
+const summaryText = ref('')
+const summaryError = ref('')
+const summaryCache = new Map<string, string>()
+let summaryAbort: AbortController | null = null
+
+function toggleSummary() {
+  showSummary.value = !showSummary.value
+  if (showSummary.value) runSummary()
+}
+
+async function runSummary() {
   const m = selectedMessage.value
-  if (!m || asking.value) return
+  if (!m || !showSummary.value) return
+  summaryError.value = ''
+  const cached = summaryCache.get(m.id)
+  if (cached) { summaryText.value = cached; return }
   if (!aiProvider.value) {
-    logs.error('Email', 'No AI provider configured — add one in Settings.')
+    summaryError.value = 'No AI provider configured — add one in Settings.'
     return
   }
-  asking.value = true
-  const subject = m.subject ?? '(no subject)'
+  summaryAbort?.abort()
+  summaryAbort = new AbortController()
+  summarizing.value = true
+  summaryText.value = ''
   try {
-    const s = await sessions.createSession(`Email: ${subject}`)
-    await sessions.loadSession(s.id)
-    // Display-only stand-in for the (multimodal) message seeded server-side.
-    sessions.appendMessage({
-      id: crypto.randomUUID(),
-      session_id: s.id,
-      role: 'user',
-      content: `📧 Advise on this email: ${subject}`,
-      created_at: new Date().toISOString(),
-    })
-    windows.openKey('chat', undefined, 'fill')
-    await api.streamAdvise(
+    await api.streamSummary(
       m.id,
-      { sessionId: s.id, provider: aiProvider.value },
-      (tok) => sessions.appendToken(tok),
-      () => {},
-      () => {},
+      { provider: aiProvider.value, mailbox: mbox.value },
+      (t) => { summaryText.value += t },
+      summaryAbort.signal,
     )
+    summaryCache.set(m.id, summaryText.value)
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Failed'
-    logs.error('Email', `Ask AI failed: ${msg}`)
+    if (!(e instanceof DOMException && e.name === 'AbortError')) {
+      summaryError.value = e instanceof Error ? e.message : 'Summary failed'
+    }
   } finally {
-    asking.value = false
+    summarizing.value = false
   }
 }
+
+// Reset (and re-fetch, when on) the summary as the open message changes.
+watch(selectedMessage, (m) => {
+  summaryAbort?.abort()
+  summaryText.value = ''
+  summaryError.value = ''
+  if (m && showSummary.value) runSummary()
+})
 
 // Snapshot of the AI-generated draft, taken when streaming completes — sent
 // alongside the (possibly edited) body so the backend can learn style
@@ -592,17 +682,37 @@ function fmtWhen(iso: string): string {
 
 // "No response needed" — file straight to Processed and close the reader.
 const markingDone = ref(false)
+// ── Auto-advance ────────────────────────────────────────────────────────────────
+// After completing an action on a message (Done, Reply), jump straight to the
+// next item in the list so mail can be worked through without re-selecting.
+function neighbourOf(id: string): api.MessageSummary | null {
+  const list = displayedMessages.value
+  const i = list.findIndex(m => m.id === id)
+  if (i === -1) return null
+  return list[i + 1] ?? list[i - 1] ?? null // next, or previous when last
+}
+
+async function advanceTo(next: api.MessageSummary | null) {
+  const target = next ? displayedMessages.value.find(x => x.id === next.id) : null
+  if (target) {
+    await selectMessage(target)
+  } else {
+    view.value = 'none'
+    selectedMessage.value = null
+  }
+}
+
 async function markDone() {
   const m = selectedMessage.value
   if (!m || markingDone.value) return
   markingDone.value = true
+  const next = neighbourOf(m.id)
   try {
-    const res = await api.email.markDone(m.id)
+    const res = await api.email.markDone(m.id, mbox.value)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', `Marked done: ${m.subject ?? '(no subject)'}`)
-    view.value = 'none'
-    selectedMessage.value = null
     await loadFolders()
+    await advanceTo(next)
   } catch (e: unknown) {
     logs.error('Email', `Mark done failed: ${e instanceof Error ? e.message : e}`)
   } finally {
@@ -657,6 +767,7 @@ async function sendEmail() {
       cc: parseAddrs(composeForm.value.cc),
       bcc: parseAddrs(composeForm.value.bcc),
       body: composeForm.value.body,
+      mailbox: mbox.value,
     }
     if (showReply.value && selectedMessage.value) {
       payload.reply_to_message_id = selectedMessage.value.id
@@ -691,12 +802,16 @@ async function sendEmail() {
       }
       showReply.value = false
       // Replies get filed to "Processed" server-side a moment later — refresh
-      // so the original drops out of the Inbox list and counts update.
+      // so the original drops out of the Inbox list and counts update. Auto-
+      // advance to the next message right away (forwards leave the original in
+      // place, so they stay put).
       if (replyMode.value !== 'forward') {
+        const next = neighbourOf(id ?? '')
         window.setTimeout(() => {
           if (selectedFolder.value) loadMessages(selectedFolder.value.id)
           loadFolders()
         }, 3000)
+        await advanceTo(next)
       }
     }
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
@@ -781,7 +896,7 @@ async function runSearch(q: string, nextLink?: string | null) {
   searchError.value = ''
   if (!nextLink) logs.info('Email', `Searching for "${q}"`)
   try {
-    const res = await api.email.search(q, nextLink)
+    const res = await api.email.search(q, nextLink, mbox.value)
     if (nextLink) {
       searchResults.value.push(...res.value)
     } else {
@@ -906,6 +1021,20 @@ const replyBody = computed(() => {
           </svg>
         </button>
       </div>
+      <!-- Mailbox switcher: own + any shared mailboxes the user has added. -->
+      <div v-if="sharedMailboxes.length" class="relative mb-1">
+        <select
+          :value="currentMailbox"
+          class="w-full bg-surface text-[var(--c-c0c0c0)] border border-raised rounded-md pl-2 pr-6 py-[0.4rem] text-[0.75rem] font-[inherit] cursor-pointer appearance-none focus:outline-none focus:border-[var(--c-3a6adf)] truncate"
+          title="Switch mailbox"
+          @change="switchMailbox(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">My mailbox</option>
+          <option v-for="m in sharedMailboxes" :key="m.address" :value="m.address">{{ m.name || m.address }}</option>
+        </select>
+        <svg class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--c-606060)]" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+
       <div v-if="folderError" class="text-[0.72rem] text-danger py-1 px-2 cursor-default" :title="folderError">⚠ Load failed</div>
 
       <nav class="flex flex-col gap-[0.125rem]">
@@ -1085,48 +1214,19 @@ const replyBody = computed(() => {
             </div>
           </div>
 
-          <!-- Attachments -->
-          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
+          <!-- Action bar — sticky under the header so actions are reachable
+               without scrolling a long email. -->
+          <div v-if="!showReply" class="sticky top-0 z-20 py-2.5 px-5 border-b border-[var(--c-1e1e1e)] bg-bg flex gap-2 items-center flex-wrap">
             <button
-              v-for="att in visibleAttachments"
-              :key="att.id"
-              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:border-[var(--c-3a3a3a)]"
-              :title="`Open ${att.name}`"
-              @click="openAttachment(att)"
+              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 border rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100"
+              :class="showSummary ? 'bg-[var(--c-2a3c5c)] text-[var(--c-c0e0ff)] border-[var(--c-3a5a8a)]' : 'bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border-[var(--c-2a4a8a)] hover:bg-[var(--c-2a3c5c)]'"
+              title="Summarise this email to help draft a reply"
+              @click="toggleSummary"
             >
-              <svg class="text-[var(--c-7ab0ff)] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-              </svg>
-              <span class="flex flex-col min-w-0">
-                <span class="text-[0.78rem] text-[var(--c-d0d0d0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
-                <span class="text-[0.68rem] text-[var(--c-585858)]">{{ formatSize(att.size) }}</span>
-              </span>
-            </button>
-          </div>
-
-          <!-- Body -->
-          <div class="py-[0.875rem] px-5 flex-shrink-0">
-            <!-- allow-same-origin (without allow-scripts) lets us measure the content
-                 height so the iframe grows to fit; email scripts still can't run. -->
-            <iframe
-              v-if="isHtmlBody"
-              ref="iframeEl"
-              :srcdoc="renderedBody"
-              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-              class="w-full min-h-[200px] border-none bg-white rounded-md block transition-opacity duration-150"
-              :class="bodyReady ? 'opacity-100' : 'opacity-0'"
-              @load="onIframeLoad"
-            />
-            <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
-          </div>
-
-          <!-- Reply area -->
-          <div v-if="!showReply" class="py-3 px-5 border-t border-[var(--c-1e1e1e)] flex-shrink-0 flex gap-2 items-center flex-wrap">
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-2a3c5c)] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="14" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
               </svg>
-              {{ asking ? 'Asking…' : 'Ask AI' }}
+              AI Summary
             </button>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1187,7 +1287,7 @@ const replyBody = computed(() => {
               </button>
               <template v-if="providerMenuOpen">
                 <div class="fixed inset-0 z-[40]" @click="providerMenuOpen = false" />
-                <div class="absolute right-0 bottom-full mb-1.5 z-[41] min-w-[12rem] bg-[var(--c-1c1c1c)] border border-[var(--c-303030)] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
+                <div class="absolute right-0 top-full mt-1.5 z-[41] min-w-[12rem] bg-[var(--c-1c1c1c)] border border-[var(--c-303030)] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
                   <div class="px-3 py-1 text-[0.62rem] uppercase tracking-[0.06em] text-[var(--c-585858)]">AI model</div>
                   <button
                     v-for="p in providersList"
@@ -1204,7 +1304,70 @@ const replyBody = computed(() => {
             </div>
           </div>
 
-          <form v-else class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
+          <!-- AI summary panel — inline, toggleable; helps draft a reply. -->
+          <div v-if="showSummary" class="px-5 py-3 border-b border-[var(--c-1e1e1e)] bg-[var(--c-0d0d0d)] flex-shrink-0">
+            <div class="flex items-center gap-2 mb-1.5 text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-6a90c0)]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+              AI summary
+              <span v-if="summarizing" class="inline-block w-[10px] h-[10px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+              <button class="ml-auto text-[var(--c-585858)] hover:text-muted bg-none border-none cursor-pointer p-0 text-[0.85rem] leading-none normal-case tracking-normal" title="Hide summary" @click="showSummary = false">✕</button>
+            </div>
+            <div v-if="summaryText" class="md-body text-[0.8rem] leading-[1.5] text-[var(--c-c0c0c0)]" v-html="renderMarkdown(summaryText)" />
+            <p v-else-if="summaryError" class="text-[0.775rem] text-danger">{{ summaryError }}</p>
+            <p v-else-if="!summarizing" class="text-[0.775rem] text-[var(--c-585858)]">No summary yet.</p>
+          </div>
+
+          <!-- Attachments -->
+          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
+            <button
+              v-for="att in visibleAttachments"
+              :key="att.id"
+              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:border-[var(--c-3a3a3a)]"
+              :title="`Open ${att.name}`"
+              @click="openAttachment(att)"
+            >
+              <svg class="text-[var(--c-7ab0ff)] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+              <span class="flex flex-col min-w-0">
+                <span class="text-[0.78rem] text-[var(--c-d0d0d0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
+                <span class="text-[0.68rem] text-[var(--c-585858)]">{{ formatSize(att.size) }}</span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="py-[0.875rem] px-5 flex-shrink-0">
+            <div v-if="isHtmlBody" class="flex justify-end mb-1.5">
+              <button
+                class="inline-flex items-center gap-[0.3rem] py-[0.2rem] px-2 bg-surface text-[var(--c-808080)] border border-raised rounded text-[0.7rem] font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
+                :title="darkEmail ? 'Showing email in dark mode — click for the original colours' : 'Show email in dark mode'"
+                @click="darkEmail = !darkEmail"
+              >
+                <svg v-if="darkEmail" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                {{ darkEmail ? 'Light' : 'Dark' }}
+              </button>
+            </div>
+            <!-- allow-same-origin (without allow-scripts) lets us measure the content
+                 height so the iframe grows to fit; email scripts still can't run. -->
+            <iframe
+              v-if="isHtmlBody"
+              ref="iframeEl"
+              :srcdoc="srcDoc"
+              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              class="w-full min-h-[200px] border-none rounded-md block transition-opacity duration-150"
+              :class="[bodyReady ? 'opacity-100' : 'opacity-0', darkEmail ? 'bg-surface' : 'bg-white']"
+              @load="onIframeLoad"
+            />
+            <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
+          </div>
+
+          <form v-if="showReply" class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
             <div class="flex items-center gap-2 mb-3">
               <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
               <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[var(--c-7ab0ff)]">
@@ -1240,3 +1403,13 @@ const replyBody = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered into the AI summary panel (v-html → needs :deep). */
+.md-body :deep(code) { background: #181818; border: 1px solid #262626; border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.85em; }
+.md-body :deep(a) { color: #7ab0ff; text-decoration: underline; }
+.md-body :deep(.md-h) { font-weight: 600; color: #c8c8c8; margin: 0.2rem 0 0.1rem; }
+.md-body :deep(ul.md-ul), .md-body :deep(ol.md-ol) { margin: 0.2rem 0; padding-left: 1.2rem; }
+.md-body :deep(ul.md-ul) { list-style: disc; }
+.md-body :deep(ol.md-ol) { list-style: decimal; }
+</style>

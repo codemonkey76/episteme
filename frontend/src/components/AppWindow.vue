@@ -95,7 +95,10 @@ const windowStyle = computed(() => ({
 <template>
   <div
     ref="windowEl"
-    class="fixed flex flex-col bg-surface border border-[var(--c-383838)] rounded-lg shadow-[0_12px_40px_rgba(0,0,0,0.6)] max-h-[85vh] min-w-[280px] transition-[border-radius] duration-[120ms] ease-[ease]"
+    class="fixed flex flex-col bg-surface max-h-[85vh] min-w-[280px] transition-[border-radius] duration-[120ms] ease-[ease]"
+    :class="win.snapped
+      ? 'border border-raised'
+      : 'border border-[var(--c-383838)] rounded-lg shadow-[0_12px_40px_rgba(0,0,0,0.6)]'"
     :style="windowStyle"
     @pointerdown="store.focus(win.id)"
   >

@@ -162,7 +162,7 @@ export async function streamChat(
 // Ask AI about an email — seeds a chat session server-side, then streams advice.
 export async function streamAdvise(
   messageId: string,
-  opts: { sessionId: string; provider: string; instruction?: string },
+  opts: { sessionId: string; provider: string; instruction?: string; mailbox?: string },
   onToken: (text: string) => void,
   onDone: () => void,
   onTool: (name: string) => void,
@@ -171,7 +171,7 @@ export async function streamAdvise(
   const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/advise`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: opts.sessionId, provider: opts.provider, instruction: opts.instruction }),
+    body: JSON.stringify({ session_id: opts.sessionId, provider: opts.provider, instruction: opts.instruction, mailbox: opts.mailbox }),
     signal,
   })
   if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
@@ -263,6 +263,8 @@ export interface SendEmailPayload {
   /// Plain text of the message being replied to — context so commitment
   /// detection can resolve terse replies ("I'll get this done tonight").
   reply_context?: string
+  /// Shared mailbox address to send as (omit for the user's own mailbox).
+  mailbox?: string
 }
 
 export interface Attachment {
@@ -275,30 +277,37 @@ export interface Attachment {
   contentId?: string
 }
 
+// `mailbox` is the address of a shared mailbox to act on; omit for the user's
+// own mailbox. Appended as `?mailbox=` (or `&mailbox=`) on each request.
+function mbq(mailbox?: string, sep: '?' | '&' = '&'): string {
+  return mailbox ? `${sep}mailbox=${encodeURIComponent(mailbox)}` : ''
+}
+
 export const email = {
-  listFolders: () =>
-    json<{ value: MailFolder[] }>('/email/folders'),
-  listAttachments: (messageId: string) =>
-    json<{ value: Attachment[] }>(`/email/messages/${encodeURIComponent(messageId)}/attachments`),
+  listFolders: (mailbox?: string) =>
+    json<{ value: MailFolder[] }>(`/email/folders${mbq(mailbox, '?')}`),
+  listAttachments: (messageId: string, mailbox?: string) =>
+    json<{ value: Attachment[] }>(`/email/messages/${encodeURIComponent(messageId)}/attachments${mbq(mailbox, '?')}`),
   // Direct URL for an attachment's bytes — usable as an <img>/<iframe> src or a download link.
-  attachmentUrl: (messageId: string, attId: string) =>
-    `${BASE}/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/raw`,
-  listMessages: (folderId: string, skip = 0, top = 30) =>
-    json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}`),
-  getMessage: (messageId: string) =>
-    json<MessageDetail>(`/email/messages/${messageId}`),
-  markAllRead: (folderId: string) =>
-    json<{ marked: number }>(`/email/folders/${encodeURIComponent(folderId)}/read-all`, {
+  attachmentUrl: (messageId: string, attId: string, mailbox?: string) =>
+    `${BASE}/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/raw${mbq(mailbox, '?')}`,
+  listMessages: (folderId: string, skip = 0, top = 30, mailbox?: string) =>
+    json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}${mbq(mailbox)}`),
+  getMessage: (messageId: string, mailbox?: string) =>
+    json<MessageDetail>(`/email/messages/${messageId}${mbq(mailbox, '?')}`),
+  markAllRead: (folderId: string, mailbox?: string) =>
+    json<{ marked: number }>(`/email/folders/${encodeURIComponent(folderId)}/read-all${mbq(mailbox, '?')}`, {
       method: 'POST',
     }),
-  markRead: (messageId: string) =>
-    fetch(BASE + `/email/messages/${messageId}/read`, { method: 'PATCH' }),
+  markRead: (messageId: string, mailbox?: string) =>
+    fetch(BASE + `/email/messages/${messageId}/read${mbq(mailbox, '?')}`, { method: 'PATCH' }),
   // "No response needed" — complete the flag and file to Processed.
-  markDone: (messageId: string) =>
-    fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done`, { method: 'POST' }),
-  search: (q: string, nextLink?: string | null) => {
+  markDone: (messageId: string, mailbox?: string) =>
+    fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done${mbq(mailbox, '?')}`, { method: 'POST' }),
+  search: (q: string, nextLink?: string | null, mailbox?: string) => {
     const params = new URLSearchParams({ q })
     if (nextLink) params.set('next_link', nextLink)
+    if (mailbox) params.set('mailbox', mailbox)
     return json<SearchResult>(`/email/search?${params}`)
   },
   send: (payload: SendEmailPayload) =>
@@ -346,6 +355,48 @@ export async function streamAiDraft(
 
       if (data.type === 'token' && data.text != null) onToken(data.text)
       else if (data.type === 'error') throw new Error(data.message || 'draft failed')
+    }
+  }
+}
+
+// AI summary — POST returns an SSE stream of summary tokens (inline, no chat session).
+export async function streamSummary(
+  messageId: string,
+  opts: { provider: string; mailbox?: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: opts.provider, mailbox: opts.mailbox }),
+    signal,
+  })
+
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw || raw === '[DONE]') continue
+
+      let data: { type: string; text?: string; message?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'error') throw new Error(data.message || 'summary failed')
     }
   }
 }
@@ -506,11 +557,17 @@ export const suggestions = {
 }
 
 // Email auto-categorizer
-export interface CategorizerConfig {
+export interface CategorizerTask {
+  mailbox: string // '' = own mailbox
   enabled: boolean
   provider: string
+  instructions: string // extra sorting rules, appended to the base prompt
+}
+
+export interface CategorizerConfig {
   interval_secs: number
   batch_limit: number
+  tasks: CategorizerTask[]
 }
 
 export interface CategorizerRunSummary {
@@ -528,8 +585,8 @@ export const emailCategorizer = {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  runNow: () =>
-    json<CategorizerRunSummary>('/email/categorizer/run', { method: 'POST' }),
+  runNow: (mailbox?: string) =>
+    json<CategorizerRunSummary>(`/email/categorizer/run${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ''}`, { method: 'POST' }),
 }
 
 // Integrations
@@ -547,6 +604,11 @@ export interface SaveEmailConfig {
   client_secret?: string
 }
 
+export interface SharedMailbox {
+  address: string
+  name: string | null
+}
+
 export const integrations = {
   email: {
     getConfig: () => json<EmailConfigStatus>('/integrations/email/config'),
@@ -558,6 +620,17 @@ export const integrations = {
       }),
     disconnect: () =>
       fetch(BASE + '/integrations/email/config', { method: 'DELETE' }),
+    listShared: () =>
+      json<{ mailboxes: SharedMailbox[] }>('/integrations/email/shared'),
+    // Verifies access server-side; rejects (throws) if the user can't open it.
+    addShared: (address: string, name?: string) =>
+      json<{ mailboxes: SharedMailbox[] }>('/integrations/email/shared', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, name }),
+      }),
+    removeShared: (address: string) =>
+      fetch(BASE + `/integrations/email/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
   },
 }
 

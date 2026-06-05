@@ -135,15 +135,18 @@ export function snapPreviewForMouse(
   otherWindows: WinState[],
 ): SnapPreview | null {
   const rem = calcRemainingArea(otherWindows)
-  if (rem.w < 200 || rem.h < 120) return null
+  // Only offer docking when there's a genuinely large free area to dock into.
+  if (rem.w < 360 || rem.h < 280) return null
 
-  const ex = Math.min(80, Math.floor(rem.w * 0.22))
-  const ey = Math.min(60, Math.floor(rem.h * 0.22))
+  // A small, fixed activation band at the very edge — docking is opt-in, so a
+  // window stays floating unless the user drags its cursor right to an edge.
+  // (Previously up to 80px / 22% of the area, which docked on a casual hover.)
+  const EDGE = 24
 
-  const nearLeft   = mouseX <= rem.x + ex
-  const nearRight  = mouseX >= rem.x + rem.w - ex
-  const nearTop    = mouseY <= rem.y + ey
-  const nearBottom = mouseY >= rem.y + rem.h - ey
+  const nearLeft   = mouseX <= rem.x + EDGE
+  const nearRight  = mouseX >= rem.x + rem.w - EDGE
+  const nearTop    = mouseY <= rem.y + EDGE
+  const nearBottom = mouseY >= rem.y + rem.h - EDGE
 
   if ((nearLeft || nearRight) && (nearTop || nearBottom)) {
     return { x: rem.x, y: rem.y, width: rem.w, height: rem.h, anchor: 'fill' }

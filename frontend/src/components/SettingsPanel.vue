@@ -299,6 +299,7 @@ async function loadEmailConfig() {
   emailForm.value.tenant_id = cfg.tenant_id
   emailForm.value.client_id = cfg.client_id
   emailForm.value.client_secret = ''
+  if (cfg.connected) await loadShared()
 }
 
 async function saveEmailConfig() {
@@ -328,13 +329,73 @@ function connectEmail() {
   window.location.href = '/api/integrations/email/connect'
 }
 
+// ── Shared mailboxes ────────────────────────────────────────────────────────────
+const sharedMailboxes = ref<api.SharedMailbox[]>([])
+const sharedForm = ref({ address: '', name: '' })
+const sharedMsg = ref('')
+const sharedSaving = ref(false)
+
+async function loadShared() {
+  try {
+    sharedMailboxes.value = (await api.integrations.email.listShared()).mailboxes
+  } catch { /* not connected yet, or transient — leave the list empty */ }
+}
+
+async function addShared() {
+  const address = sharedForm.value.address.trim()
+  if (!address) return
+  sharedSaving.value = true
+  sharedMsg.value = ''
+  try {
+    const res = await api.integrations.email.addShared(address, sharedForm.value.name.trim() || undefined)
+    sharedMailboxes.value = res.mailboxes
+    ensureCatTasks() // give the new mailbox an auto-sort row
+    sharedForm.value = { address: '', name: '' }
+    sharedMsg.value = 'Mailbox added.'
+  } catch (e: unknown) {
+    sharedMsg.value = e instanceof Error ? e.message : 'Could not add mailbox.'
+  } finally {
+    sharedSaving.value = false
+  }
+}
+
+async function removeShared(address: string) {
+  await api.integrations.email.removeShared(address)
+  sharedMailboxes.value = sharedMailboxes.value.filter(m => m.address !== address)
+  // Drop its auto-sort task so we don't persist a row for a gone mailbox.
+  catConfig.value.tasks = catConfig.value.tasks.filter(t => t.mailbox !== address)
+}
+
 // ── Email auto-sort (categorizer) ───────────────────────────────────────────────
 const catConfig = ref<api.CategorizerConfig>({
-  enabled: false, provider: '', interval_secs: 300, batch_limit: 25,
+  interval_secs: 300, batch_limit: 25, tasks: [],
 })
 const catMsg = ref('')
 const catSaving = ref(false)
-const catRunning = ref(false)
+// The mailbox address currently running a manual sort, or null.
+const catRunning = ref<string | null>(null)
+
+// One auto-sort task per mailbox: the own mailbox ('') plus each shared one.
+const mailboxRows = computed(() => [
+  { address: '', label: 'My mailbox' },
+  ...sharedMailboxes.value.map(m => ({ address: m.address, label: m.name || m.address })),
+])
+const anyCatEnabled = computed(() => catConfig.value.tasks.some(t => t.enabled))
+
+// Make sure every current mailbox has a task row (existing settings preserved).
+function ensureCatTasks() {
+  for (const row of mailboxRows.value) {
+    if (!catConfig.value.tasks.some(t => t.mailbox === row.address)) {
+      catConfig.value.tasks.push({ mailbox: row.address, enabled: false, provider: '', instructions: '' })
+    }
+  }
+}
+function catTaskFor(address: string): api.CategorizerTask {
+  return catConfig.value.tasks.find(t => t.mailbox === address)!
+}
+// Guarantee a task exists for every row before it renders (own mailbox now,
+// shared ones as they load), so catTaskFor is always safe.
+watch(mailboxRows, ensureCatTasks, { immediate: true })
 
 const CATEGORY_FOLDERS = [
   { label: 'Promotions', desc: 'marketing, newsletters, offers' },
@@ -347,6 +408,7 @@ async function loadCategorizer() {
   try {
     catConfig.value = await api.emailCategorizer.getConfig()
   } catch { /* not configured yet; keep defaults */ }
+  ensureCatTasks()
 }
 
 async function saveCategorizer() {
@@ -354,8 +416,10 @@ async function saveCategorizer() {
   catMsg.value = ''
   try {
     catConfig.value = await api.emailCategorizer.saveConfig(catConfig.value)
+    ensureCatTasks()
     catMsg.value = 'Saved.'
-    logs.info('Categorizer', `Auto-sort ${catConfig.value.enabled ? 'enabled' : 'disabled'} (every ${catConfig.value.interval_secs}s)`)
+    const on = catConfig.value.tasks.filter(t => t.enabled).length
+    logs.info('Categorizer', `Auto-sort saved — ${on} mailbox${on === 1 ? '' : 'es'} on (every ${catConfig.value.interval_secs}s)`)
   } catch (e: unknown) {
     catMsg.value = e instanceof Error ? e.message : 'Save failed.'
   } finally {
@@ -363,12 +427,12 @@ async function saveCategorizer() {
   }
 }
 
-async function runCategorizer() {
-  catRunning.value = true
+async function runCategorizer(mailbox: string) {
+  catRunning.value = mailbox
   catMsg.value = ''
-  logs.info('Categorizer', 'Manual run started')
+  logs.info('Categorizer', `Manual run started (${mailbox || 'my mailbox'})`)
   try {
-    const s = await api.emailCategorizer.runNow()
+    const s = await api.emailCategorizer.runNow(mailbox || undefined)
     catMsg.value = s.message
     logs.info('Categorizer', s.message)
   } catch (e: unknown) {
@@ -376,7 +440,7 @@ async function runCategorizer() {
     catMsg.value = msg
     logs.error('Categorizer', `Run failed: ${msg}`)
   } finally {
-    catRunning.value = false
+    catRunning.value = null
   }
 }
 
@@ -709,12 +773,12 @@ async function logout() {
             </div>
           </div>
 
-          <!-- Setup instructions (admin: it's their Azure app) -->
-          <details v-if="isAdmin" class="instructions border border-[var(--c-222222)] rounded-md overflow-hidden">
+          <!-- Setup instructions — each user registers their own Azure app. -->
+          <details class="instructions border border-[var(--c-222222)] rounded-md overflow-hidden">
             <summary class="px-3 py-[0.45rem] text-[0.775rem] text-[var(--c-707070)] cursor-pointer select-none list-none hover:text-[var(--c-a0a0a0)]">Setup instructions</summary>
             <ol class="pt-3 pr-3.5 pb-3.5 pl-7 flex flex-col gap-2 text-[0.775rem] text-muted leading-[1.5] border-t border-[var(--c-1e1e1e)]">
               <li class="pl-1">
-                Sign in to <strong class="text-[var(--c-c0c0c0)]">portal.azure.com</strong> with your Microsoft 365 admin account.
+                Sign in to <strong class="text-[var(--c-c0c0c0)]">portal.azure.com</strong> with your Microsoft 365 account.
               </li>
               <li class="pl-1">
                 Go to <strong class="text-[var(--c-c0c0c0)]">Microsoft Entra ID → App registrations → New registration</strong>.
@@ -756,37 +820,8 @@ async function logout() {
             </ol>
           </details>
 
-          <!-- Member view: the app is configured by the admin; members only
-               connect or disconnect their own mailbox. -->
-          <div v-if="!isAdmin" class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]">
-            <p class="text-[0.775rem] text-[var(--c-787878)]">
-              {{ emailConfig.configured
-                ? 'Connect your Microsoft 365 mailbox to use email, calendar, and auto-sort.'
-                : 'The Microsoft integration hasn\'t been set up yet — ask your admin.' }}
-            </p>
-            <div class="flex items-center gap-2">
-              <button
-                v-if="emailConfig.configured && !emailConfig.connected"
-                type="button"
-                class="bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-122e1e)]"
-                @click="connectEmail"
-              >
-                Connect Microsoft 365 →
-              </button>
-              <button
-                v-if="emailConfig.connected"
-                type="button"
-                class="bg-[var(--c-2a1010)] text-[var(--c-ff7070)] border border-[var(--c-4a1a1a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-3a1515)]"
-                @click="disconnectEmail"
-              >
-                Disconnect
-              </button>
-              <span v-if="emailConfig.connected" class="text-[0.75rem] text-[var(--c-6ecf8e)]">{{ emailConfig.connected_email }}</span>
-            </div>
-          </div>
-
-          <!-- Credentials form (admin only) -->
-          <form v-if="isAdmin" class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="saveEmailConfig">
+          <!-- Credentials form — every user supplies their own Azure app. -->
+          <form class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]" @submit.prevent="saveEmailConfig">
             <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
               Tenant ID (Directory ID)
               <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="emailForm.tenant_id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required />
@@ -834,6 +869,53 @@ async function logout() {
           </form>
         </section>
 
+        <!-- Shared mailboxes card -->
+        <section v-if="emailConfig.connected" class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
+          <div class="flex items-center gap-2.5">
+            <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            <div>
+              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Shared mailboxes</div>
+              <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Add mailboxes you've been granted access to; pick one from the switcher in the Email window</div>
+            </div>
+          </div>
+
+          <ul v-if="sharedMailboxes.length" class="list-none flex flex-col gap-1.5">
+            <li v-for="m in sharedMailboxes" :key="m.address" class="flex items-center justify-between gap-3 bg-surface border border-[var(--c-1e1e1e)] rounded-md px-3 py-1.5">
+              <span class="flex flex-col min-w-0">
+                <span class="text-[0.8rem] text-[var(--c-d0d0d0)] truncate">{{ m.name || m.address }}</span>
+                <span v-if="m.name" class="text-[0.7rem] text-[var(--c-585858)] truncate">{{ m.address }}</span>
+              </span>
+              <button type="button" class="text-[var(--c-606060)] hover:text-[var(--c-d08080)] p-1 cursor-pointer bg-none border-none shrink-0" title="Remove" @click="removeShared(m.address)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </li>
+          </ul>
+          <p v-else class="text-[0.775rem] text-[var(--c-585858)]">No shared mailboxes yet.</p>
+
+          <form class="flex flex-col gap-2" @submit.prevent="addShared">
+            <div class="flex items-end gap-2 flex-wrap">
+              <label class="flex flex-col gap-[0.2rem] text-[0.72rem] text-muted flex-1 min-w-[12rem]">
+                Mailbox address
+                <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="sharedForm.address" type="email" placeholder="team@company.com" />
+              </label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.72rem] text-muted flex-1 min-w-[8rem]">
+                Label (optional)
+                <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="sharedForm.name" placeholder="Support" />
+              </label>
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sharedSaving || !sharedForm.address.trim()">
+                {{ sharedSaving ? 'Checking…' : 'Add' }}
+              </button>
+            </div>
+            <p v-if="sharedMsg" class="text-[0.775rem]" :class="sharedMsg === 'Mailbox added.' ? 'text-[var(--c-6ecf8e)]' : 'text-[var(--c-c06060)]'">{{ sharedMsg }}</p>
+            <p class="text-[0.7rem] text-[var(--c-585858)] leading-[1.5]">
+              We verify you can open the mailbox before saving. Access is granted by your admin in Microsoft 365 (Full Access permission).
+              If adding fails even though you have access, <em class="not-italic text-[var(--c-a0a0a0)]">Disconnect</em> and reconnect above to grant shared-mailbox permissions.
+            </p>
+          </form>
+        </section>
+
         <!-- AI auto-sort card -->
         <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
           <div class="flex items-center justify-between gap-4">
@@ -846,9 +928,9 @@ async function logout() {
                 <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Sort low-priority inbox mail into folders; flag what needs you</div>
               </div>
             </div>
-            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', catConfig.enabled ? 'bg-[var(--c-0d2a1a)] text-success border-[var(--c-1a4030)]' : 'bg-surface text-[var(--c-484848)] border-[var(--c-282828)]']">
-              <span v-if="catConfig.enabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
-              {{ catConfig.enabled ? 'Active' : 'Off' }}
+            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', anyCatEnabled ? 'bg-[var(--c-0d2a1a)] text-success border-[var(--c-1a4030)]' : 'bg-surface text-[var(--c-484848)] border-[var(--c-282828)]']">
+              <span v-if="anyCatEnabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
+              {{ anyCatEnabled ? 'Active' : 'Off' }}
             </div>
           </div>
 
@@ -869,18 +951,33 @@ async function logout() {
               </li>
             </ul>
 
+            <!-- Per-mailbox sort tasks: the own mailbox + each shared mailbox,
+                 each toggled and run independently. -->
+            <div class="flex flex-col gap-2">
+              <div v-for="row in mailboxRows" :key="row.address" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] border border-[var(--c-1e1e1e)] rounded-md p-3">
+                <label class="flex items-center justify-between gap-4 text-[0.8125rem] text-[var(--c-d0d0d0)] cursor-pointer">
+                  <span class="truncate">{{ row.label }}</span>
+                  <input type="checkbox" v-model="catTaskFor(row.address).enabled" class="w-4 h-4 accent-[var(--c-3a6adf)] cursor-pointer shrink-0" />
+                </label>
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                  <select v-model="catTaskFor(row.address).provider" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.78rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] min-w-[9rem]">
+                    <option value="">First configured</option>
+                    <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+                  </select>
+                  <button type="button" class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-2.5 py-1 cursor-pointer text-[0.75rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-282828)] disabled:opacity-50" :disabled="catRunning !== null" @click="runCategorizer(row.address)">
+                    {{ catRunning === row.address ? 'Sorting…' : 'Run now' }}
+                  </button>
+                </div>
+                <textarea
+                  v-model="catTaskFor(row.address).instructions"
+                  rows="2"
+                  class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.775rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]"
+                  placeholder="Custom sorting instructions for this mailbox (optional) — e.g. “File anything from suppliers into Invoices; flag mail mentioning contracts.”"
+                />
+              </div>
+            </div>
+
             <div class="flex flex-col gap-2.5 bg-[var(--c-0d0d0d)] border border-[var(--c-1e1e1e)] rounded-md p-3">
-              <label class="flex items-center justify-between gap-4 text-[0.8125rem] text-[var(--c-d0d0d0)] cursor-pointer">
-                <span>Run automatically in the background</span>
-                <input type="checkbox" v-model="catConfig.enabled" class="w-4 h-4 accent-[var(--c-3a6adf)] cursor-pointer" />
-              </label>
-              <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
-                <span>AI provider</span>
-                <select v-model="catConfig.provider" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] min-w-[10rem]">
-                  <option value="">First configured</option>
-                  <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
-                </select>
-              </label>
               <label class="flex items-center justify-between gap-4 text-[0.775rem] text-muted">
                 <span>Check interval (seconds)</span>
                 <input type="number" min="60" v-model.number="catConfig.interval_secs" class="bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] w-[6rem]" />
@@ -896,9 +993,6 @@ async function logout() {
             <div class="flex items-center gap-2 flex-wrap">
               <button type="button" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="catSaving" @click="saveCategorizer">
                 {{ catSaving ? 'Saving…' : 'Save settings' }}
-              </button>
-              <button type="button" class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-282828)] disabled:opacity-50" :disabled="catRunning" @click="runCategorizer">
-                {{ catRunning ? 'Sorting…' : 'Run now' }}
               </button>
             </div>
             <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">

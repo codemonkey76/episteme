@@ -28,21 +28,6 @@ body {
    former component <style> blocks) so no SFC carries a <style> tag. Class
    names are app-unique, so global scope is safe. */
 
-/* AppWindow: resize grip in the bottom-right corner */
-.resize-se::after {
-  content: '';
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 9px;
-  height: 9px;
-  border-right: 2px solid var(--c-484848);
-  border-bottom: 2px solid var(--c-484848);
-  border-radius: 0 0 2px 0;
-  transition: border-color 0.15s;
-}
-.resize-se:hover::after { border-color: color-mix(in srgb, var(--color-accent) 80%, transparent); }
-
 /* SettingsPanel: custom <details> disclosure marker */
 .instructions summary::-webkit-details-marker { display: none; }
 .instructions summary::before {
