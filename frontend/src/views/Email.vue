@@ -109,6 +109,7 @@ async function selectFolder(folder: api.MailFolder) {
   searchQuery.value = ''
   searchResults.value = []
   searchNextLink.value = null
+  clearSelection()
   await loadMessages(folder.id)
 }
 
@@ -175,6 +176,101 @@ async function loadMore() {
     await loadMessages(selectedFolder.value.id, messagesSkip.value)
   }
 }
+
+// ── Multi-select & delete ─────────────────────────────────────────────────────
+// Plain click selects one message (and opens it); Ctrl/Cmd+click toggles a
+// message in/out of the selection; Shift+click extends from the last plain/
+// toggle click (the anchor). Selected mail can be deleted in bulk — a soft
+// delete that moves to Deleted Items, so nothing is lost to a misclick.
+const selectedIds = ref<Set<string>>(new Set())
+const anchorId = ref<string | null>(null)
+const deleting = ref(false)
+
+function clearSelection() {
+  selectedIds.value = new Set()
+  anchorId.value = null
+}
+
+function onRowClick(m: api.MessageSummary, e: MouseEvent) {
+  const list = displayedMessages.value
+  if (e.shiftKey && anchorId.value) {
+    const a = list.findIndex(x => x.id === anchorId.value)
+    const b = list.findIndex(x => x.id === m.id)
+    if (a !== -1 && b !== -1) {
+      // Ctrl+Shift adds the range to the selection; plain Shift replaces it.
+      const next = e.ctrlKey || e.metaKey ? new Set(selectedIds.value) : new Set<string>()
+      const [lo, hi] = a < b ? [a, b] : [b, a]
+      for (let i = lo; i <= hi; i++) next.add(list[i].id)
+      selectedIds.value = next
+      return
+    }
+  }
+  if (e.ctrlKey || e.metaKey) {
+    const next = new Set(selectedIds.value)
+    if (next.has(m.id)) next.delete(m.id)
+    else next.add(m.id)
+    selectedIds.value = next
+    anchorId.value = m.id
+    return
+  }
+  selectedIds.value = new Set([m.id])
+  anchorId.value = m.id
+  selectMessage(m)
+}
+
+// Move the given messages to Deleted Items and reflect it locally (list rows,
+// unread badge, open reading pane). Returns whether the call succeeded.
+async function deleteIds(ids: string[]): Promise<boolean> {
+  if (!ids.length || deleting.value) return false
+  deleting.value = true
+  try {
+    const res = await api.email.deleteMessages(ids, mbox.value)
+    logs.info('Email', `Deleted ${res.deleted} message(s)`)
+    const gone = new Set(ids)
+    const folder = folders.value.find(f => f.id === selectedFolder.value?.id)
+    if (folder) {
+      const unreadGone = messages.value.filter(m => gone.has(m.id) && !m.isRead).length
+      folder.unreadItemCount = Math.max(0, folder.unreadItemCount - unreadGone)
+      folder.totalItemCount = Math.max(0, folder.totalItemCount - ids.length)
+    }
+    messages.value = messages.value.filter(m => !gone.has(m.id))
+    searchResults.value = searchResults.value.filter(m => !gone.has(m.id))
+    if (selectedMessage.value && gone.has(selectedMessage.value.id)) {
+      selectedMessage.value = null
+      view.value = 'none'
+    }
+    clearSelection()
+    return true
+  } catch (e: unknown) {
+    logs.error('Email', `Delete failed: ${e instanceof Error ? e.message : e}`)
+    return false
+  } finally {
+    deleting.value = false
+  }
+}
+
+function deleteSelected() {
+  return deleteIds([...selectedIds.value])
+}
+
+// Delete the open message from the reading pane and advance to the next one.
+async function deleteOpenMessage() {
+  const m = selectedMessage.value
+  if (!m) return
+  const next = neighbourOf(m.id)
+  if (await deleteIds([m.id])) await advanceTo(next)
+}
+
+// Delete key deletes the selection (unless typing in a field).
+function onListKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Delete' || !selectedIds.value.size) return
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+  e.preventDefault()
+  deleteSelected()
+}
+onMounted(() => document.addEventListener('keydown', onListKeydown))
+onUnmounted(() => document.removeEventListener('keydown', onListKeydown))
 
 // ── Message detail ────────────────────────────────────────────────────────────
 type View = 'none' | 'message' | 'compose'
@@ -301,7 +397,7 @@ const renderedBody = computed(() => {
 
   return html.replace(cidRe, (full, cid: string) => {
     const att = assigned.get(cid)
-    return att ? api.email.attachmentUrl(m.id, att.id) : full
+    return att ? api.email.attachmentUrl(m.id, att.id, mbox.value) : full
   })
 })
 
@@ -882,6 +978,7 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(searchQuery, (q) => {
   if (searchTimer) clearTimeout(searchTimer)
+  clearSelection() // the visible list is about to change; range anchors go stale
   if (!q.trim()) {
     searchResults.value = []
     searchNextLink.value = null
@@ -1062,8 +1159,20 @@ const replyBody = computed(() => {
     <!-- Middle: message list -->
     <div class="min-w-[200px] flex-shrink-0 flex flex-col overflow-hidden" :style="{ width: listPaneWidth + 'px' }">
       <div class="py-2 px-[0.875rem] border-b border-[var(--c-1e1e1e)] flex-shrink-0 flex flex-col gap-[0.4rem]">
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ selectedFolder?.displayName ?? '' }}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-[0.8125rem] font-semibold text-[var(--c-c0c0c0)] overflow-hidden text-ellipsis whitespace-nowrap mr-auto">{{ selectedFolder?.displayName ?? '' }}</span>
+          <button
+            v-if="selectedIds.size"
+            class="flex items-center gap-1 bg-transparent border-none text-[var(--c-585858)] cursor-pointer text-[0.7rem] font-[inherit] p-0 flex-shrink-0 transition-colors duration-100 hover:not-disabled:text-[var(--c-df7a7a)] disabled:opacity-40 disabled:cursor-default"
+            :disabled="deleting"
+            :title="`Move ${selectedIds.size} message(s) to Deleted Items (Del)`"
+            @click="deleteSelected"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+            {{ deleting ? 'Deleting…' : `Delete${selectedIds.size > 1 ? ` (${selectedIds.size})` : ''}` }}
+          </button>
           <button
             v-if="selectedFolder"
             class="flex items-center gap-1 bg-transparent border-none text-[var(--c-585858)] cursor-pointer text-[0.7rem] font-[inherit] p-0 flex-shrink-0 transition-colors duration-100 hover:not-disabled:text-[var(--c-7ab0ff)] disabled:opacity-40 disabled:cursor-default"
@@ -1102,8 +1211,8 @@ const replyBody = computed(() => {
         <button
           v-for="m in displayedMessages"
           :key="m.id"
-          :class="['py-[0.625rem] px-[0.875rem] border-b border-[var(--c-181818)] bg-transparent border-l-[3px] cursor-pointer text-left font-[inherit] w-full transition-colors duration-100 flex flex-col gap-[0.2rem]', selectedMessage?.id === m.id ? 'bg-[var(--c-141e2a)] border-l-[var(--c-3a6adf)]' : 'border-l-transparent hover:bg-[var(--c-161616)]']"
-          @click="selectMessage(m)"
+          :class="['py-[0.625rem] px-[0.875rem] border-b border-[var(--c-181818)] bg-transparent border-l-[3px] cursor-pointer text-left font-[inherit] w-full transition-colors duration-100 flex flex-col gap-[0.2rem] select-none', selectedMessage?.id === m.id ? 'bg-[var(--c-141e2a)] border-l-[var(--c-3a6adf)]' : selectedIds.has(m.id) ? 'bg-[var(--c-141e2a)] border-l-[var(--c-2a4a8a)]' : 'border-l-transparent hover:bg-[var(--c-161616)]']"
+          @click="onRowClick(m, $event)"
         >
           <div class="flex justify-between items-baseline gap-2">
             <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[var(--c-a0a0a0)]']">{{ displayName(m.from.emailAddress) }}</span>
@@ -1226,7 +1335,7 @@ const replyBody = computed(() => {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="14" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
               </svg>
-              AI Summary
+              Summary
             </button>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1234,29 +1343,32 @@ const replyBody = computed(() => {
               </svg>
               AI reply
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('reply')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <button class="inline-flex items-center py-[0.35rem] px-2.5 bg-surface text-muted border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Reply" @click="startReply('reply')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
               </svg>
-              Reply
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('replyAll')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <button class="inline-flex items-center py-[0.35rem] px-2.5 bg-surface text-muted border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Reply all" @click="startReply('replyAll')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="7 17 2 12 7 7"/><polyline points="12 17 7 12 12 7"/><path d="M22 18v-1a4 4 0 0 0-4-4H7"/>
               </svg>
-              Reply all
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="startReply('forward')">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <button class="inline-flex items-center py-[0.35rem] px-2.5 bg-surface text-muted border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Forward" @click="startReply('forward')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
               </svg>
-              Forward
             </button>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254a35)] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               {{ markingDone ? 'Filing…' : 'Done' }}
+            </button>
+            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-4a2525)] disabled:opacity-50" :disabled="deleting" title="Move to Deleted Items" @click="deleteOpenMessage">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+              {{ deleting ? 'Deleting…' : 'Delete' }}
             </button>
             <button
               v-if="selectionText"
@@ -1304,12 +1416,13 @@ const replyBody = computed(() => {
             </div>
           </div>
 
-          <!-- AI summary panel — inline, toggleable; helps draft a reply. -->
-          <div v-if="showSummary" class="px-5 py-3 border-b border-[var(--c-1e1e1e)] bg-[var(--c-0d0d0d)] flex-shrink-0">
-            <div class="flex items-center gap-2 mb-1.5 text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-6a90c0)]">
+          <!-- AI summary panel — inline, toggleable; helps draft a reply.
+               Tinted with the theme accent so it follows the active theme. -->
+          <div v-if="showSummary" class="px-5 py-3 border-b border-accent/20 border-l-[3px] border-l-accent/60 bg-accent/[0.05] flex-shrink-0">
+            <div class="flex items-center gap-2 mb-1.5 text-[0.7rem] uppercase tracking-[0.05em] text-accent">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
               AI summary
-              <span v-if="summarizing" class="inline-block w-[10px] h-[10px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+              <span v-if="summarizing" class="inline-block w-[10px] h-[10px] border-2 border-accent/30 border-t-accent rounded-full animate-[spin_0.7s_linear_infinite]" />
               <button class="ml-auto text-[var(--c-585858)] hover:text-muted bg-none border-none cursor-pointer p-0 text-[0.85rem] leading-none normal-case tracking-normal" title="Hide summary" @click="showSummary = false">✕</button>
             </div>
             <div v-if="summaryText" class="md-body text-[0.8rem] leading-[1.5] text-[var(--c-c0c0c0)]" v-html="renderMarkdown(summaryText)" />
@@ -1405,10 +1518,20 @@ const replyBody = computed(() => {
 </template>
 
 <style scoped>
-/* Markdown rendered into the AI summary panel (v-html → needs :deep). */
-.md-body :deep(code) { background: #181818; border: 1px solid #262626; border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.85em; }
-.md-body :deep(a) { color: #7ab0ff; text-decoration: underline; }
-.md-body :deep(.md-h) { font-weight: 600; color: #c8c8c8; margin: 0.2rem 0 0.1rem; }
+/* Markdown rendered into the AI summary panel (v-html → needs :deep).
+   Colours derive from --color-accent so they track the active theme. */
+.md-body :deep(code) {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+  color: color-mix(in srgb, var(--color-accent) 55%, var(--color-fg));
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.85em;
+}
+.md-body :deep(a) { color: var(--color-accent); text-decoration: underline; }
+.md-body :deep(.md-h) { font-weight: 600; color: color-mix(in srgb, var(--color-accent) 60%, var(--color-fg)); margin: 0.2rem 0 0.1rem; }
+.md-body :deep(strong) { color: color-mix(in srgb, var(--color-accent) 40%, var(--color-fg)); }
+.md-body :deep(li)::marker { color: var(--color-accent); }
 .md-body :deep(ul.md-ul), .md-body :deep(ol.md-ol) { margin: 0.2rem 0; padding-left: 1.2rem; }
 .md-body :deep(ul.md-ul) { list-style: disc; }
 .md-body :deep(ol.md-ol) { list-style: decimal; }

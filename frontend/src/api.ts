@@ -304,6 +304,12 @@ export const email = {
   // "No response needed" — complete the flag and file to Processed.
   markDone: (messageId: string, mailbox?: string) =>
     fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done${mbq(mailbox, '?')}`, { method: 'POST' }),
+  // Soft delete — move messages to Deleted Items.
+  deleteMessages: (ids: string[], mailbox?: string) =>
+    json<{ deleted: number }>('/email/messages/delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, mailbox }),
+    }),
   search: (q: string, nextLink?: string | null, mailbox?: string) => {
     const params = new URLSearchParams({ q })
     if (nextLink) params.set('next_link', nextLink)

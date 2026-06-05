@@ -82,6 +82,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/messages/:id/attachments/:att_id/raw", get(email::get_attachment_raw))
         .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
         .route("/api/email/messages/:id/done", post(email::mark_done))
+        .route("/api/email/messages/delete", post(email::delete_messages))
         .route("/api/email/send", post(email::send_email))
         .route("/api/email/ai-draft", post(email::ai_draft))
         .route("/api/email/messages/:id/summarize", post(email::summarize))

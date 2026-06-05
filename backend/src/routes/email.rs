@@ -541,13 +541,36 @@ pub async fn get_attachment_raw(
         .map_err(AppError::Internal)?;
 
     let url = format!("{GRAPH}/{seg}/messages/{message_id}/attachments/{att_id}/$value");
-    let upstream = state
+    // Graph throttles bursts of these (HTTP 429) — an email body with many
+    // inline images fires them all at once. Honor Retry-After briefly instead
+    // of handing the browser a permanently broken image.
+    let mut upstream = state
         .http_client
         .get(&url)
         .bearer_auth(&token)
         .send()
         .await
         .map_err(|e| AppError::Internal(e.into()))?;
+    for attempt in 0u32..3 {
+        if upstream.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            break;
+        }
+        let wait = upstream
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1 << attempt)
+            .min(5);
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        upstream = state
+            .http_client
+            .get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+    }
 
     if !upstream.status().is_success() {
         let status = upstream.status();
@@ -570,6 +593,10 @@ pub async fn get_attachment_raw(
     Response::builder()
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_DISPOSITION, "inline")
+        // Attachment bytes never change for a given id — let the browser cache
+        // them so iframe reloads (dark-mode toggle, re-opening) don't refetch
+        // every inline image and trip Graph throttling again.
+        .header(header::CACHE_CONTROL, "private, max-age=604800, immutable")
         .body(Body::from(bytes))
         .map_err(|e| AppError::Internal(e.into()))
 }
@@ -676,6 +703,63 @@ pub async fn mark_all_read(
         state.log("email", "info", format!("Marked {marked} message(s) as read")).await;
     }
     Ok(Json(serde_json::json!({ "marked": marked })))
+}
+
+// POST /api/email/messages/delete — soft-delete: move the given messages to
+// Deleted Items (recoverable from Outlook, like deleting in any mail client).
+// Batched in Graph $batch chunks of 20, mirroring mark_all_read.
+#[derive(Deserialize)]
+pub struct DeleteMessagesBody {
+    ids: Vec<String>,
+    #[serde(default)]
+    mailbox: Option<String>,
+}
+
+pub async fn delete_messages(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(payload): Json<DeleteMessagesBody>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    if payload.ids.is_empty() || payload.ids.len() > 500 {
+        return Err(AppError::BadRequest("ids must contain 1–500 message ids".into()));
+    }
+
+    let mut deleted = 0usize;
+    for chunk in payload.ids.chunks(20) {
+        let requests: Vec<Value> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                serde_json::json!({
+                    "id": (i + 1).to_string(),
+                    "method": "POST",
+                    "url": format!("/{seg}/messages/{id}/move"),
+                    "headers": { "Content-Type": "application/json" },
+                    "body": { "destinationId": "deleteditems" },
+                })
+            })
+            .collect();
+        let res = graph_post(
+            &state,
+            user_id,
+            &format!("{GRAPH}/$batch"),
+            &serde_json::json!({ "requests": requests }),
+        )
+        .await?;
+        deleted += res["responses"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .filter(|r| r["status"].as_u64().map(|s| (200..300).contains(&s)).unwrap_or(false))
+                    .count()
+            })
+            .unwrap_or(chunk.len());
+    }
+
+    state.log("email", "info", format!("Deleted {deleted} message(s)")).await;
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 // POST /api/email/send
