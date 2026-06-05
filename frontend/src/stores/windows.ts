@@ -143,10 +143,23 @@ export function snapPreviewForMouse(
   // (Previously up to 80px / 22% of the area, which docked on a casual hover.)
   const EDGE = 24
 
-  const nearLeft   = mouseX <= rem.x + EDGE
-  const nearRight  = mouseX >= rem.x + rem.w - EDGE
-  const nearTop    = mouseY <= rem.y + EDGE
-  const nearBottom = mouseY >= rem.y + rem.h - EDGE
+  // Clamp to the content area so slamming the cursor against a screen edge
+  // still counts as that edge (the classic dock gesture)…
+  const cb = contentBounds()
+  const mx = Math.max(cb.x, Math.min(mouseX, cb.x + cb.w))
+  const my = Math.max(cb.y, Math.min(mouseY, cb.y + cb.h))
+
+  // …but only arm the zones when the cursor is actually at the free area
+  // (within the band). Without this, the half-plane tests below were true
+  // across the whole region covered by docked windows — dragging anywhere
+  // over a docked window previewed a dock at the free area's far-away edge.
+  if (mx < rem.x - EDGE || mx > rem.x + rem.w + EDGE) return null
+  if (my < rem.y - EDGE || my > rem.y + rem.h + EDGE) return null
+
+  const nearLeft   = mx <= rem.x + EDGE
+  const nearRight  = mx >= rem.x + rem.w - EDGE
+  const nearTop    = my <= rem.y + EDGE
+  const nearBottom = my >= rem.y + rem.h - EDGE
 
   if ((nearLeft || nearRight) && (nearTop || nearBottom)) {
     return { x: rem.x, y: rem.y, width: rem.w, height: rem.h, anchor: 'fill' }
