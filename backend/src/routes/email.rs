@@ -937,6 +937,92 @@ previous drafts:\n",
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }
 
+// POST /api/email/messages/:id/summarize — stream a short summary of the email
+// to help the user draft a reply. Inline and ephemeral: no chat session, no DB
+// writes, unlike "Ask AI" which seeds a full conversation.
+#[derive(Deserialize)]
+pub struct SummarizeBody {
+    provider: String,
+    #[serde(default)]
+    mailbox: Option<String>,
+}
+
+pub async fn summarize(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(message_id): Path<String>,
+    Json(payload): Json<SummarizeBody>,
+) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let user_id = user.id.as_str();
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == payload.provider)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider)))?;
+
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    let msg = graph_get(
+        &state,
+        user_id,
+        &format!("{GRAPH}/{seg}/messages/{message_id}"),
+        &[("$select", "subject,from,body")],
+    )
+    .await?;
+    let subject = msg["subject"].as_str().unwrap_or("(no subject)");
+    let from_name = msg["from"]["emailAddress"]["name"].as_str().unwrap_or("");
+    let from_addr = msg["from"]["emailAddress"]["address"].as_str().unwrap_or("");
+    let body_raw = msg["body"]["content"].as_str().unwrap_or("");
+    let body_text = if msg["body"]["contentType"]
+        .as_str()
+        .map(|c| c.eq_ignore_ascii_case("html"))
+        .unwrap_or(false)
+    {
+        html_to_text(body_raw)
+    } else {
+        body_raw.to_string()
+    };
+
+    let system = crate::prompts::get(&state.db, "email_summary").await;
+    let user_msg = format!("From: {from_name} <{from_addr}>\nSubject: {subject}\n\n{body_text}");
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user_msg) },
+    ];
+
+    let (ev_tx, ev_rx) = mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
+        let model_task =
+            tokio::spawn(async move { ModelRouter::stream(&provider, history, Vec::new(), false, tx).await });
+        while let Some(chunk) = rx.recv().await {
+            let data = if chunk.done {
+                serde_json::json!({ "type": "done" }).to_string()
+            } else {
+                serde_json::json!({ "type": "token", "text": chunk.text }).to_string()
+            };
+            if ev_tx.send(data).await.is_err() {
+                return; // client disconnected
+            }
+        }
+        if let Ok(Err(e)) = model_task.await {
+            tracing::error!("summarize stream error: {e}");
+            let _ = ev_tx
+                .send(serde_json::json!({ "type": "error", "message": e.to_string() }).to_string())
+                .await;
+        }
+    });
+
+    let event_stream = stream::unfold(ev_rx, |mut rx| async move {
+        let data = rx.recv().await?;
+        Some((Ok::<Event, Infallible>(Event::default().data(data)), rx))
+    });
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
+}
+
 // ── Ask AI about this email (multimodal chat handoff) ───────────────────────────
 
 #[derive(Deserialize)]

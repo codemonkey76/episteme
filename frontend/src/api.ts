@@ -359,6 +359,48 @@ export async function streamAiDraft(
   }
 }
 
+// AI summary — POST returns an SSE stream of summary tokens (inline, no chat session).
+export async function streamSummary(
+  messageId: string,
+  opts: { provider: string; mailbox?: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: opts.provider, mailbox: opts.mailbox }),
+    signal,
+  })
+
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw || raw === '[DONE]') continue
+
+      let data: { type: string; text?: string; message?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'error') throw new Error(data.message || 'summary failed')
+    }
+  }
+}
+
 // Calendar (Microsoft Graph)
 export interface CalendarEvent {
   id: string

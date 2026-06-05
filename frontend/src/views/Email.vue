@@ -3,15 +3,14 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useWindowsStore } from '../stores/windows'
-import { useSessionsStore } from '../stores/sessions'
 import { useTasksStore } from '../stores/tasks'
 import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
 import { currentTheme, THEMES } from '../theme'
+import { renderMarkdown } from '../lib/markdown'
 
 const logs = useLogsStore()
 const windows = useWindowsStore()
-const sessions = useSessionsStore()
 const tasksStore = useTasksStore()
 const calStore = useCalendarStore()
 
@@ -561,44 +560,61 @@ async function aiReply() {
   }
 }
 
-// Hand the email (text + inline images) to a new chat session and stream advice
-// on what to do. Continues as a normal conversation for follow-ups.
-const asking = ref(false)
-async function askAi() {
+// ── AI Summary ──────────────────────────────────────────────────────────────────
+// An inline, toggleable summary of the open email to help draft a reply.
+// Replaces the old "Ask AI" chat hand-off. Streamed; cached per message so
+// re-opening a summarised email is instant; the toggle preference persists.
+const showSummary = ref(localStorage.getItem('email:summary') === '1')
+watch(showSummary, v => localStorage.setItem('email:summary', v ? '1' : '0'))
+const summarizing = ref(false)
+const summaryText = ref('')
+const summaryError = ref('')
+const summaryCache = new Map<string, string>()
+let summaryAbort: AbortController | null = null
+
+function toggleSummary() {
+  showSummary.value = !showSummary.value
+  if (showSummary.value) runSummary()
+}
+
+async function runSummary() {
   const m = selectedMessage.value
-  if (!m || asking.value) return
+  if (!m || !showSummary.value) return
+  summaryError.value = ''
+  const cached = summaryCache.get(m.id)
+  if (cached) { summaryText.value = cached; return }
   if (!aiProvider.value) {
-    logs.error('Email', 'No AI provider configured — add one in Settings.')
+    summaryError.value = 'No AI provider configured — add one in Settings.'
     return
   }
-  asking.value = true
-  const subject = m.subject ?? '(no subject)'
+  summaryAbort?.abort()
+  summaryAbort = new AbortController()
+  summarizing.value = true
+  summaryText.value = ''
   try {
-    const s = await sessions.createSession(`Email: ${subject}`)
-    await sessions.loadSession(s.id)
-    // Display-only stand-in for the (multimodal) message seeded server-side.
-    sessions.appendMessage({
-      id: crypto.randomUUID(),
-      session_id: s.id,
-      role: 'user',
-      content: `📧 Advise on this email: ${subject}`,
-      created_at: new Date().toISOString(),
-    })
-    windows.openKey('chat', undefined, 'fill')
-    await api.streamAdvise(
+    await api.streamSummary(
       m.id,
-      { sessionId: s.id, provider: aiProvider.value, mailbox: mbox.value },
-      (tok) => sessions.appendToken(tok),
-      () => {},
-      () => {},
+      { provider: aiProvider.value, mailbox: mbox.value },
+      (t) => { summaryText.value += t },
+      summaryAbort.signal,
     )
+    summaryCache.set(m.id, summaryText.value)
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : 'Failed'
-    logs.error('Email', `Ask AI failed: ${msg}`)
+    if (!(e instanceof DOMException && e.name === 'AbortError')) {
+      summaryError.value = e instanceof Error ? e.message : 'Summary failed'
+    }
   } finally {
-    asking.value = false
+    summarizing.value = false
   }
 }
+
+// Reset (and re-fetch, when on) the summary as the open message changes.
+watch(selectedMessage, (m) => {
+  summaryAbort?.abort()
+  summaryText.value = ''
+  summaryError.value = ''
+  if (m && showSummary.value) runSummary()
+})
 
 // Snapshot of the AI-generated draft, taken when streaming completes — sent
 // alongside the (possibly edited) body so the backend can learn style
@@ -1201,11 +1217,16 @@ const replyBody = computed(() => {
           <!-- Action bar — sticky under the header so actions are reachable
                without scrolling a long email. -->
           <div v-if="!showReply" class="sticky top-0 z-20 py-2.5 px-5 border-b border-[var(--c-1e1e1e)] bg-bg flex gap-2 items-center flex-wrap">
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-2a3c5c)] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
+            <button
+              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 border rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100"
+              :class="showSummary ? 'bg-[var(--c-2a3c5c)] text-[var(--c-c0e0ff)] border-[var(--c-3a5a8a)]' : 'bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border-[var(--c-2a4a8a)] hover:bg-[var(--c-2a3c5c)]'"
+              title="Summarise this email to help draft a reply"
+              @click="toggleSummary"
+            >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="14" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
               </svg>
-              {{ asking ? 'Asking…' : 'Ask AI' }}
+              AI Summary
             </button>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1281,6 +1302,19 @@ const replyBody = computed(() => {
                 </div>
               </template>
             </div>
+          </div>
+
+          <!-- AI summary panel — inline, toggleable; helps draft a reply. -->
+          <div v-if="showSummary" class="px-5 py-3 border-b border-[var(--c-1e1e1e)] bg-[var(--c-0d0d0d)] flex-shrink-0">
+            <div class="flex items-center gap-2 mb-1.5 text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-6a90c0)]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+              AI summary
+              <span v-if="summarizing" class="inline-block w-[10px] h-[10px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+              <button class="ml-auto text-[var(--c-585858)] hover:text-muted bg-none border-none cursor-pointer p-0 text-[0.85rem] leading-none normal-case tracking-normal" title="Hide summary" @click="showSummary = false">✕</button>
+            </div>
+            <div v-if="summaryText" class="md-body text-[0.8rem] leading-[1.5] text-[var(--c-c0c0c0)]" v-html="renderMarkdown(summaryText)" />
+            <p v-else-if="summaryError" class="text-[0.775rem] text-danger">{{ summaryError }}</p>
+            <p v-else-if="!summarizing" class="text-[0.775rem] text-[var(--c-585858)]">No summary yet.</p>
           </div>
 
           <!-- Attachments -->
@@ -1369,3 +1403,13 @@ const replyBody = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered into the AI summary panel (v-html → needs :deep). */
+.md-body :deep(code) { background: #181818; border: 1px solid #262626; border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.85em; }
+.md-body :deep(a) { color: #7ab0ff; text-decoration: underline; }
+.md-body :deep(.md-h) { font-weight: 600; color: #c8c8c8; margin: 0.2rem 0 0.1rem; }
+.md-body :deep(ul.md-ul), .md-body :deep(ol.md-ol) { margin: 0.2rem 0; padding-left: 1.2rem; }
+.md-body :deep(ul.md-ul) { list-style: disc; }
+.md-body :deep(ol.md-ol) { list-style: decimal; }
+</style>
