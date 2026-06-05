@@ -119,8 +119,9 @@ Respond with ONLY a JSON array, no prose, no code fences. Each element: \
         description: "Classifies inbox mail for auto-filing. The category names \
 (promotions, invoices, notifications, deliveries, attention, none) are wired to \
 folders in code — keep them; refine the descriptions of what belongs in each. \
-Must keep instructing the model to answer with ONLY a JSON array of \
-{\"id\", \"category\"} objects.",
+\"folder\" + a folder name files into a custom folder when the per-mailbox \
+instructions direct it. Must keep instructing the model to answer with ONLY a \
+JSON array of {\"id\", \"category\"} objects.",
         variables: &[],
         default: "You are an email triage assistant. You are given a \
 list of inbox emails. Classify EACH email into exactly one category:\n\
@@ -132,10 +133,13 @@ reports, CI results, monitoring.\n\
 - \"attention\": anything that needs a human to read or act — personal mail, \
 direct questions, requests, anything ambiguous or important.\n\
 - \"none\": equivalent to attention; use when unsure. Never guess a low-priority \
-category for mail that might matter.\n\n\
+category for mail that might matter.\n\
+- \"folder\": ONLY when additional instructions for this mailbox direct certain \
+mail into a specific named folder. Also set \"folder\" to that exact folder name. \
+Never invent folders the instructions don't name.\n\n\
 Respond with ONLY a JSON array, no prose, no code fences. Each element: \
-{\"id\": \"<the email id>\", \"category\": \"<one category>\"}. Include every email \
-exactly once.",
+{\"id\": \"<the email id>\", \"category\": \"<one category>\", \"folder\": \
+\"<folder name, only with category folder>\"}. Include every email exactly once.",
     },
     PromptDef {
         key: "email_draft",

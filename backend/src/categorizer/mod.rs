@@ -265,7 +265,7 @@ pub async fn run_mailbox(
         classifications.iter().map(|c| (c.id.as_str(), c)).collect();
 
     // Cache folder ids resolved within this run.
-    let mut folder_ids: HashMap<&'static str, String> = HashMap::new();
+    let mut folder_ids: HashMap<String, String> = HashMap::new();
 
     for m in &fresh {
         let Some(id) = m["id"].as_str() else { continue };
@@ -290,16 +290,29 @@ pub async fn run_mailbox(
                 }
             }
             other => {
-                let Some(folder_name) = folder_for(other) else {
-                    summary.skipped += 1;
-                    continue;
+                // "folder" carries a custom destination named by the per-mailbox
+                // instructions; everything else maps through the fixed categories.
+                let folder_name = if other == "folder" {
+                    match by_id.get(id).and_then(|c| c.folder.as_deref()).map(str::trim) {
+                        Some(name) if !name.is_empty() && name.len() <= 100 => name.to_string(),
+                        _ => {
+                            summary.skipped += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    let Some(name) = folder_for(other) else {
+                        summary.skipped += 1;
+                        continue;
+                    };
+                    name.to_string()
                 };
                 // Resolve (and cache) the destination folder id.
-                let folder_id = match folder_ids.get(folder_name) {
+                let folder_id = match folder_ids.get(&folder_name) {
                     Some(fid) => fid.clone(),
-                    None => match email::ensure_folder(state, user_id, mailbox_opt, folder_name).await {
+                    None => match email::ensure_folder(state, user_id, mailbox_opt, &folder_name).await {
                         Ok(fid) => {
-                            folder_ids.insert(folder_name, fid.clone());
+                            folder_ids.insert(folder_name.clone(), fid.clone());
                             fid
                         }
                         Err(e) => {
@@ -354,6 +367,10 @@ async fn resolve_provider(state: &AppState, name: &str) -> Result<ProviderConfig
 struct Classification {
     id: String,
     category: String,
+    /// Custom destination folder, only honoured with category "folder" —
+    /// directed by the per-mailbox instructions.
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 /// Extract the JSON array from a model response, tolerating code fences or
