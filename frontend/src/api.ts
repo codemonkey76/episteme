@@ -557,11 +557,16 @@ export const suggestions = {
 }
 
 // Email auto-categorizer
-export interface CategorizerConfig {
+export interface CategorizerTask {
+  mailbox: string // '' = own mailbox
   enabled: boolean
   provider: string
+}
+
+export interface CategorizerConfig {
   interval_secs: number
   batch_limit: number
+  tasks: CategorizerTask[]
 }
 
 export interface CategorizerRunSummary {
@@ -579,8 +584,8 @@ export const emailCategorizer = {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  runNow: () =>
-    json<CategorizerRunSummary>('/email/categorizer/run', { method: 'POST' }),
+  runNow: (mailbox?: string) =>
+    json<CategorizerRunSummary>(`/email/categorizer/run${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ''}`, { method: 'POST' }),
 }
 
 // Integrations

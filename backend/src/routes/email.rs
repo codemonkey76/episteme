@@ -1241,13 +1241,25 @@ pub async fn put_categorizer(
     Ok(Json(cfg))
 }
 
-// POST /api/email/categorizer/run — run categorization immediately.
+// POST /api/email/categorizer/run?mailbox=… — run one mailbox's sort now.
 pub async fn run_categorizer(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<crate::categorizer::RunSummary>> {
     let user_id = user.id.as_str();
-    let summary = crate::categorizer::run_once(&state, user_id)
+    let mailbox = q.mailbox.unwrap_or_default();
+    // Use the provider configured for that mailbox's task (empty → first available).
+    let cfg = crate::categorizer::get_config(&state.db, user_id)
+        .await
+        .map_err(AppError::Internal)?;
+    let provider = cfg
+        .tasks
+        .iter()
+        .find(|t| t.mailbox == mailbox)
+        .map(|t| t.provider.clone())
+        .unwrap_or_default();
+    let summary = crate::categorizer::run_mailbox(&state, user_id, &mailbox, &provider)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(summary))

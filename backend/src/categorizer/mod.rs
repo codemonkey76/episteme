@@ -27,8 +27,14 @@ const STATE_KEY: &str = "email_categorizer_state";
 fn config_key(user_id: &str) -> String {
     format!("{CONFIG_KEY}:{user_id}")
 }
-fn state_key(user_id: &str) -> String {
-    format!("{STATE_KEY}:{user_id}")
+/// Processed-id state is tracked per mailbox so each sorts independently.
+/// The own mailbox uses an empty suffix to match the pre per-mailbox key.
+fn state_key(user_id: &str, mailbox: &str) -> String {
+    if mailbox.is_empty() {
+        format!("{STATE_KEY}:{user_id}")
+    } else {
+        format!("{STATE_KEY}:{user_id}:{mailbox}")
+    }
 }
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";
 /// Cap on remembered message ids so flagged/left-in-inbox mail isn't re-scanned.
@@ -42,17 +48,29 @@ static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 
 // ── Config & persisted state ───────────────────────────────────────────────────
 
+/// One auto-sort task. Each connected mailbox (the own mailbox, identified by
+/// an empty `mailbox`, plus any shared mailboxes) sorts independently.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CategorizerConfig {
+pub struct CategorizerTask {
+    /// Shared mailbox address, or "" for the user's own mailbox.
+    #[serde(default)]
+    pub mailbox: String,
     #[serde(default)]
     pub enabled: bool,
     /// Provider name to use; empty → first configured provider.
     #[serde(default)]
     pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategorizerConfig {
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
     #[serde(default = "default_batch")]
     pub batch_limit: u32,
+    /// Per-mailbox sort tasks.
+    #[serde(default)]
+    pub tasks: Vec<CategorizerTask>,
 }
 
 fn default_interval() -> u64 { 300 }
@@ -61,10 +79,9 @@ fn default_batch() -> u32 { 25 }
 impl Default for CategorizerConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            provider: String::new(),
             interval_secs: default_interval(),
             batch_limit: default_batch(),
+            tasks: Vec::new(),
         }
     }
 }
@@ -101,7 +118,22 @@ fn folder_for(category: &str) -> Option<&'static str> {
 // ── Config accessors (used by HTTP routes) ─────────────────────────────────────
 
 pub async fn get_config(pool: &sqlx::SqlitePool, user_id: &str) -> Result<CategorizerConfig> {
-    Ok(db::settings::get(pool, &config_key(user_id)).await?.unwrap_or_default())
+    let raw: Option<Value> = db::settings::get(pool, &config_key(user_id)).await?;
+    let Some(raw) = raw else { return Ok(CategorizerConfig::default()) };
+    // Migrate the pre per-mailbox shape ({enabled, provider, …} with no `tasks`)
+    // into a single own-mailbox task so existing setups keep working.
+    if raw.get("tasks").is_none() {
+        return Ok(CategorizerConfig {
+            interval_secs: raw.get("interval_secs").and_then(Value::as_u64).unwrap_or_else(default_interval),
+            batch_limit: raw.get("batch_limit").and_then(Value::as_u64).unwrap_or(default_batch() as u64) as u32,
+            tasks: vec![CategorizerTask {
+                mailbox: String::new(),
+                enabled: raw.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                provider: raw.get("provider").and_then(Value::as_str).unwrap_or("").to_string(),
+            }],
+        });
+    }
+    Ok(serde_json::from_value(raw)?)
 }
 
 pub async fn set_config(
@@ -114,9 +146,15 @@ pub async fn set_config(
 
 // ── Core run ───────────────────────────────────────────────────────────────────
 
-/// Scan one user's inbox and apply categorization once. Runs regardless of
-/// the `enabled` flag (the worker gates on `enabled`; manual "Run now" does not).
-pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
+/// Scan one mailbox's inbox and apply categorization once. `mailbox` is a
+/// shared mailbox address, or "" for the user's own mailbox. Runs regardless of
+/// the `enabled` flag (the worker gates on it; manual "Run now" does not).
+pub async fn run_mailbox(
+    state: &AppState,
+    user_id: &str,
+    mailbox: &str,
+    provider_name: &str,
+) -> Result<RunSummary> {
     use std::sync::atomic::Ordering;
 
     // Acquire the single-run lock; bail if another run is already in flight.
@@ -136,15 +174,22 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
     let _guard = Guard;
 
     let cfg = get_config(&state.db, user_id).await?;
+    let provider = resolve_provider(state, provider_name).await?;
 
-    let provider = resolve_provider(state, &cfg.provider).await?;
+    // `me` for the own mailbox, `users/{address}` for a shared one. `mailbox_opt`
+    // is what the email helpers (flag/ensure/move) take.
+    let mailbox_opt = (!mailbox.is_empty()).then_some(mailbox);
+    let seg = match mailbox_opt {
+        Some(addr) => format!("users/{addr}"),
+        None => "me".to_string(),
+    };
 
     // Fetch the most recent inbox messages.
     let top = cfg.batch_limit.clamp(1, 50).to_string();
     let inbox = email::graph_get(
         state,
         user_id,
-        &format!("{GRAPH}/me/mailFolders/inbox/messages"),
+        &format!("{GRAPH}/{seg}/mailFolders/inbox/messages"),
         &[
             ("$select", "id,subject,from,bodyPreview,receivedDateTime,isRead"),
             ("$orderby", "receivedDateTime desc"),
@@ -156,7 +201,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
     let messages = inbox["value"].as_array().cloned().unwrap_or_default();
 
     let mut st: PersistState =
-        db::settings::get(&state.db, &state_key(user_id)).await?.unwrap_or_default();
+        db::settings::get(&state.db, &state_key(user_id, mailbox)).await?.unwrap_or_default();
     let seen: std::collections::HashSet<&str> =
         st.processed_ids.iter().map(String::as_str).collect();
 
@@ -223,7 +268,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
         match category.as_str() {
             "attention" | "none" | "" => {
                 if category == "attention" {
-                    match email::flag_message(state, user_id, None, id).await {
+                    match email::flag_message(state, user_id, mailbox_opt, id).await {
                         Ok(()) => {
                             summary.flagged += 1;
                             log_event(state, "info", format!("Flagged: {subject}"));
@@ -242,7 +287,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
                 // Resolve (and cache) the destination folder id.
                 let folder_id = match folder_ids.get(folder_name) {
                     Some(fid) => fid.clone(),
-                    None => match email::ensure_folder(state, user_id, None, folder_name).await {
+                    None => match email::ensure_folder(state, user_id, mailbox_opt, folder_name).await {
                         Ok(fid) => {
                             folder_ids.insert(folder_name, fid.clone());
                             fid
@@ -254,7 +299,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
                         }
                     },
                 };
-                match email::move_message(state, user_id, None, id, &folder_id).await {
+                match email::move_message(state, user_id, mailbox_opt, id, &folder_id).await {
                     Ok(()) => {
                         summary.moved += 1;
                         log_event(state, "info", format!("Moved to {folder_name}: {subject}"));
@@ -275,7 +320,7 @@ pub async fn run_once(state: &AppState, user_id: &str) -> Result<RunSummary> {
     while st.processed_ids.len() > MAX_PROCESSED {
         st.processed_ids.pop_front();
     }
-    db::settings::set(&state.db, &state_key(user_id), &st).await?;
+    db::settings::set(&state.db, &state_key(user_id, mailbox), &st).await?;
 
     summary.message = format!(
         "Scanned {}, moved {}, flagged {}, left {}.",
@@ -346,20 +391,25 @@ pub fn spawn_worker(state: Arc<AppState>) {
 
             for user in &users {
                 let cfg = get_config(&state.db, &user.id).await.unwrap_or_default();
-                if !cfg.enabled {
+                let enabled_tasks: Vec<&CategorizerTask> =
+                    cfg.tasks.iter().filter(|t| t.enabled).collect();
+                if enabled_tasks.is_empty() {
                     continue;
                 }
                 next_interval = next_interval.min(cfg.interval_secs.max(60));
-                match run_once(&state, &user.id).await {
-                    Ok(s) if s.scanned > 0 => {
-                        tracing::info!("categorizer[{}]: {}", user.username, s.message);
-                    }
-                    Ok(_) => {}
-                    // not_connected just means this user hasn't linked a mailbox.
-                    Err(e) if e.to_string().contains("not_connected") => {}
-                    Err(e) => {
-                        tracing::warn!("categorizer run failed for {}: {e}", user.username);
-                        log_event(&state, "error", format!("Run failed ({}): {e}", user.username));
+                // Each enabled mailbox sorts independently.
+                for task in enabled_tasks {
+                    match run_mailbox(&state, &user.id, &task.mailbox, &task.provider).await {
+                        Ok(s) if s.scanned > 0 => {
+                            tracing::info!("categorizer[{}/{}]: {}", user.username, task.mailbox, s.message);
+                        }
+                        Ok(_) => {}
+                        // not_connected just means this user hasn't linked a mailbox.
+                        Err(e) if e.to_string().contains("not_connected") => {}
+                        Err(e) => {
+                            tracing::warn!("categorizer run failed for {}: {e}", user.username);
+                            log_event(&state, "error", format!("Run failed ({}): {e}", user.username));
+                        }
                     }
                 }
             }
