@@ -1198,58 +1198,9 @@ const replyBody = computed(() => {
             </div>
           </div>
 
-          <!-- Attachments -->
-          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
-            <button
-              v-for="att in visibleAttachments"
-              :key="att.id"
-              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:border-[var(--c-3a3a3a)]"
-              :title="`Open ${att.name}`"
-              @click="openAttachment(att)"
-            >
-              <svg class="text-[var(--c-7ab0ff)] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-              </svg>
-              <span class="flex flex-col min-w-0">
-                <span class="text-[0.78rem] text-[var(--c-d0d0d0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
-                <span class="text-[0.68rem] text-[var(--c-585858)]">{{ formatSize(att.size) }}</span>
-              </span>
-            </button>
-          </div>
-
-          <!-- Body -->
-          <div class="py-[0.875rem] px-5 flex-shrink-0">
-            <div v-if="isHtmlBody" class="flex justify-end mb-1.5">
-              <button
-                class="inline-flex items-center gap-[0.3rem] py-[0.2rem] px-2 bg-surface text-[var(--c-808080)] border border-raised rounded text-[0.7rem] font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
-                :title="darkEmail ? 'Showing email in dark mode — click for the original colours' : 'Show email in dark mode'"
-                @click="darkEmail = !darkEmail"
-              >
-                <svg v-if="darkEmail" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-                </svg>
-                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                </svg>
-                {{ darkEmail ? 'Light' : 'Dark' }}
-              </button>
-            </div>
-            <!-- allow-same-origin (without allow-scripts) lets us measure the content
-                 height so the iframe grows to fit; email scripts still can't run. -->
-            <iframe
-              v-if="isHtmlBody"
-              ref="iframeEl"
-              :srcdoc="srcDoc"
-              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-              class="w-full min-h-[200px] border-none rounded-md block transition-opacity duration-150"
-              :class="[bodyReady ? 'opacity-100' : 'opacity-0', darkEmail ? 'bg-surface' : 'bg-white']"
-              @load="onIframeLoad"
-            />
-            <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
-          </div>
-
-          <!-- Reply area -->
-          <div v-if="!showReply" class="py-3 px-5 border-t border-[var(--c-1e1e1e)] flex-shrink-0 flex gap-2 items-center flex-wrap">
+          <!-- Action bar — sticky under the header so actions are reachable
+               without scrolling a long email. -->
+          <div v-if="!showReply" class="sticky top-0 z-20 py-2.5 px-5 border-b border-[var(--c-1e1e1e)] bg-bg flex gap-2 items-center flex-wrap">
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-23304a)] text-[var(--c-a0c8ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-2a3c5c)] disabled:opacity-50" :disabled="asking" title="Send this email (and its images) to the AI for advice" @click="askAi">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -1315,7 +1266,7 @@ const replyBody = computed(() => {
               </button>
               <template v-if="providerMenuOpen">
                 <div class="fixed inset-0 z-[40]" @click="providerMenuOpen = false" />
-                <div class="absolute right-0 bottom-full mb-1.5 z-[41] min-w-[12rem] bg-[var(--c-1c1c1c)] border border-[var(--c-303030)] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
+                <div class="absolute right-0 top-full mt-1.5 z-[41] min-w-[12rem] bg-[var(--c-1c1c1c)] border border-[var(--c-303030)] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.5)] py-1">
                   <div class="px-3 py-1 text-[0.62rem] uppercase tracking-[0.06em] text-[var(--c-585858)]">AI model</div>
                   <button
                     v-for="p in providersList"
@@ -1332,7 +1283,57 @@ const replyBody = computed(() => {
             </div>
           </div>
 
-          <form v-else class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
+          <!-- Attachments -->
+          <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
+            <button
+              v-for="att in visibleAttachments"
+              :key="att.id"
+              class="flex items-center gap-2 max-w-[16rem] bg-surface border border-raised rounded-md py-1.5 px-2.5 cursor-pointer text-left font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:border-[var(--c-3a3a3a)]"
+              :title="`Open ${att.name}`"
+              @click="openAttachment(att)"
+            >
+              <svg class="text-[var(--c-7ab0ff)] flex-shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+              <span class="flex flex-col min-w-0">
+                <span class="text-[0.78rem] text-[var(--c-d0d0d0)] overflow-hidden text-ellipsis whitespace-nowrap">{{ att.name }}</span>
+                <span class="text-[0.68rem] text-[var(--c-585858)]">{{ formatSize(att.size) }}</span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="py-[0.875rem] px-5 flex-shrink-0">
+            <div v-if="isHtmlBody" class="flex justify-end mb-1.5">
+              <button
+                class="inline-flex items-center gap-[0.3rem] py-[0.2rem] px-2 bg-surface text-[var(--c-808080)] border border-raised rounded text-[0.7rem] font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
+                :title="darkEmail ? 'Showing email in dark mode — click for the original colours' : 'Show email in dark mode'"
+                @click="darkEmail = !darkEmail"
+              >
+                <svg v-if="darkEmail" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                {{ darkEmail ? 'Light' : 'Dark' }}
+              </button>
+            </div>
+            <!-- allow-same-origin (without allow-scripts) lets us measure the content
+                 height so the iframe grows to fit; email scripts still can't run. -->
+            <iframe
+              v-if="isHtmlBody"
+              ref="iframeEl"
+              :srcdoc="srcDoc"
+              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              class="w-full min-h-[200px] border-none rounded-md block transition-opacity duration-150"
+              :class="[bodyReady ? 'opacity-100' : 'opacity-0', darkEmail ? 'bg-surface' : 'bg-white']"
+              @load="onIframeLoad"
+            />
+            <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
+          </div>
+
+          <form v-if="showReply" class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
             <div class="flex items-center gap-2 mb-3">
               <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
               <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[var(--c-7ab0ff)]">
