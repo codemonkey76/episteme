@@ -16,9 +16,17 @@ const error = ref('')
 const statusFilter = ref<'open' | 'done' | 'all'>('open')
 const searchQuery = ref('')
 
+// ── To-do lists ──────────────────────────────────────────────────────────────
+// 'all' shows everything; 'general' is the implicit default list (list_id
+// null); anything else is a named list's id. Tasks load once and filter here.
+const lists = ref<api.TaskListInfo[]>([])
+const activeList = ref<string>('all')
+
 const filtered = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   return items.value.filter(t => {
+    if (activeList.value === 'general' && t.list_id !== null) return false
+    if (activeList.value !== 'all' && activeList.value !== 'general' && t.list_id !== activeList.value) return false
     if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
     if (q && !t.title.toLowerCase().includes(q) && !(t.notes ?? '').toLowerCase().includes(q)) return false
     return true
@@ -29,8 +37,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const res = await api.tasks.list({ status: 'all', limit: 1000 })
-    items.value = res.tasks
+    const [tRes, lRes] = await Promise.all([
+      api.tasks.list({ status: 'all', limit: 1000 }),
+      api.tasks.lists(),
+    ])
+    items.value = tRes.tasks
+    lists.value = lRes.lists
+    // The active list may have been deleted elsewhere (e.g. by the chat AI).
+    if (!['all', 'general'].includes(activeList.value) && !lists.value.some(l => l.id === activeList.value)) {
+      activeList.value = 'all'
+    }
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to load tasks'
   } finally {
@@ -42,14 +58,79 @@ onMounted(load)
 // Refresh when the chat AI touches the task list.
 watch(() => tasksStore.changeToken, load)
 
+// Create / rename / delete named lists.
+const addingList = ref(false)
+const newListName = ref('')
+const renamingListId = ref<string | null>(null)
+const renameListInput = ref('')
+
+async function createList() {
+  const name = newListName.value.trim()
+  if (!name) { addingList.value = false; return }
+  try {
+    const res = await api.tasks.createList(name)
+    lists.value = [...lists.value, res.list].sort((a, b) => a.name.localeCompare(b.name))
+    activeList.value = res.list.id
+    newListName.value = ''
+    addingList.value = false
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to create list'
+  }
+}
+
+function startRenameList(l: api.TaskListInfo) {
+  renamingListId.value = l.id
+  renameListInput.value = l.name
+}
+
+async function confirmRenameList(l: api.TaskListInfo) {
+  const name = renameListInput.value.trim()
+  renamingListId.value = null
+  if (!name || name === l.name) return
+  try {
+    const res = await api.tasks.renameList(l.id, name)
+    if (!res.ok) throw new Error(`${res.status}`)
+    l.name = name
+    lists.value = [...lists.value].sort((a, b) => a.name.localeCompare(b.name))
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to rename list'
+  }
+}
+
+async function deleteList(l: api.TaskListInfo) {
+  try {
+    await api.tasks.removeList(l.id)
+    lists.value = lists.value.filter(x => x.id !== l.id)
+    // Its tasks fall back to General server-side; mirror that locally.
+    items.value = items.value.map(t => (t.list_id === l.id ? { ...t, list_id: null } : t))
+    if (activeList.value === l.id) activeList.value = 'general'
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to delete list'
+  }
+}
+
+function pillClass(active: boolean): string {
+  return [
+    'px-2.5 py-[0.2rem] rounded-full text-xs font-[inherit] cursor-pointer border transition-colors duration-100 max-w-[12rem] overflow-hidden text-ellipsis whitespace-nowrap',
+    active
+      ? 'bg-[var(--c-1c2a3a)] text-[var(--c-7ab0ff)] border-[var(--c-2a4a8a)]'
+      : 'bg-surface text-[var(--c-808080)] border-raised hover:text-[var(--c-c0c0c0)]',
+  ].join(' ')
+}
+
 // ── Add / edit composer ──────────────────────────────────────────────────────
 interface Draft {
   title: string
   notes: string
   due: string // datetime-local value, '' = none
   priority: Priority
+  list: string // list id, '' = General
 }
-const emptyDraft = (): Draft => ({ title: '', notes: '', due: '', priority: 'normal' })
+const emptyDraft = (): Draft => ({
+  title: '', notes: '', due: '', priority: 'normal',
+  // New tasks default into the list being viewed.
+  list: ['all', 'general'].includes(activeList.value) ? '' : activeList.value,
+})
 
 const adding = ref(false)
 const editingId = ref<string | null>(null)
@@ -69,6 +150,7 @@ function startEdit(t: api.Task) {
     notes: t.notes ?? '',
     due: t.due_at ? toLocalInput(t.due_at) : '',
     priority: t.priority,
+    list: t.list_id ?? '',
   }
 }
 
@@ -91,6 +173,7 @@ async function saveDraft() {
     if (editingId.value) {
       const res = await api.tasks.update(editingId.value, {
         title, notes, due_at, priority: draft.value.priority,
+        list_id: draft.value.list || null,
       })
       const idx = items.value.findIndex(x => x.id === editingId.value)
       if (idx !== -1) items.value[idx] = res.task
@@ -101,6 +184,7 @@ async function saveDraft() {
         notes: notes ?? undefined,
         due_at: due_at ?? undefined,
         priority: draft.value.priority,
+        list_id: draft.value.list || undefined,
       })
       items.value.unshift(res.task)
       adding.value = false
@@ -147,10 +231,53 @@ function isOverdue(t: api.Task): boolean {
 }
 
 const openCount = computed(() => items.value.filter(t => t.status === 'open').length)
+
+/// Named-list label for a task row (null for General).
+function listName(t: api.Task): string | null {
+  if (t.list_id === null) return null
+  return lists.value.find(l => l.id === t.list_id)?.name ?? null
+}
 </script>
 
 <template>
   <div class="flex flex-col h-full bg-bg overflow-hidden">
+    <!-- List tabs: All · General · named lists · new -->
+    <div class="flex items-center gap-1.5 px-3 pt-2 shrink-0 flex-wrap">
+      <button :class="pillClass(activeList === 'all')" @click="activeList = 'all'">All</button>
+      <button :class="pillClass(activeList === 'general')" @click="activeList = 'general'">General</button>
+      <template v-for="l in lists" :key="l.id">
+        <input
+          v-if="renamingListId === l.id"
+          v-model="renameListInput"
+          class="bg-surface text-fg border border-[var(--c-3a6adf)] rounded-full px-2.5 py-[0.2rem] text-xs font-[inherit] outline-none w-[9rem]"
+          @keyup.enter="confirmRenameList(l)"
+          @keyup.escape="renamingListId = null"
+          @blur="confirmRenameList(l)"
+        />
+        <span v-else class="inline-flex items-center gap-1">
+          <button :class="pillClass(activeList === l.id)" :title="`Double-click to rename`" @click="activeList = l.id" @dblclick="startRenameList(l)">{{ l.name }}</button>
+          <template v-if="activeList === l.id">
+            <button class="bg-none border-none p-0.5 cursor-pointer text-[var(--c-505050)] hover:text-[var(--c-a0c0ff)]" title="Rename list" @click="startRenameList(l)">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
+            </button>
+            <button class="bg-none border-none p-0.5 cursor-pointer text-[var(--c-505050)] hover:text-[var(--c-d08080)]" title="Delete list (its tasks move to General)" @click="deleteList(l)">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </template>
+        </span>
+      </template>
+      <input
+        v-if="addingList"
+        v-model="newListName"
+        class="bg-surface text-fg border border-[var(--c-3a6adf)] rounded-full px-2.5 py-[0.2rem] text-xs font-[inherit] outline-none w-[9rem] placeholder:text-[var(--c-404040)]"
+        placeholder="List name…"
+        @keyup.enter="createList"
+        @keyup.escape="addingList = false; newListName = ''"
+        @blur="createList"
+      />
+      <button v-else class="px-2 py-[0.2rem] rounded-full text-xs font-[inherit] cursor-pointer border border-dashed border-[var(--c-303030)] bg-transparent text-[var(--c-585858)] hover:text-[var(--c-a0a0a0)] hover:border-[var(--c-404040)] transition-colors duration-100" title="New list" @click="addingList = true">+ List</button>
+    </div>
+
     <!-- Toolbar -->
     <div class="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-1e1e1e)] shrink-0 flex-wrap">
       <select v-model="statusFilter" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
@@ -189,6 +316,10 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
         <select v-model="draft.priority" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
           <option v-for="p in PRIORITIES" :key="p" :value="p">{{ p }}</option>
         </select>
+        <select v-model="draft.list" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer" title="List">
+          <option value="">General</option>
+          <option v-for="l in lists" :key="l.id" :value="l.id">{{ l.name }}</option>
+        </select>
         <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="!draft.title.trim()" @click="saveDraft">Save</button>
         <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="adding = false">Cancel</button>
       </div>
@@ -215,6 +346,10 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
               <select v-model="draft.priority" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
                 <option v-for="p in PRIORITIES" :key="p" :value="p">{{ p }}</option>
               </select>
+              <select v-model="draft.list" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer" title="List">
+                <option value="">General</option>
+                <option v-for="l in lists" :key="l.id" :value="l.id">{{ l.name }}</option>
+              </select>
               <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[var(--c-254880)]" @click="saveDraft">Save</button>
               <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1 text-xs font-[inherit] cursor-pointer hover:text-muted" @click="editingId = null">Cancel</button>
             </div>
@@ -238,6 +373,10 @@ const openCount = computed(() => items.value.filter(t => t.status === 'open').le
                 <template v-if="t.due_at">
                   <span class="text-[var(--c-505050)]">·</span>
                   <span :class="isOverdue(t) ? 'text-[var(--c-ff7070)]' : 'text-[var(--c-505050)]'">due {{ fmtDue(t.due_at) }}</span>
+                </template>
+                <template v-if="activeList === 'all' && listName(t)">
+                  <span class="text-[var(--c-505050)]">·</span>
+                  <span class="text-[var(--c-587078)]">{{ listName(t) }}</span>
                 </template>
               </div>
             </div>

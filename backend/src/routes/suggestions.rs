@@ -67,6 +67,7 @@ pub async fn accept(
             s.context.as_deref(),
             s.start_at.as_deref(),
             "normal",
+            None, // commitments land in the General list
         )
         .await
         .map_err(AppError::Internal)?;

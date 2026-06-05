@@ -479,33 +479,55 @@ export interface Task {
   due_at: string | null
   priority: 'low' | 'normal' | 'high'
   status: 'open' | 'done'
+  // null = the implicit "General" list.
+  list_id: string | null
   created_at: string
   updated_at: string
 }
 
+export interface TaskListInfo {
+  id: string
+  name: string
+  created_at: string
+}
+
 export const tasks = {
-  list: (params?: { status?: string; q?: string; limit?: number }) => {
+  // `list` filters to one to-do list: 'general' for the default, or a list id.
+  list: (params?: { status?: string; q?: string; limit?: number; list?: string }) => {
     const p = new URLSearchParams()
     if (params?.status && params.status !== 'all') p.set('status', params.status)
     if (params?.q) p.set('q', params.q)
     if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    if (params?.list) p.set('list', params.list)
     return json<{ tasks: Task[] }>(`/tasks?${p}`)
   },
-  create: (task: { title: string; notes?: string; due_at?: string; priority?: string }) =>
+  create: (task: { title: string; notes?: string; due_at?: string; priority?: string; list_id?: string }) =>
     json<{ task: Task }>('/tasks', {
       method: 'POST',
       body: JSON.stringify(task),
     }),
-  // Partial update; pass null for notes/due_at to clear them.
+  // Partial update; pass null for notes/due_at to clear, null list_id → General.
   update: (
     id: string,
-    patch: Partial<{ title: string; notes: string | null; due_at: string | null; priority: string; status: string }>,
+    patch: Partial<{ title: string; notes: string | null; due_at: string | null; priority: string; status: string; list_id: string | null }>,
   ) =>
     json<{ task: Task }>(`/tasks/${id}`, {
       method: 'PUT',
       body: JSON.stringify(patch),
     }),
   remove: (id: string) => fetch(BASE + `/tasks/${id}`, { method: 'DELETE' }),
+  // ── To-do lists (the implicit "General" list is not included) ──
+  lists: () => json<{ lists: TaskListInfo[] }>('/tasks/lists'),
+  createList: (name: string) =>
+    json<{ list: TaskListInfo }>('/tasks/lists', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameList: (id: string, name: string) =>
+    fetch(BASE + `/tasks/lists/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+  removeList: (id: string) =>
+    fetch(BASE + `/tasks/lists/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
 // Notes
