@@ -1,0 +1,11 @@
+[Unit]
+Description=Probe Ollama generation every 5 minutes
+
+[Timer]
+OnBootSec=2min
+# Measured from the last probe finishing, so a slow cold-load probe never has
+# a second probe stacked behind it.
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

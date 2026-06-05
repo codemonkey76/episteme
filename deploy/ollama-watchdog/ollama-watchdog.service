@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart Ollama when generation wedges
+After=ollama.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ollama-watchdog.sh
