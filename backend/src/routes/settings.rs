@@ -200,8 +200,12 @@ pub async fn list_tools(
             .await
             .map_err(AppError::Internal)?
             .unwrap_or_default();
-    let policy_of =
-        |name: &str| policies.get(name).cloned().unwrap_or_else(|| "auto".to_string());
+    let policy_of = |name: &str| {
+        policies
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| crate::tools::default_policy(name).to_string())
+    };
 
     let mut tools: Vec<serde_json::Value> = Vec::new();
     for (group, schemas) in crate::tools::catalog() {
@@ -255,8 +259,8 @@ pub async fn set_tool_policy(
             .await
             .map_err(AppError::Internal)?
             .unwrap_or_default();
-    if body.policy == "auto" {
-        // auto is the default — keep the stored map minimal.
+    if body.policy == crate::tools::default_policy(&body.name) {
+        // Matches the default — keep the stored map minimal.
         policies.remove(&body.name);
     } else {
         policies.insert(body.name, body.policy);

@@ -10,6 +10,7 @@ use crate::model_router::ChatMessage;
 use crate::state::AppState;
 
 pub mod calendar;
+pub mod helpdesk;
 pub mod notes;
 pub mod tasks;
 
@@ -19,11 +20,12 @@ pub fn schemas() -> Vec<Value> {
     all.extend(calendar::schemas());
     all.extend(tasks::schemas());
     all.extend(notes::schemas());
+    all.extend(helpdesk::schemas());
     all
 }
 
 pub fn is_native(name: &str) -> bool {
-    calendar::handles(name) || tasks::handles(name) || notes::handles(name)
+    calendar::handles(name) || tasks::handles(name) || notes::handles(name) || helpdesk::handles(name)
 }
 
 /// Native tools grouped by integration, for the settings Tools page.
@@ -32,7 +34,21 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("calendar", calendar::schemas()),
         ("tasks", tasks::schemas()),
         ("notes", notes::schemas()),
+        ("helpdesk", helpdesk::schemas()),
     ]
+}
+
+/// Default approval policy when the user hasn't configured one in Settings →
+/// Tools. Outward-facing helpdesk writes (replies email the customer; time
+/// entries feed billing) start gated; everything else auto-executes.
+pub fn default_policy(name: &str) -> &'static str {
+    match name {
+        "helpdesk_create_ticket"
+        | "helpdesk_reply_ticket"
+        | "helpdesk_log_time"
+        | "helpdesk_update_ticket" => "ask",
+        _ => "auto",
+    }
 }
 
 /// Execute a native tool, returning a JSON result for the model.
@@ -45,6 +61,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if notes::handles(name) {
         return notes::execute(state, user_id, name, args).await;
+    }
+    if helpdesk::handles(name) {
+        return helpdesk::execute(state, user_id, name, args).await;
     }
     Err(anyhow!("unknown native tool '{name}'"))
 }

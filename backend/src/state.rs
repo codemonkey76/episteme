@@ -29,7 +29,13 @@ impl AppState {
             model_router: ModelRouter::new(),
             mcp_host: Arc::new(Mutex::new(McpHost::new())),
             oauth_state: Arc::new(Mutex::new(HashMap::new())),
-            http_client: reqwest::Client::new(),
+            // Timeouts so an unreachable upstream (Graph, helpdesk) fails with
+            // an error instead of hanging a request forever.
+            http_client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .expect("http client"),
             log_tx,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }

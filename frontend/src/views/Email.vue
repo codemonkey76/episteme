@@ -816,6 +816,43 @@ async function markDone() {
   }
 }
 
+// ── Create helpdesk ticket from email ───────────────────────────────────────────
+// Matches the sender to a helpdesk contact and lets the AI write up the
+// request as a ticket. Explicitly user-triggered, so it runs immediately.
+const ticketState = ref<'idle' | 'creating' | 'done'>('idle')
+const ticketMsg = ref('')
+
+async function createTicket() {
+  const m = selectedMessage.value
+  if (!m || ticketState.value === 'creating') return
+  if (!aiProvider.value) {
+    ticketMsg.value = 'No AI provider configured — add one in Settings.'
+    return
+  }
+  ticketState.value = 'creating'
+  ticketMsg.value = ''
+  try {
+    const res = await api.email.createTicket(m.id, { provider: aiProvider.value, mailbox: mbox.value })
+    ticketState.value = 'done'
+    ticketMsg.value = `${res.reference} created for ${res.client} (${res.priority})`
+    logs.info('Email', `Helpdesk ticket ${res.reference}: ${res.subject}`)
+    setTimeout(() => {
+      ticketState.value = 'idle'
+      ticketMsg.value = ''
+    }, 6000)
+  } catch (e: unknown) {
+    ticketState.value = 'idle'
+    const msg = e instanceof Error ? e.message : 'Ticket creation failed'
+    ticketMsg.value = msg
+    logs.error('Email', `Ticket creation failed: ${msg}`)
+  }
+}
+
+watch(selectedMessage, () => {
+  ticketState.value = 'idle'
+  ticketMsg.value = ''
+})
+
 function startReply(mode: ReplyMode) {
   const m = selectedMessage.value
   if (!m) return
@@ -1358,6 +1395,18 @@ const replyBody = computed(() => {
                 <polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>
               </svg>
             </button>
+            <button
+              class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-2a2418)] text-[var(--c-e0b060)] border border-[var(--c-3a3010)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-3a3020)] disabled:opacity-50"
+              :disabled="ticketState === 'creating'"
+              title="Create a helpdesk ticket from this email — the sender is matched to a helpdesk contact and the AI writes up the request"
+              @click="createTicket"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="13" y1="5" x2="13" y2="7"/><line x1="13" y1="11" x2="13" y2="13"/><line x1="13" y1="17" x2="13" y2="19"/>
+              </svg>
+              {{ ticketState === 'creating' ? 'Creating…' : ticketState === 'done' ? 'Created ✓' : 'Ticket' }}
+            </button>
+            <span v-if="ticketMsg" class="text-[0.72rem]" :class="ticketState === 'done' ? 'text-[var(--c-6ecf8e)]' : 'text-danger'">{{ ticketMsg }}</span>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254a35)] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"/>

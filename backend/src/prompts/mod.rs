@@ -154,6 +154,27 @@ recent message, not to the quoted history. Keep it clear, polite, and concise in
 tone, and directly address anything the email asks.",
     },
     PromptDef {
+        key: "email_ticket",
+        name: "Email → helpdesk ticket",
+        description: "Turns an open email into a helpdesk ticket (the Ticket \
+button in the Email window). Must keep instructing the model to respond with \
+ONLY a JSON object {\"subject\", \"description\", \"priority\"}.",
+        variables: &[],
+        default: "You convert customer emails into helpdesk tickets. Given an \
+email, identify what the customer is requesting or reporting and write it up \
+as a ticket.\n\n\
+The subject is a short, specific summary of the request. The description \
+explains the issue/request clearly in third person, keeping every relevant \
+detail from the email (error messages, device names, what was tried). Don't \
+pad it with pleasantries.\n\n\
+Priority: \"critical\" only for whole-business outages; \"high\" for issues \
+blocking someone's work; \"medium\" for standard requests; \"low\" for \
+cosmetic or nice-to-have items.\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: \
+{\"subject\": \"<ticket subject>\", \"description\": \"<ticket description>\", \
+\"priority\": \"low|medium|high|critical\"}.",
+    },
+    PromptDef {
         key: "email_advise",
         name: "Ask AI about email",
         description: "Default instruction used by \"Ask AI about this email\" when you \

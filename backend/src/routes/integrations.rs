@@ -361,3 +361,71 @@ pub async fn remove_shared(
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// ── Helpdesk integration ────────────────────────────────────────────────────────
+
+use crate::integrations::helpdesk;
+
+#[derive(Serialize)]
+pub struct HelpdeskStatus {
+    connected: bool,
+    base_url: String,
+    email: String,
+}
+
+// GET /api/integrations/helpdesk/config — connection status (token never leaves).
+pub async fn helpdesk_status(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<HelpdeskStatus>> {
+    let cfg = db::settings::get::<helpdesk::HelpdeskConfig>(
+        &state.db,
+        &helpdesk::config_key(&user.id),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+    Ok(Json(match cfg {
+        Some(c) => HelpdeskStatus { connected: true, base_url: c.base_url, email: c.email },
+        None => HelpdeskStatus { connected: false, base_url: String::new(), email: String::new() },
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct HelpdeskConnectBody {
+    base_url: String,
+    email: String,
+    password: String,
+}
+
+// POST /api/integrations/helpdesk/config — log in and store the token. The
+// password is used once for /api/login and never persisted.
+pub async fn helpdesk_connect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<HelpdeskConnectBody>,
+) -> AppResult<Json<HelpdeskStatus>> {
+    let base_url = body.base_url.trim().trim_end_matches('/').to_string();
+    let email = body.email.trim().to_string();
+    if base_url.is_empty() || !base_url.starts_with("http") {
+        return Err(AppError::BadRequest("base_url must be a http(s) URL".into()));
+    }
+    let token = helpdesk::login(&state, &base_url, &email, &body.password)
+        .await
+        .map_err(AppError::Internal)?;
+    let cfg = helpdesk::HelpdeskConfig { base_url, email, token };
+    db::settings::set(&state.db, &helpdesk::config_key(&user.id), &cfg)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(HelpdeskStatus { connected: true, base_url: cfg.base_url, email: cfg.email }))
+}
+
+// DELETE /api/integrations/helpdesk/config — disconnect (forget the token).
+pub async fn helpdesk_disconnect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<StatusCode> {
+    db::settings::delete(&state.db, &helpdesk::config_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}

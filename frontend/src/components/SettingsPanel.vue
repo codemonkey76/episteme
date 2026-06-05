@@ -80,6 +80,7 @@ onMounted(async () => {
   await loadTimezone()
   await loadEmailConfig()
   await loadCategorizer()
+  await loadHelpdeskConfig()
 })
 
 async function saveProvider() {
@@ -293,6 +294,20 @@ const emailSaving = ref(false)
 
 const callbackUri = computed(() => window.location.origin + '/api/integrations/email/callback')
 
+// Integration cards collapse to their header row (title + status pill).
+// Unconfigured cards default open so first-time setup is visible; the user's
+// choice persists per browser.
+const openCards = ref<Record<string, boolean>>(
+  JSON.parse(localStorage.getItem('settings:integrations-open') || '{}'),
+)
+function cardOpen(key: string, dflt = false): boolean {
+  return openCards.value[key] ?? dflt
+}
+function toggleCard(key: string, dflt = false) {
+  openCards.value[key] = !cardOpen(key, dflt)
+  localStorage.setItem('settings:integrations-open', JSON.stringify(openCards.value))
+}
+
 async function loadEmailConfig() {
   const cfg = await api.integrations.email.getConfig()
   emailConfig.value = cfg
@@ -327,6 +342,47 @@ async function disconnectEmail() {
 
 function connectEmail() {
   window.location.href = '/api/integrations/email/connect'
+}
+
+// ── Helpdesk integration ────────────────────────────────────────────────────────
+const hdConfig = ref<api.HelpdeskStatus>({ connected: false, base_url: '', email: '' })
+const hdForm = ref({ base_url: '', email: '', password: '' })
+const hdMsg = ref('')
+const hdSaving = ref(false)
+
+async function loadHelpdeskConfig() {
+  try {
+    hdConfig.value = await api.integrations.helpdesk.getConfig()
+    if (hdConfig.value.connected) {
+      hdForm.value.base_url = hdConfig.value.base_url
+      hdForm.value.email = hdConfig.value.email
+    }
+  } catch { /* not connected */ }
+}
+
+async function connectHelpdesk() {
+  hdSaving.value = true
+  hdMsg.value = ''
+  try {
+    hdConfig.value = await api.integrations.helpdesk.connect(
+      hdForm.value.base_url.trim(),
+      hdForm.value.email.trim(),
+      hdForm.value.password,
+    )
+    hdForm.value.password = ''
+    hdMsg.value = 'Connected.'
+  } catch (e: unknown) {
+    hdMsg.value = e instanceof Error ? e.message : 'Connection failed.'
+  } finally {
+    hdSaving.value = false
+  }
+}
+
+async function disconnectHelpdesk() {
+  await api.integrations.helpdesk.disconnect()
+  hdConfig.value = { connected: false, base_url: '', email: '' }
+  hdForm.value.password = ''
+  hdMsg.value = ''
 }
 
 // ── Shared mailboxes ────────────────────────────────────────────────────────────
@@ -747,7 +803,7 @@ async function logout() {
 
         <!-- Microsoft 365 card -->
         <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between gap-4">
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('m365', !emailConfig.configured)">
             <div class="flex items-center gap-2.5">
               <!-- Microsoft "four squares" logo -->
               <svg width="20" height="20" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
@@ -761,18 +817,22 @@ async function logout() {
                 <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Work / School account via Entra ID</div>
               </div>
             </div>
-            <div v-if="emailConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] flex items-center gap-[0.35rem]">
-              <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
-              {{ emailConfig.connected_email ?? 'Connected' }}
-            </div>
-            <div v-else-if="emailConfig.configured" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-[var(--c-1a1a0d)] text-[var(--c-b0a030)] border border-[var(--c-3a3010)]">
-              Credentials saved
-            </div>
-            <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
-              Not configured
+            <div class="flex items-center gap-2 shrink-0">
+              <div v-if="emailConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-success border border-[var(--c-1a4030)] flex items-center gap-[0.35rem]">
+                <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
+                {{ emailConfig.connected_email ?? 'Connected' }}
+              </div>
+              <div v-else-if="emailConfig.configured" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-1a1a0d)] text-[var(--c-b0a030)] border border-[var(--c-3a3010)]">
+                Credentials saved
+              </div>
+              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
+                Not configured
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('m365', !emailConfig.configured) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
           </div>
 
+          <template v-if="cardOpen('m365', !emailConfig.configured)">
           <!-- Setup instructions — each user registers their own Azure app. -->
           <details class="instructions border border-[var(--c-222222)] rounded-md overflow-hidden">
             <summary class="px-3 py-[0.45rem] text-[0.775rem] text-[var(--c-707070)] cursor-pointer select-none list-none hover:text-[var(--c-a0a0a0)]">Setup instructions</summary>
@@ -810,6 +870,10 @@ async function logout() {
                   <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Read</code></li>
                   <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.ReadWrite</code></li>
                   <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Send</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Read.Shared</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.ReadWrite.Shared</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Mail.Send.Shared</code></li>
+                  <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">Calendars.ReadWrite</code></li>
                   <li><code class="font-mono text-[0.75rem] bg-surface px-[0.3rem] py-[0.05rem] rounded-[0.2rem] text-[var(--c-a0c8ff)]">User.Read</code></li>
                 </ul>
               </li>
@@ -867,20 +931,30 @@ async function logout() {
               You'll be redirected back here when done.
             </p>
           </form>
+          </template>
         </section>
 
         <!-- Shared mailboxes card -->
         <section v-if="emailConfig.connected" class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center gap-2.5">
-            <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
-            </svg>
-            <div>
-              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Shared mailboxes</div>
-              <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Add mailboxes you've been granted access to; pick one from the switcher in the Email window</div>
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('shared')">
+            <div class="flex items-center gap-2.5">
+              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              <div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Shared mailboxes</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Add mailboxes you've been granted access to; pick one from the switcher in the Email window</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div v-if="sharedMailboxes.length" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-808080)] border border-[var(--c-282828)]">
+                {{ sharedMailboxes.length }}
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('shared') ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
           </div>
 
+          <template v-if="cardOpen('shared')">
           <ul v-if="sharedMailboxes.length" class="list-none flex flex-col gap-1.5">
             <li v-for="m in sharedMailboxes" :key="m.address" class="flex items-center justify-between gap-3 bg-surface border border-[var(--c-1e1e1e)] rounded-md px-3 py-1.5">
               <span class="flex flex-col min-w-0">
@@ -914,11 +988,12 @@ async function logout() {
               If adding fails even though you have access, <em class="not-italic text-[var(--c-a0a0a0)]">Disconnect</em> and reconnect above to grant shared-mailbox permissions.
             </p>
           </form>
+          </template>
         </section>
 
         <!-- AI auto-sort card -->
         <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between gap-4">
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('autosort')">
             <div class="flex items-center gap-2.5">
               <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
@@ -928,12 +1003,16 @@ async function logout() {
                 <div class="text-[0.72rem] text-[var(--c-585858)] mt-[0.1rem]">Sort low-priority inbox mail into folders; flag what needs you</div>
               </div>
             </div>
-            <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap shrink-0 flex items-center gap-[0.35rem] border', anyCatEnabled ? 'bg-[var(--c-0d2a1a)] text-success border-[var(--c-1a4030)]' : 'bg-surface text-[var(--c-484848)] border-[var(--c-282828)]']">
-              <span v-if="anyCatEnabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
-              {{ anyCatEnabled ? 'Active' : 'Off' }}
+            <div class="flex items-center gap-2 shrink-0">
+              <div :class="['text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap flex items-center gap-[0.35rem] border', anyCatEnabled ? 'bg-[var(--c-0d2a1a)] text-success border-[var(--c-1a4030)]' : 'bg-surface text-[var(--c-484848)] border-[var(--c-282828)]']">
+                <span v-if="anyCatEnabled" class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
+                {{ anyCatEnabled ? 'Active' : 'Off' }}
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('autosort') ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
           </div>
 
+          <template v-if="cardOpen('autosort')">
           <p v-if="!emailConfig.connected" class="text-[0.775rem] text-[var(--c-b0a030)]">
             Connect a Microsoft 365 account above to use auto-sort.
           </p>
@@ -999,6 +1078,56 @@ async function logout() {
               Auto-sort moves and flags mail in your live mailbox. Every action is recorded in the Logs window.
             </p>
           </template>
+          </template>
+        </section>
+
+        <!-- Helpdesk card -->
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('helpdesk', !hdConfig.connected)">
+            <div class="flex items-center gap-2.5">
+              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/>
+              </svg>
+              <div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Helpdesk</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)]">Tickets, replies, and time logging from chat</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div v-if="hdConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]" :title="hdConfig.email">
+                Connected — {{ hdConfig.email }}
+              </div>
+              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
+                Not connected
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('helpdesk', !hdConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+          </div>
+
+          <form v-if="cardOpen('helpdesk', !hdConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectHelpdesk">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Helpdesk URL
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.base_url" placeholder="https://helpdesk.example.com" required />
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Agent email
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.email" type="email" autocomplete="off" required />
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Password
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.password" type="password" autocomplete="new-password" :placeholder="hdConfig.connected ? 'Enter to reconnect' : ''" required />
+            </label>
+            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
+              The password is exchanged for an API token and never stored. Ticket creation, customer replies, and time logging ask for approval in chat before running (change under Settings → Tools).
+            </p>
+            <div class="flex items-center gap-2">
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="hdSaving">
+                {{ hdSaving ? 'Connecting…' : hdConfig.connected ? 'Reconnect' : 'Connect' }}
+              </button>
+              <button v-if="hdConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectHelpdesk">Disconnect</button>
+              <span v-if="hdMsg" class="text-[0.775rem]" :class="hdMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ hdMsg }}</span>
+            </div>
+          </form>
         </section>
       </div>
 

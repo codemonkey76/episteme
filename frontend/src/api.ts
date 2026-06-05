@@ -310,6 +310,12 @@ export const email = {
       method: 'POST',
       body: JSON.stringify({ ids, mailbox }),
     }),
+  // Create a helpdesk ticket from the email (sender matched to a helpdesk contact).
+  createTicket: (messageId: string, payload: { provider: string; mailbox?: string }) =>
+    json<{ reference: string; id: number; subject: string; priority: string; client: string }>(
+      `/email/messages/${encodeURIComponent(messageId)}/ticket`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
   search: (q: string, nextLink?: string | null, mailbox?: string) => {
     const params = new URLSearchParams({ q })
     if (nextLink) params.set('next_link', nextLink)
@@ -660,6 +666,23 @@ export const integrations = {
     removeShared: (address: string) =>
       fetch(BASE + `/integrations/email/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
   },
+  helpdesk: {
+    getConfig: () => json<HelpdeskStatus>('/integrations/helpdesk/config'),
+    // Logs in with the credentials once; only the resulting token is stored.
+    connect: (base_url: string, email: string, password: string) =>
+      json<HelpdeskStatus>('/integrations/helpdesk/config', {
+        method: 'POST',
+        body: JSON.stringify({ base_url, email, password }),
+      }),
+    disconnect: () =>
+      fetch(BASE + '/integrations/helpdesk/config', { method: 'DELETE' }),
+  },
+}
+
+export interface HelpdeskStatus {
+  connected: boolean
+  base_url: string
+  email: string
 }
 
 // Auth

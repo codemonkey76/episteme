@@ -1107,6 +1107,156 @@ pub async fn summarize(
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }
 
+// POST /api/email/messages/:id/ticket — create a helpdesk ticket from the open
+// email. The sender's address is matched against helpdesk client contacts to
+// pick client/requester; the AI extracts subject/description/priority from the
+// email body. Explicitly user-triggered (the Ticket button), so no approval
+// round-trip.
+#[derive(Deserialize)]
+pub struct TicketFromEmailBody {
+    provider: String,
+    #[serde(default)]
+    mailbox: Option<String>,
+}
+
+pub async fn ticket_from_email(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(message_id): Path<String>,
+    Json(payload): Json<TicketFromEmailBody>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
+    tracing::info!("ticket_from_email: start (mailbox={:?})", payload.mailbox);
+
+    // The email being converted.
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    let msg = graph_get(
+        &state,
+        user_id,
+        &format!("{GRAPH}/{seg}/messages/{message_id}"),
+        &[("$select", "subject,from,body")],
+    )
+    .await?;
+    tracing::info!("ticket_from_email: email loaded, fetching helpdesk clients");
+    let subject = msg["subject"].as_str().unwrap_or("(no subject)");
+    let from_name = msg["from"]["emailAddress"]["name"].as_str().unwrap_or("");
+    let from_addr = msg["from"]["emailAddress"]["address"].as_str().unwrap_or("");
+    let body_raw = msg["body"]["content"].as_str().unwrap_or("");
+    let body_text = if msg["body"]["contentType"]
+        .as_str()
+        .map(|c| c.eq_ignore_ascii_case("html"))
+        .unwrap_or(false)
+    {
+        html_to_text(body_raw)
+    } else {
+        body_raw.to_string()
+    };
+
+    // Match the sender to a helpdesk contact → client_id + user_id.
+    let clients = crate::integrations::helpdesk::request(
+        &state,
+        user_id,
+        reqwest::Method::GET,
+        "/clients",
+        None,
+    )
+    .await
+    .map_err(AppError::Internal)?;
+    let mut matched: Option<(i64, i64, String)> = None;
+    if let Some(arr) = clients["data"].as_array() {
+        'outer: for c in arr {
+            let Some(users) = c["users"].as_array() else { continue };
+            for u in users {
+                if u["email"].as_str().map(|e| e.eq_ignore_ascii_case(from_addr)).unwrap_or(false) {
+                    if let (Some(cid), Some(uid)) = (c["id"].as_i64(), u["id"].as_i64()) {
+                        matched = Some((cid, uid, c["name"].as_str().unwrap_or("?").to_string()));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    let Some((client_id, requester_id, client_name)) = matched else {
+        return Err(AppError::BadRequest(format!(
+            "no helpdesk contact with the address {from_addr} — add them to a client first"
+        )));
+    };
+    tracing::info!("ticket_from_email: matched {from_addr} → client {client_name}");
+
+    // AI: extract the request as ticket subject/description/priority.
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == payload.provider)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider)))?;
+    let system = crate::prompts::get(&state.db, "email_ticket").await;
+    let user_msg = format!("From: {from_name} <{from_addr}>\nSubject: {subject}\n\n{body_text}");
+    tracing::info!("ticket_from_email: extracting via provider '{}'", provider.name);
+    // The model call is the one hop without its own transport timeout — cap it
+    // so a wedged provider yields an error instead of an eternal "Creating…".
+    let raw = tokio::time::timeout(
+        Duration::from_secs(120),
+        ModelRouter::complete(
+            &provider,
+            vec![
+                ChatMessage { role: "system".to_string(), content: Value::String(system) },
+                ChatMessage { role: "user".to_string(), content: Value::String(user_msg) },
+            ],
+        ),
+    )
+    .await
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("AI provider timed out after 120s")))?
+    .map_err(AppError::Internal)?;
+    tracing::info!("ticket_from_email: model returned {} chars", raw.len());
+    // Tolerate code fences / prose around the JSON object.
+    let start = raw.find('{').ok_or_else(|| AppError::Internal(anyhow::anyhow!("no JSON in model output")))?;
+    let end = raw.rfind('}').ok_or_else(|| AppError::Internal(anyhow::anyhow!("no JSON in model output")))?;
+    let extracted: Value = serde_json::from_str(&raw[start..=end])
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("model output unparseable: {e}")))?;
+    let t_subject = extracted["subject"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(subject);
+    let t_description = extracted["description"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(&body_text);
+    let t_priority = match extracted["priority"].as_str() {
+        Some(p @ ("low" | "medium" | "high" | "critical")) => p,
+        _ => "medium",
+    };
+
+    // Create the ticket.
+    let created = crate::integrations::helpdesk::request(
+        &state,
+        user_id,
+        reqwest::Method::POST,
+        "/tickets",
+        Some(&serde_json::json!({
+            "client_id": client_id,
+            "user_id": requester_id,
+            "subject": t_subject,
+            "description": t_description,
+            "priority": t_priority,
+            "source": "api",
+        })),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    let reference = created["data"]["reference"].as_str().unwrap_or("?").to_string();
+    state
+        .log("helpdesk", "info", format!("Ticket {reference} created from email: {t_subject} ({client_name})"))
+        .await;
+    Ok(Json(serde_json::json!({
+        "reference": reference,
+        "id": created["data"]["id"],
+        "subject": t_subject,
+        "priority": t_priority,
+        "client": client_name,
+    })))
+}
+
 // ── Ask AI about this email (multimodal chat handoff) ───────────────────────────
 
 #[derive(Deserialize)]
