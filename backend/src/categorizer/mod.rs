@@ -60,6 +60,9 @@ pub struct CategorizerTask {
     /// Provider name to use; empty → first configured provider.
     #[serde(default)]
     pub provider: String,
+    /// Extra sorting instructions for this mailbox, appended to the base prompt.
+    #[serde(default)]
+    pub instructions: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +133,7 @@ pub async fn get_config(pool: &sqlx::SqlitePool, user_id: &str) -> Result<Catego
                 mailbox: String::new(),
                 enabled: raw.get("enabled").and_then(Value::as_bool).unwrap_or(false),
                 provider: raw.get("provider").and_then(Value::as_str).unwrap_or("").to_string(),
+                instructions: String::new(),
             }],
         });
     }
@@ -154,6 +158,7 @@ pub async fn run_mailbox(
     user_id: &str,
     mailbox: &str,
     provider_name: &str,
+    instructions: &str,
 ) -> Result<RunSummary> {
     use std::sync::atomic::Ordering;
 
@@ -231,7 +236,12 @@ pub async fn run_mailbox(
         ));
     }
 
-    let system = crate::prompts::get(&state.db, "email_categorizer").await;
+    let mut system = crate::prompts::get(&state.db, "email_categorizer").await;
+    // Per-mailbox custom instructions tailor sorting for this mailbox.
+    if !instructions.trim().is_empty() {
+        system.push_str("\n\nAdditional instructions for this mailbox:\n");
+        system.push_str(instructions.trim());
+    }
     let history = vec![
         ChatMessage { role: "system".to_string(), content: Value::String(system) },
         ChatMessage {
@@ -399,7 +409,7 @@ pub fn spawn_worker(state: Arc<AppState>) {
                 next_interval = next_interval.min(cfg.interval_secs.max(60));
                 // Each enabled mailbox sorts independently.
                 for task in enabled_tasks {
-                    match run_mailbox(&state, &user.id, &task.mailbox, &task.provider).await {
+                    match run_mailbox(&state, &user.id, &task.mailbox, &task.provider, &task.instructions).await {
                         Ok(s) if s.scanned > 0 => {
                             tracing::info!("categorizer[{}/{}]: {}", user.username, task.mailbox, s.message);
                         }

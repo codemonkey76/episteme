@@ -386,7 +386,7 @@ const anyCatEnabled = computed(() => catConfig.value.tasks.some(t => t.enabled))
 function ensureCatTasks() {
   for (const row of mailboxRows.value) {
     if (!catConfig.value.tasks.some(t => t.mailbox === row.address)) {
-      catConfig.value.tasks.push({ mailbox: row.address, enabled: false, provider: '' })
+      catConfig.value.tasks.push({ mailbox: row.address, enabled: false, provider: '', instructions: '' })
     }
   }
 }
@@ -968,6 +968,12 @@ async function logout() {
                     {{ catRunning === row.address ? 'Sorting…' : 'Run now' }}
                   </button>
                 </div>
+                <textarea
+                  v-model="catTaskFor(row.address).instructions"
+                  rows="2"
+                  class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.775rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]"
+                  placeholder="Custom sorting instructions for this mailbox (optional) — e.g. “File anything from suppliers into Invoices; flag mail mentioning contracts.”"
+                />
               </div>
             </div>
 

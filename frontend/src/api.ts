@@ -561,6 +561,7 @@ export interface CategorizerTask {
   mailbox: string // '' = own mailbox
   enabled: boolean
   provider: string
+  instructions: string // extra sorting rules, appended to the base prompt
 }
 
 export interface CategorizerConfig {

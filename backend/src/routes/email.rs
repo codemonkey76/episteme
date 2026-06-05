@@ -1253,13 +1253,10 @@ pub async fn run_categorizer(
     let cfg = crate::categorizer::get_config(&state.db, user_id)
         .await
         .map_err(AppError::Internal)?;
-    let provider = cfg
-        .tasks
-        .iter()
-        .find(|t| t.mailbox == mailbox)
-        .map(|t| t.provider.clone())
-        .unwrap_or_default();
-    let summary = crate::categorizer::run_mailbox(&state, user_id, &mailbox, &provider)
+    let task = cfg.tasks.iter().find(|t| t.mailbox == mailbox);
+    let provider = task.map(|t| t.provider.clone()).unwrap_or_default();
+    let instructions = task.map(|t| t.instructions.clone()).unwrap_or_default();
+    let summary = crate::categorizer::run_mailbox(&state, user_id, &mailbox, &provider, &instructions)
         .await
         .map_err(AppError::Internal)?;
     Ok(Json(summary))
