@@ -771,12 +771,19 @@ pub struct SendBody {
     #[serde(default)]
     bcc: Vec<String>,
     subject: Option<String>,
+    /// HTML body of the user's message (the composer is rich text). For
+    /// replies/forwards the quoted history is NOT included here — Graph's
+    /// createReply/createForward drafts carry it, and we prepend this above it.
     body: String,
     reply_to_message_id: Option<String>,
-    /// "reply" | "replyAll" | "forward" — only "forward" changes the Graph
-    /// endpoint; reply/replyAll both send via /reply with explicit recipients.
+    /// "reply" | "replyAll" | "forward" — selects the Graph draft endpoint
+    /// (createReply / createReplyAll / createForward).
     #[serde(default)]
     action: Option<String>,
+    /// Attachments to upload onto the draft before sending. Inline ones carry a
+    /// contentId referenced from the body as `cid:<contentId>`.
+    #[serde(default)]
+    attachments: Vec<AttachmentUpload>,
     /// The original AI draft, when this send started from "AI reply" — used to
     /// learn writing-style preferences from the user's edits.
     ai_draft: Option<String>,
@@ -790,12 +797,179 @@ pub struct SendBody {
     mailbox: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct AttachmentUpload {
+    name: String,
+    content_type: String,
+    /// Raw file bytes, base64-encoded (no `data:` prefix).
+    content_bytes: String,
+    #[serde(default)]
+    is_inline: bool,
+    /// Content-ID for inline images (the body references `cid:<contentId>`).
+    #[serde(default)]
+    content_id: Option<String>,
+}
+
 /// Map plain addresses to Graph recipient objects.
 fn recipients(addrs: &[String]) -> Vec<Value> {
     addrs
         .iter()
         .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
         .collect()
+}
+
+/// PATCH a JSON body to Graph (draft updates).
+async fn graph_patch(state: &AppState, user_id: &str, url: &str, body: &Value) -> AppResult<Value> {
+    let token = microsoft::get_valid_token(state, user_id)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let response = state
+        .http_client
+        .patch(url)
+        .bearer_auth(&token)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+
+    let status = response.status();
+    let parsed: Value = response.json().await.unwrap_or(Value::Null);
+
+    if !status.is_success() {
+        let msg = parsed["error"]["message"]
+            .as_str()
+            .unwrap_or("Graph API error")
+            .to_string();
+        tracing::error!("Graph PATCH {status}: {msg}");
+        return Err(AppError::Internal(anyhow::anyhow!("Graph PATCH {status}: {msg}")));
+    }
+
+    Ok(parsed)
+}
+
+/// Byte-wise ASCII-case-insensitive substring search (HTML tags are ASCII, and
+/// byte offsets stay valid in the original string — unlike `to_lowercase()`,
+/// which can change length).
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// Insert the user's message just inside <body>, above the quoted history that
+/// Graph put in the createReply/createForward draft.
+fn prepend_html(user_html: &str, draft_html: &str) -> String {
+    if let Some(start) = find_ci(draft_html, "<body") {
+        if let Some(close) = draft_html[start..].find('>') {
+            let at = start + close + 1;
+            return format!("{}{}{}", &draft_html[..at], user_html, &draft_html[at..]);
+        }
+    }
+    format!("{user_html}{draft_html}")
+}
+
+/// Graph caps direct fileAttachment POSTs at ~3 MB; anything bigger goes
+/// through an upload session.
+const DIRECT_ATTACHMENT_MAX: usize = 3 * 1024 * 1024;
+/// Upload-session chunk size — Graph requires a multiple of 320 KiB.
+const UPLOAD_CHUNK: usize = 10 * 320 * 1024;
+
+/// Attach one file to a draft: small files inline in a single POST, large ones
+/// via createUploadSession + chunked PUTs to the pre-authenticated uploadUrl.
+async fn add_attachment(
+    state: &AppState,
+    user_id: &str,
+    seg: &str,
+    draft_id: &str,
+    att: &AttachmentUpload,
+) -> AppResult<()> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(att.content_bytes.trim())
+        .map_err(|e| AppError::BadRequest(format!("attachment '{}' is not valid base64: {e}", att.name)))?;
+
+    if bytes.len() < DIRECT_ATTACHMENT_MAX {
+        let mut body = serde_json::json!({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": att.name,
+            "contentType": att.content_type,
+            "contentBytes": att.content_bytes,
+            "isInline": att.is_inline,
+        });
+        if let Some(cid) = &att.content_id {
+            body["contentId"] = Value::String(cid.clone());
+        }
+        graph_post(state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}/attachments"), &body)
+            .await?;
+        return Ok(());
+    }
+
+    let mut item = serde_json::json!({
+        "attachmentType": "file",
+        "name": att.name,
+        "contentType": att.content_type,
+        "size": bytes.len(),
+        "isInline": att.is_inline,
+    });
+    if let Some(cid) = &att.content_id {
+        item["contentId"] = Value::String(cid.clone());
+    }
+    let session = graph_post(
+        state,
+        user_id,
+        &format!("{GRAPH}/{seg}/messages/{draft_id}/attachments/createUploadSession"),
+        &serde_json::json!({ "AttachmentItem": item }),
+    )
+    .await?;
+    let upload_url = session["uploadUrl"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("upload session missing uploadUrl")))?;
+
+    let total = bytes.len();
+    let mut start = 0usize;
+    while start < total {
+        let end = (start + UPLOAD_CHUNK).min(total);
+        // The uploadUrl is pre-authenticated — no bearer token. Retry transient
+        // failures (429 / 5xx / transport) a couple of times per chunk.
+        let mut attempt = 0u32;
+        loop {
+            let res = state
+                .http_client
+                .put(upload_url)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_RANGE, format!("bytes {}-{}/{}", start, end - 1, total))
+                .body(bytes[start..end].to_vec())
+                .send()
+                .await;
+            match res {
+                Ok(r) if r.status().is_success() => break,
+                Ok(r) if attempt < 2
+                    && (r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        || r.status().is_server_error()) =>
+                {
+                    tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    let detail = r.text().await.unwrap_or_default();
+                    return Err(AppError::Internal(anyhow::anyhow!(
+                        "attachment '{}' chunk upload failed: {status} {detail}",
+                        att.name
+                    )));
+                }
+                Err(e) if attempt < 2 => {
+                    tracing::warn!("attachment chunk transport error (retrying): {e}");
+                    tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+                }
+                Err(e) => return Err(AppError::Internal(e.into())),
+            }
+            attempt += 1;
+        }
+        start = end;
+    }
+    Ok(())
 }
 
 pub async fn send_email(
@@ -805,15 +979,13 @@ pub async fn send_email(
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
     let seg = mailbox_seg(payload.mailbox.as_deref())?;
-    let token = microsoft::get_valid_token(&state, user_id)
-        .await
-        .map_err(AppError::Internal)?;
 
     // Pulled out before `payload` is partially moved below.
     let mailbox = payload.mailbox.clone();
     let ai_draft = payload.ai_draft.clone().filter(|d| !d.trim().is_empty());
     let ai_provider = payload.ai_provider.clone();
-    let sent_body = payload.body.clone();
+    // Post-send analysis (style learning, commitments) works on plain text.
+    let sent_text = html_to_text(&payload.body);
     // Replies (not forwards) trigger post-send filing of the original.
     let replied_id = payload
         .reply_to_message_id
@@ -840,54 +1012,80 @@ pub async fn send_email(
     let cc = recipients(&payload.cc);
     let bcc = recipients(&payload.bcc);
 
-    if let Some(reply_id) = payload.reply_to_message_id {
-        // /forward carries the original message; /reply (used for both reply and
-        // reply-all) takes the recipient list the frontend computed. Cc/Bcc go in
-        // the `message` parameter for both actions.
-        let (url, body) = if payload.action.as_deref() == Some("forward") {
-            (
-                format!("{GRAPH}/{seg}/messages/{reply_id}/forward"),
-                serde_json::json!({
-                    "toRecipients": to,
-                    "message": { "ccRecipients": cc, "bccRecipients": bcc },
-                    "comment": payload.body,
-                }),
-            )
-        } else {
-            (
-                format!("{GRAPH}/{seg}/messages/{reply_id}/reply"),
-                serde_json::json!({
-                    "message": { "toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc },
-                    "comment": payload.body,
-                }),
-            )
+    // Draft-based send: create a draft (createReply/createReplyAll/createForward
+    // keep the quoted history and threading), patch in the user's HTML and
+    // recipients, upload attachments, then send. One flow for every case so
+    // HTML bodies, inline images and large attachments all work uniformly.
+    let draft = if let Some(reply_id) = &payload.reply_to_message_id {
+        let verb = match payload.action.as_deref() {
+            Some("forward") => "createForward",
+            Some("replyAll") => "createReplyAll",
+            _ => "createReply",
         };
-        state
-            .http_client
-            .post(url)
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
+        let draft = graph_post(
+            &state,
+            user_id,
+            &format!("{GRAPH}/{seg}/messages/{reply_id}/{verb}"),
+            &serde_json::json!({}),
+        )
+        .await?;
+        // The user's message goes above the quoted history Graph put in the draft.
+        let quoted = draft["body"]["content"].as_str().unwrap_or_default();
+        let merged = prepend_html(&payload.body, quoted);
+        let mut patch = serde_json::json!({
+            "body": { "contentType": "html", "content": merged },
+            "toRecipients": to,
+            "ccRecipients": cc,
+            "bccRecipients": bcc,
+        });
+        // Keep the draft's own Re:/Fwd: subject unless the user edited it.
+        if let Some(s) = payload.subject.as_deref().filter(|s| !s.trim().is_empty()) {
+            patch["subject"] = Value::String(s.to_string());
+        }
+        let draft_id = draft["id"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?;
+        graph_patch(&state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch).await?;
+        draft
     } else {
-        let body = serde_json::json!({
-            "message": {
-                "subject": payload.subject.unwrap_or_default(),
-                "body": { "contentType": "Text", "content": payload.body },
+        graph_post(
+            &state,
+            user_id,
+            &format!("{GRAPH}/{seg}/messages"),
+            &serde_json::json!({
+                "subject": payload.subject.clone().unwrap_or_default(),
+                "body": { "contentType": "html", "content": payload.body },
                 "toRecipients": to,
                 "ccRecipients": cc,
                 "bccRecipients": bcc,
-            },
-        });
-        state
-            .http_client
-            .post(format!("{GRAPH}/{seg}/sendMail"))
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
+            }),
+        )
+        .await?
+    };
+    let draft_id = draft["id"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?
+        .to_string();
+
+    // Attachments, then send. On failure, delete the draft (best-effort) so
+    // half-built messages don't pile up in Drafts.
+    let result: AppResult<()> = async {
+        for att in &payload.attachments {
+            add_attachment(&state, user_id, &seg, &draft_id, att).await?;
+        }
+        graph_post(
+            &state,
+            user_id,
+            &format!("{GRAPH}/{seg}/messages/{draft_id}/send"),
+            &serde_json::json!({}),
+        )
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        let _ = graph_delete(&state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}")).await;
+        return Err(e);
     }
 
     // The send succeeded — kick off detached, best-effort follow-ups that must
@@ -906,7 +1104,7 @@ pub async fn send_email(
             if let Some(draft) = ai_draft {
                 let st = Arc::clone(&state);
                 let prov = provider.clone();
-                let sent = sent_body.clone();
+                let sent = sent_text.clone();
                 let uid = user.id.clone();
                 tokio::spawn(async move {
                     crate::memory::extract_style(&st, &uid, prov, draft, sent).await;
@@ -919,7 +1117,7 @@ pub async fn send_email(
                     &st,
                     &uid,
                     provider,
-                    sent_body,
+                    sent_text,
                     send_context,
                     reply_context,
                 )
@@ -1449,6 +1647,39 @@ fn html_to_text(html: &str) -> String {
         .join("\n\n")
         .trim()
         .to_string()
+}
+
+// ── Email signatures ─────────────────────────────────────────────────────────
+// Per-user HTML signatures, keyed by mailbox address ("" = the user's own
+// mailbox). The composer inserts them client-side so they're visible and
+// editable before sending.
+
+fn signatures_key(user_id: &str) -> String {
+    format!("email_signatures:{user_id}")
+}
+
+// GET /api/email/signatures
+pub async fn get_signatures(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<Value>> {
+    let map: Value = db::settings::get(&state.db, &signatures_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_else(|| serde_json::json!({}));
+    Ok(Json(map))
+}
+
+// PUT /api/email/signatures — stores the whole mailbox→HTML map.
+pub async fn put_signatures(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(map): Json<std::collections::HashMap<String, String>>,
+) -> AppResult<StatusCode> {
+    db::settings::set(&state.db, &signatures_key(&user.id), &map)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ── Auto-categorizer config / manual run ───────────────────────────────────────

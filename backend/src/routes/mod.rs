@@ -86,7 +86,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/messages/:id/read", axum::routing::patch(email::mark_read))
         .route("/api/email/messages/:id/done", post(email::mark_done))
         .route("/api/email/messages/delete", post(email::delete_messages))
-        .route("/api/email/send", post(email::send_email))
+        // Send carries base64 attachments — allow well past the default 2 MB
+        // body cap (Graph's message limit is ~35 MB raw ≈ 47 MB base64).
+        .route(
+            "/api/email/send",
+            post(email::send_email).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route("/api/email/signatures", get(email::get_signatures))
+        .route("/api/email/signatures", put(email::put_signatures))
         .route("/api/email/ai-draft", post(email::ai_draft))
         .route("/api/email/messages/:id/summarize", post(email::summarize))
         .route("/api/email/messages/:id/ticket", post(email::ticket_from_email))
