@@ -24,9 +24,28 @@ pub struct TranscribeBody {
     mime: Option<String>,
 }
 
+/// Where the local Whisper sidecar lives (compose service `whisper`).
+/// Env-only on purpose: it's compose topology, not a user setting.
+fn whisper_url() -> String {
+    std::env::var("WHISPER_URL").unwrap_or_else(|_| "http://whisper:8000".to_string())
+}
+
+/// Model the sidecar should run; downloads from HF on first use.
+fn whisper_model() -> String {
+    std::env::var("WHISPER_MODEL").unwrap_or_else(|_| "Systran/faster-whisper-small".to_string())
+}
+
+/// One place audio can be transcribed: an OpenAI-shaped endpoint, its model,
+/// and a bearer key for the hosted ones (the local sidecar is unauthed).
+struct WhisperTarget {
+    url: String,
+    model: String,
+    key: Option<String>,
+}
+
 /// Whisper endpoint + model for a provider that can transcribe. Groq is
 /// preferred (fast, near-free); OpenAI works identically.
-fn whisper_target(p: &ProviderConfig) -> Option<(String, &'static str, String)> {
+fn whisper_target(p: &ProviderConfig) -> Option<WhisperTarget> {
     let (url, model, key_env) = match p.provider.as_str() {
         "groq" => (
             "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -45,11 +64,30 @@ fn whisper_target(p: &ProviderConfig) -> Option<(String, &'static str, String)> 
         .clone()
         .filter(|k| !k.trim().is_empty())
         .or_else(|| std::env::var(key_env).ok())?;
-    Some((url.to_string(), model, key))
+    Some(WhisperTarget { url: url.to_string(), model: model.to_string(), key: Some(key) })
 }
 
-// POST /api/transcribe — speech-to-text via the first Groq (or OpenAI)
-// provider's Whisper endpoint. Returns { text }.
+/// Everywhere we can send this audio, in preference order: the self-hosted
+/// sidecar first (private, free), then Groq, then OpenAI. Later targets are
+/// fallbacks when an earlier one is down or errors.
+fn transcription_targets(providers: &[ProviderConfig]) -> Vec<WhisperTarget> {
+    let mut targets = vec![WhisperTarget {
+        url: format!("{}/v1/audio/transcriptions", whisper_url().trim_end_matches('/')),
+        model: whisper_model(),
+        key: None,
+    }];
+    targets.extend(
+        providers
+            .iter()
+            .filter(|p| p.provider == "groq")
+            .chain(providers.iter().filter(|p| p.provider == "openai"))
+            .filter_map(whisper_target),
+    );
+    targets
+}
+
+// POST /api/transcribe — speech-to-text via the local Whisper sidecar,
+// falling back to a configured Groq/OpenAI provider. Returns { text }.
 pub async fn transcribe(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(_user)): Extension<CurrentUser>,
@@ -69,45 +107,94 @@ pub async fn transcribe(
         .await
         .map_err(AppError::Internal)?
         .unwrap_or_default();
-    // Groq first, OpenAI as fallback — both expose the same Whisper API shape.
-    let (url, model, key) = providers
-        .iter()
-        .filter(|p| p.provider == "groq")
-        .chain(providers.iter().filter(|p| p.provider == "openai"))
-        .find_map(whisper_target)
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "voice transcription needs a Groq (or OpenAI) provider with an API key".into(),
-            )
-        })?;
-
     let mime = body.mime.unwrap_or_else(|| "audio/m4a".to_string());
     let ext = mime.rsplit('/').next().unwrap_or("m4a").to_string();
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(format!("voice.{ext}"))
-        .mime_str(&mime)
-        .map_err(|e| AppError::BadRequest(format!("invalid mime type: {e}")))?;
-    let form = reqwest::multipart::Form::new()
-        .part("file", part)
-        .text("model", model)
-        .text("response_format", "json");
 
-    let response = state
-        .http_client
-        .post(&url)
-        .bearer_auth(&key)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("transcription request failed: {e}")))?;
+    // Sidecar first, hosted Whisper as fallback; remember why each leg failed.
+    let mut failures: Vec<String> = Vec::new();
+    for target in transcription_targets(&providers) {
+        let part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(format!("voice.{ext}"))
+            .mime_str(&mime)
+            .map_err(|e| AppError::BadRequest(format!("invalid mime type: {e}")))?;
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("model", target.model.clone())
+            .text("response_format", "json");
 
-    let status = response.status();
-    let parsed: Value = response.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        let msg = parsed["error"]["message"].as_str().unwrap_or("unknown error");
-        return Err(AppError::Internal(anyhow::anyhow!("transcription failed: {status} {msg}")));
+        let mut request = state.http_client.post(&target.url).multipart(form);
+        if let Some(key) = &target.key {
+            request = request.bearer_auth(key);
+        }
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                failures.push(format!("{}: {e}", target.url));
+                continue;
+            }
+        };
+
+        let status = response.status();
+        let parsed: Value = response.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            let msg = parsed["error"]["message"].as_str().unwrap_or("unknown error");
+            failures.push(format!("{}: {status} {msg}", target.url));
+            continue;
+        }
+        let text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
+        return Ok(Json(serde_json::json!({ "text": text })));
     }
 
-    let text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
-    Ok(Json(serde_json::json!({ "text": text })))
+    Err(AppError::Internal(anyhow::anyhow!(
+        "transcription failed — no Whisper endpoint reachable (is the `whisper` compose service \
+         running, or a Groq/OpenAI provider configured?): {}",
+        failures.join("; ")
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(kind: &str, key: Option<&str>) -> ProviderConfig {
+        ProviderConfig {
+            name: kind.to_string(),
+            provider: kind.to_string(),
+            base_url: None,
+            api_key: key.map(str::to_string),
+            model_id: "x".to_string(),
+        }
+    }
+
+    #[test]
+    fn targets_lead_with_the_local_sidecar() {
+        let targets = transcription_targets(&[]);
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].url.ends_with("/v1/audio/transcriptions"));
+        assert!(targets[0].key.is_none());
+    }
+
+    #[test]
+    fn hosted_targets_follow_groq_before_openai() {
+        let providers = vec![
+            provider("openai", Some("sk-1")),
+            provider("ollama", None),
+            provider("groq", Some("gsk-1")),
+        ];
+        let targets = transcription_targets(&providers);
+        assert_eq!(targets.len(), 3);
+        assert!(targets[0].key.is_none()); // local sidecar
+        assert!(targets[1].url.contains("groq.com"));
+        assert!(targets[2].url.contains("openai.com"));
+    }
+
+    #[test]
+    fn keyless_hosted_providers_are_skipped() {
+        // (Assumes GROQ_API_KEY is unset in the test environment.)
+        if std::env::var("GROQ_API_KEY").is_ok() {
+            return;
+        }
+        let targets = transcription_targets(&[provider("groq", None)]);
+        assert_eq!(targets.len(), 1);
+    }
 }

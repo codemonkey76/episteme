@@ -16,6 +16,10 @@ services:
       RUST_LOG: "episteme=info,tower_http=info"
       # The agent's web_search tool queries the SearXNG sidecar below.
       SEARXNG_URL: "http://searxng:8080"
+      # Voice notes transcribe against the Whisper sidecar below; override
+      # WHISPER_MODEL in .env to trade accuracy for CPU (e.g.
+      # deepdml/faster-whisper-large-v3-turbo-ct2 on a beefier box).
+      WHISPER_URL: "http://whisper:8000"
     env_file:
       - path: .env
         required: false
@@ -31,6 +35,18 @@ services:
       - "8080"
     volumes:
       - ./searxng:/etc/searxng:rw
+
+  # Self-hosted speech-to-text for voice notes (OpenAI-compatible
+  # /v1/audio/transcriptions). Internal-only, like SearXNG. The model
+  # (WHISPER_MODEL on episteme) downloads from Hugging Face on first use and
+  # is cached in the volume, so the first transcription is slow once.
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      - whisper_models:/home/ubuntu/.cache/huggingface/hub
 
   caddy:
     image: caddy:2
@@ -51,3 +67,4 @@ volumes:
   episteme_data:
   caddy_data:
   caddy_config:
+  whisper_models:

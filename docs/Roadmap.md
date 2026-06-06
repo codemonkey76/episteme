@@ -61,9 +61,11 @@ token registered after login.
 ## Phase 7 — Extras ✅ (shipped)
 
 - **Voice input**: mic button in the Flutter chat tab records AAC (`record`
-  package), `/api/transcribe` forwards it (multipart) to the first configured
-  Groq provider's Whisper endpoint (`whisper-large-v3-turbo`; OpenAI
-  `whisper-1` fallback) and the transcript lands in the composer for review.
+  package), `/api/transcribe` forwards it (multipart) to the self-hosted
+  Whisper sidecar (compose service `whisper`, Speaches CPU image; model via
+  `WHISPER_MODEL`, default `Systran/faster-whisper-small`), falling back to a
+  configured Groq (`whisper-large-v3-turbo`) or OpenAI (`whisper-1`) provider.
+  The transcript lands in the composer for review.
 - **Usage tracking**: `StreamChunk.usage` carries provider-reported token
   counts (genai `capture_usage`; Ollama eval counts); recorded per
   user/provider/model/purpose in the `usage` table from every call site
