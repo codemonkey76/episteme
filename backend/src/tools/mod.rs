@@ -10,6 +10,7 @@ use crate::model_router::ChatMessage;
 use crate::state::AppState;
 
 pub mod calendar;
+pub mod documents;
 pub mod email;
 pub mod helpdesk;
 pub mod memories;
@@ -26,6 +27,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(email::schemas());
     all.extend(web::schemas());
     all.extend(memories::schemas());
+    all.extend(documents::schemas());
     all.extend(helpdesk::schemas());
     all
 }
@@ -37,6 +39,7 @@ pub fn is_native(name: &str) -> bool {
         || email::handles(name)
         || web::handles(name)
         || memories::handles(name)
+        || documents::handles(name)
         || helpdesk::handles(name)
 }
 
@@ -49,6 +52,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("email", email::schemas()),
         ("web", web::schemas()),
         ("memory", memories::schemas()),
+        ("documents", documents::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -85,6 +89,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if memories::handles(name) {
         return memories::execute(state, user_id, name, args).await;
+    }
+    if documents::handles(name) {
+        return documents::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

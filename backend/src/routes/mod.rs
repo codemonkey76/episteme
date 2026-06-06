@@ -14,6 +14,7 @@ mod approvals;
 pub(crate) mod auth;
 mod calendar;
 mod chat;
+mod documents;
 pub(crate) mod email;
 mod integrations;
 mod logs;
@@ -101,6 +102,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/categorizer", get(email::get_categorizer))
         .route("/api/email/categorizer", put(email::put_categorizer))
         .route("/api/email/categorizer/run", post(email::run_categorizer))
+        .route("/api/documents", get(documents::list))
+        .route(
+            "/api/documents",
+            post(documents::create).layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
+        )
+        .route("/api/documents/:id", delete(documents::delete))
         .route("/api/memories", get(memories::list))
         .route("/api/memories", post(memories::create))
         .route("/api/memories/:id", put(memories::update))

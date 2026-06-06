@@ -15,18 +15,14 @@ exceeds 50, with recency fallback when Ollama is unreachable; lazy backfill
 embeds pre-existing rows; `search_memories` agent tool. Requires
 `ollama pull nomic-embed-text` on the Ollama host.
 
-## Phase 3 — Documents + RAG
+## Phase 3 — Documents + RAG ✅ (shipped)
 
-No way to give the assistant a PDF, contract, or reference folder today.
-
-- Tables: `documents` + `document_chunks(id, document_id, user_id, content,
-  embedding BLOB)`.
-- Multipart upload route (`/api/documents`); text/markdown extracted natively,
-  PDF via a Rust crate (evaluate `pdf-extract` at implementation time).
-- Chunk ~1k chars with overlap, embed per chunk (Phase 2 infra).
-- `search_documents(query, limit)` tool doing cosine top-k.
-- Frontend: `views/Documents.vue` registered in `windows/registry.ts` +
-  sidebar button (follow the Notes window pattern). Mobile later.
+`documents` + `document_chunks` tables; uploads as base64 JSON (same shape as
+email attachments, 25 MB cap); text/markdown/HTML/CSV/JSON native extraction,
+PDF via `pdf-extract`; ~1200-char chunks with 200 overlap on paragraph/line
+boundaries; chunks embedded detached with live indexing status; cosine top-k
+`search_documents` tool with substring fallback; Documents window
+(upload/drag-drop/delete) in the web UI. Mobile tab still to come.
 
 ## Phase 4 — Multimodal chat input
 

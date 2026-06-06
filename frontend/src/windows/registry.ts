@@ -6,6 +6,7 @@ import Chat from '../views/Chat.vue'
 import Chats from '../views/Chats.vue'
 import Email from '../views/Email.vue'
 import Calendar from '../views/Calendar.vue'
+import Documents from '../views/Documents.vue'
 import Notes from '../views/Notes.vue'
 import Logs from '../views/Logs.vue'
 import Tasks from '../views/Tasks.vue'
@@ -31,6 +32,7 @@ export const windowRegistry: Record<string, WindowDef> = {
   email: { title: 'Email', component: markRaw(Email), width: 1100, height: 660 },
   calendar: { title: 'Calendar', component: markRaw(Calendar), width: 800, height: 560 },
   notes: { title: 'Notes', component: markRaw(Notes), width: 680, height: 520 },
+  documents: { title: 'Documents', component: markRaw(Documents), width: 680, height: 520 },
   logs: { title: 'Logs', component: markRaw(Logs), width: 900, height: 520 },
   tasks: { title: 'Tasks', component: markRaw(Tasks), width: 620, height: 480 },
   memories: { title: 'Memories', component: markRaw(Memories), width: 680, height: 560 },

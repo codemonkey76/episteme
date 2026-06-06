@@ -21,6 +21,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Web search** — a self-hosted [SearXNG](https://github.com/searxng/searxng) sidecar ships in docker-compose; the agent searches the web and reads pages through it (`web_search` / `fetch_page`), so queries never go to a search provider you don't control. Copy `searxng/settings.yml.example` to `searxng/settings.yml` and set a `secret_key` to enable it
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Tasks** — a to-do window (priorities, due dates, search) the AI can also drive: "remind me to buy milk tomorrow" creates a task via the task tools, and the window refreshes live when chat changes the list
+- **Documents (RAG)** — upload text, Markdown, HTML, CSV, JSON, or PDF files into a **Documents** window; they're chunked and embedded locally (same Ollama embeddings as memory) and the agent retrieves relevant passages with `search_documents` when you ask about them
 - **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
 - **Inbox zero on reply** — replying to a message marks its follow-up flag complete and files it from the Inbox into a "Processed" folder automatically, so the Inbox only holds mail still awaiting action
 - **Commitment detection** — every email you send is scanned for promises with a date/time ("I'll do the maintenance Saturday 9pm"); episteme pops an accept/dismiss card offering to add it as a calendar event or task
@@ -35,7 +36,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 See [docs/Roadmap.md](docs/Roadmap.md) for the phased plan; headlines:
 
-- **Documents + RAG** — upload PDFs/docs into a searchable knowledge base the agent can pull from
 - **Multimodal chat** — paste images into chat (the model router already supports it; the composer doesn't yet)
 - **Scheduled agents + push** — user-defined recurring agent runs ("summarize overnight email at 7am") with mobile push notifications
 - **Voice input & usage tracking** — mobile STT, per-user token/cost accounting

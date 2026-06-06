@@ -504,6 +504,32 @@ export const memories = {
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
 }
 
+// Documents
+export interface Document {
+  id: string
+  filename: string
+  mime: string
+  size: number
+  status: 'indexing' | 'ready' | 'error'
+  error_message: string | null
+  created_at: string
+  chunk_count: number
+}
+
+export const documents = {
+  list: () => json<{ documents: Document[] }>('/documents'),
+  upload: (filename: string, contentType: string, contentBytes: string) =>
+    json<{ document: Document }>('/documents', {
+      method: 'POST',
+      body: JSON.stringify({
+        filename,
+        content_type: contentType,
+        content_bytes: contentBytes,
+      }),
+    }),
+  remove: (id: string) => fetch(BASE + `/documents/${id}`, { method: 'DELETE' }),
+}
+
 // Tasks
 export interface Task {
   id: string

@@ -5,6 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod calendar;
 mod categorizer;
 mod db;
+mod documents;
 mod error;
 mod integrations;
 mod memory;
