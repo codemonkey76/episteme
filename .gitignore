@@ -43,3 +43,6 @@ logs/
 
 # SearXNG instance config (copy settings.yml.example, contains secret_key)
 searxng/settings.yml
+
+# Firebase mobile push config (drop in from the Firebase console to enable push)
+mobile/android/app/google-services.json

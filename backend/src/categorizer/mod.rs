@@ -283,6 +283,13 @@ pub async fn run_mailbox(
                         Ok(()) => {
                             summary.flagged += 1;
                             log_event(state, "info", format!("Flagged: {subject}"));
+                            crate::integrations::fcm::notify(
+                                state,
+                                user_id,
+                                "Email needs attention",
+                                &subject,
+                            )
+                            .await;
                         }
                         Err(e) => log_event(state, "error", format!("Flag failed for \"{subject}\": {e}")),
                     }

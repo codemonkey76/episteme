@@ -16,6 +16,7 @@ mod tools;
 mod mcp_host;
 mod agent;
 mod routes;
+mod scheduler;
 mod state;
 
 use state::AppState;
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
     integrations::microsoft::migrate_legacy(&state).await;
     integrations::microsoft::migrate_shared_to_per_user(&state).await;
     categorizer::spawn_worker(state.clone());
+    scheduler::spawn_worker(state.clone());
     spawn_mcp_connect(state.clone());
     let app = routes::router(state);
 

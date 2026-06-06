@@ -46,6 +46,8 @@ dependencies:
   # Outgoing attachments: native file/photo picking + mime detection.
   file_picker: ^10.1.0
   mime: ^2.0.0
+  firebase_core: ^4.10.0
+  firebase_messaging: ^16.3.0
 
 dev_dependencies:
   flutter_test:

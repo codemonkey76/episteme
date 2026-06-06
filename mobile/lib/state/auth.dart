@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../api/client.dart';
+import '../push.dart';
 
 enum AuthState { unknown, loggedOut, loggedIn }
 
@@ -25,6 +26,9 @@ class AuthStore extends ChangeNotifier {
       // will surface errors per-screen.
       state = AuthState.loggedIn;
     }
+    if (state == AuthState.loggedIn) {
+      Push.register(); // fire-and-forget; no-op without Firebase config
+    }
     notifyListeners();
   }
 
@@ -34,6 +38,7 @@ class AuthStore extends ChangeNotifier {
       await _api.setServer(server);
       await _api.login(username, password);
       state = AuthState.loggedIn;
+      Push.register(); // fire-and-forget; no-op without Firebase config
       notifyListeners();
       return true;
     } catch (e) {

@@ -6,6 +6,7 @@ pub mod sessions;
 pub mod messages;
 pub mod settings;
 pub mod pending_actions;
+pub mod push_tokens;
 pub mod documents;
 pub mod logs;
 pub mod memories;

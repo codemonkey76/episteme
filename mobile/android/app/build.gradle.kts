@@ -43,3 +43,11 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// Push notifications are opt-in: the google-services plugin (which generates
+// the Firebase config resources) only applies when google-services.json has
+// been dropped in from the Firebase console. Without it the app builds fine
+// and push code no-ops at runtime.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

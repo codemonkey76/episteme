@@ -26,6 +26,8 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
 - **Inbox zero on reply** — replying to a message marks its follow-up flag complete and files it from the Inbox into a "Processed" folder automatically, so the Inbox only holds mail still awaiting action
 - **Commitment detection** — every email you send is scanned for promises with a date/time ("I'll do the maintenance Saturday 9pm"); episteme pops an accept/dismiss card offering to add it as a calendar event or task
+- **Scheduled agents** — recurring agent runs you define in **Settings → Agents** ("summarize overnight email and today's agenda", weekdays at 7:00, in your timezone). Each run is a real chat session you can open from History; tools work, but anything gated "ask first" is skipped — never auto-approved
+- **Push notifications** — drop a Firebase service-account JSON on the server and `google-services.json` into the Android app, and episteme pushes scheduled-agent output, detected commitments, and "needs attention" mail to your phone. Without the files everything no-ops — push is strictly opt-in
 - **Per-tool approval** — every tool (native and MCP) has an "ask first" toggle in **Settings → Tools**; flagged tools pause the chat with an inline approve/deny card and only run once you allow them. Approvals and denials are logged
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
 - **Logs** — a live, filterable log window fed by both frontend and backend events
@@ -37,7 +39,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 See [docs/Roadmap.md](docs/Roadmap.md) for the phased plan; headlines:
 
-- **Scheduled agents + push** — user-defined recurring agent runs ("summarize overnight email at 7am") with mobile push notifications
 - **Voice input & usage tracking** — mobile STT, per-user token/cost accounting
 
 ## Mobile app

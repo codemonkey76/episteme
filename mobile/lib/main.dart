@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'push.dart';
 import 'screens/login.dart';
 import 'screens/shell.dart';
 import 'state/auth.dart';
@@ -9,7 +10,9 @@ import 'state/email.dart';
 import 'state/notes.dart';
 import 'state/tasks.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Push.init();
   runApp(const EpistemeApp());
 }
 

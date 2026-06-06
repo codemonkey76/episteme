@@ -25,6 +25,9 @@ pub async fn run_turn(
     session_id: String,
     provider: ProviderConfig,
     tx: mpsc::Sender<AgentEvent>,
+    // Unattended runs (scheduled agents) have nobody to answer an approval
+    // card: "ask"-gated tools are skipped — never auto-approved.
+    unattended: bool,
 ) -> Result<()> {
     let raw_messages = db::messages::list_for_session(&state.db, &session_id).await?;
     let mut history: Vec<ChatMessage> = raw_messages
@@ -210,10 +213,18 @@ pub async fn run_turn(
                         .map(String::as_str)
                         .unwrap_or_else(|| crate::tools::default_policy(&call.fn_name));
                     if policy == "ask" {
-                        let approved =
-                            approval::await_decision(&state, &session_id, &call, &tx).await?;
+                        let approved = if unattended {
+                            false // skip below, with a message naming the reason
+                        } else {
+                            approval::await_decision(&state, &session_id, &call, &tx).await?
+                        };
                         if !approved {
-                            let declined = "user declined this tool call";
+                            let declined = if unattended {
+                                "skipped: this tool requires approval and the run is unattended — \
+                                 ask the user to run it interactively"
+                            } else {
+                                "user declined this tool call"
+                            };
                             db::messages::insert(
                                 &state.db,
                                 &session_id,

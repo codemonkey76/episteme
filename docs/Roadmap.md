@@ -42,17 +42,21 @@ migration; `/api/sessions/search?q=` ranked by FTS rank with snippets; search
 box in the History window; `search_history` agent tool. Covered by an
 in-memory integration test (`db::tests::message_search_via_fts5`).
 
-## Phase 6 — Scheduled agents + push notifications
+## Phase 6 — Scheduled agents + push notifications ✅ (shipped)
 
-- Worker modeled on `categorizer::spawn_worker`: per-user list of
-  `{name, schedule (cron), instructions, provider, enabled}` in settings.
-- Each run executes a one-shot agent turn with tools enabled; anything with an
-  "ask" policy is skipped and surfaced rather than auto-approved. Output lands
-  as a suggestions-style card and/or note.
-- Push: `firebase_messaging` in the Flutter app (the Firebase project already
-  exists for App Distribution), `/api/push/register` token route, backend
-  sends via FCM HTTP v1 with a service-account key. Notify on scheduled-agent
-  output, commitment cards, and auto-sort "needs attention".
+Per-user agents `{name, time HH:MM, days, provider, instructions, enabled}`
+(Settings → Agents), fired by a minute-tick worker in each user's home
+timezone, once per local date (catching up after restarts). Runs execute
+`agent::run_turn` with `unattended=true` — "ask"-gated tools are skipped with
+an explanatory tool result, never auto-approved — into a fresh "⏰" session
+visible in History; outcome is logged and pushed. Push: FCM HTTP v1 via a
+service-account JSON at `$FCM_SERVICE_ACCOUNT` (default
+`{DATA_DIR}/firebase-service-account.json`); `push_tokens` table +
+`/api/push/register`; dead tokens pruned on UNREGISTERED. Notifies on
+scheduled-agent output, commitment detection, and auto-sort flags. Mobile:
+`firebase_core`/`firebase_messaging`, google-services Gradle plugin applied
+only when `google-services.json` exists (CI builds stay green without it),
+token registered after login.
 
 ## Phase 7 — Extras
 

@@ -17,7 +17,7 @@ const isAdmin = computed(() => authStore.role === 'admin')
 
 const props = defineProps<{ initialTab?: string }>()
 
-type Tab = 'account' | 'providers' | 'mcp' | 'tools' | 'integrations' | 'appearance' | 'users' | 'system'
+type Tab = 'account' | 'providers' | 'mcp' | 'tools' | 'integrations' | 'agents' | 'appearance' | 'users' | 'system'
 const ADMIN_TABS: Tab[] = ['providers', 'mcp', 'tools', 'users', 'system']
 
 // A persisted window may restore with an admin tab (e.g. after the admin
@@ -248,6 +248,76 @@ async function deleteUser(u: api.UserAccount) {
   if (!confirm(`Delete ${u.username} and ALL their data? This can't be undone.`)) return
   await api.users.remove(u.id)
   userList.value = userList.value.filter(x => x.id !== u.id)
+}
+
+// ── Scheduled agents ──────────────────────────────────────────────────────────
+const DAY_TOKENS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
+const agentsList = ref<api.ScheduledAgent[]>([])
+const agentsError = ref('')
+const agentsSaving = ref(false)
+const agentRunning = ref<string | null>(null)
+
+async function loadAgents() {
+  try {
+    const res = await api.scheduledAgents.list()
+    agentsList.value = res.agents
+  } catch (e: unknown) {
+    agentsError.value = e instanceof Error ? e.message : 'Failed to load agents'
+  }
+}
+
+function addAgent() {
+  agentsList.value.push({
+    id: '',
+    name: '',
+    time: '07:00',
+    days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    provider: '',
+    instructions: '',
+    enabled: true,
+    last_run: '',
+  })
+}
+
+function toggleAgentDay(a: api.ScheduledAgent, day: string) {
+  const i = a.days.indexOf(day)
+  if (i === -1) a.days.push(day)
+  else a.days.splice(i, 1)
+}
+
+async function saveAgents() {
+  agentsSaving.value = true
+  agentsError.value = ''
+  try {
+    const res = await api.scheduledAgents.save(agentsList.value)
+    agentsList.value = res.agents
+    logs.info('Scheduler', `Saved ${res.agents.length} scheduled agent(s)`)
+  } catch (e: unknown) {
+    agentsError.value = e instanceof Error ? e.message : 'Failed to save agents'
+  } finally {
+    agentsSaving.value = false
+  }
+}
+
+function removeAgent(i: number) {
+  agentsList.value.splice(i, 1)
+}
+
+async function runAgentNow(a: api.ScheduledAgent) {
+  if (!a.id) {
+    agentsError.value = 'Save first, then run'
+    return
+  }
+  agentRunning.value = a.id
+  agentsError.value = ''
+  try {
+    await api.scheduledAgents.run(a.id)
+    logs.info('Scheduler', `Ran '${a.name}' — output is in a new chat session`)
+  } catch (e: unknown) {
+    agentsError.value = e instanceof Error ? e.message : 'Run failed'
+  } finally {
+    agentRunning.value = null
+  }
 }
 
 // ── Timezone ──────────────────────────────────────────────────────────────────
@@ -610,6 +680,12 @@ async function logout() {
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
         </svg>
         Integrations
+      </button>
+      <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'agents' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'agents'; loadAgents()">
+        <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Agents
       </button>
       <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'appearance' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'appearance'">
         <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1195,6 +1271,47 @@ async function logout() {
       </div>
 
       <!-- Appearance -->
+      <!-- Scheduled agents -->
+      <div v-else-if="activeTab === 'agents'" class="px-6 py-5 flex flex-col gap-5">
+        <div>
+          <h2 class="text-[0.9375rem] font-semibold text-fg">Scheduled agents</h2>
+          <p class="text-[var(--c-585858)] text-[0.75rem] mt-1">Recurring agent runs in your timezone — e.g. "summarize overnight email" each weekday at 7:00. Output lands in a new chat session (and a push notification if configured). Tools that need approval are skipped, never auto-approved.</p>
+        </div>
+
+        <div v-if="agentsError" class="text-danger text-[0.775rem]">{{ agentsError }}</div>
+
+        <div v-for="(a, i) in agentsList" :key="a.id || i" class="flex flex-col gap-2.5 bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-md p-3">
+          <div class="flex items-center gap-2">
+            <input v-model="a.name" class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] outline-none focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Name (e.g. Morning briefing)" />
+            <input v-model="a.time" class="w-[4.5rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] outline-none text-center focus:border-[var(--c-3a6adf)]" placeholder="07:00" />
+            <label class="flex items-center gap-1.5 text-[0.75rem] text-[var(--c-808080)] cursor-pointer select-none">
+              <input type="checkbox" v-model="a.enabled" class="cursor-pointer" /> enabled
+            </label>
+          </div>
+          <div class="flex items-center gap-1">
+            <button v-for="d in DAY_TOKENS" :key="d" :class="['px-2 py-[0.2rem] rounded text-[0.68rem] uppercase border cursor-pointer font-[inherit] transition-colors duration-100', a.days.includes(d) ? 'bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border-[var(--c-2a4a8a)]' : 'bg-surface text-[var(--c-585858)] border-raised hover:text-[var(--c-909090)]']" @click="toggleAgentDay(a, d)">{{ d }}</button>
+            <select v-model="a.provider" class="ml-auto bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer">
+              <option value="">default provider</option>
+              <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+            </select>
+          </div>
+          <textarea v-model="a.instructions" rows="2" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none resize-y focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]" placeholder="Instructions — what should the agent do on each run?" />
+          <div class="flex items-center gap-2">
+            <button class="bg-surface text-[var(--c-7adfbb)] border border-raised rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-1a241e)] disabled:opacity-50" :disabled="agentRunning === a.id || !a.id" :title="a.id ? '' : 'Save first'" @click="runAgentNow(a)">{{ agentRunning === a.id ? 'Running…' : 'Run now' }}</button>
+            <span v-if="a.last_run" class="text-[0.68rem] text-[var(--c-505050)]">last ran {{ a.last_run }}</span>
+            <button class="ml-auto bg-none border-none text-[var(--c-606060)] hover:text-[var(--c-d08080)] cursor-pointer text-xs font-[inherit]" @click="removeAgent(i)">Remove</button>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button class="flex items-center gap-[0.35rem] bg-surface text-[var(--c-808080)] border border-raised rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="addAgent">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add agent
+          </button>
+          <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="agentsSaving" @click="saveAgents">{{ agentsSaving ? 'Saving…' : 'Save' }}</button>
+        </div>
+      </div>
+
       <div v-else-if="activeTab === 'appearance'" class="px-6 py-5 flex flex-col gap-6">
         <h2 class="text-[0.9375rem] font-semibold text-fg">Appearance</h2>
         <section class="flex flex-col gap-3">

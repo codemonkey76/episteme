@@ -95,7 +95,8 @@ pub async fn stream(
             // Surface failures — a silently dropped Err here looks like a dead
             // stream to the client with no trace anywhere.
             if let Err(e) =
-                agent::run_turn(Arc::clone(&state), user.id.clone(), session_id, provider, tx).await
+                agent::run_turn(Arc::clone(&state), user.id.clone(), session_id, provider, tx, false)
+                    .await
             {
                 tracing::error!("agent turn failed: {e}");
                 state.log("agent", "error", format!("turn failed: {e}")).await;

@@ -160,7 +160,14 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
             Ok(_) => {
                 state
                     .log("suggestions", "info", format!("detected commitment ({kind}): {title}"))
-                    .await
+                    .await;
+                crate::integrations::fcm::notify(
+                    state,
+                    user_id,
+                    "Commitment detected",
+                    &format!("{title} — open episteme to add it as a {kind}"),
+                )
+                .await;
             }
             Err(e) => tracing::warn!("failed to save suggestion: {e}"),
         }

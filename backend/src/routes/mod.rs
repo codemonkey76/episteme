@@ -20,6 +20,7 @@ mod integrations;
 mod logs;
 mod memories;
 mod prompts;
+mod scheduler;
 mod tasks;
 mod notes;
 mod suggestions;
@@ -132,6 +133,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/suggestions", get(suggestions::list_pending))
         .route("/api/suggestions/:id/accept", post(suggestions::accept))
         .route("/api/suggestions/:id/dismiss", post(suggestions::dismiss))
+        .route("/api/scheduled-agents", get(scheduler::list))
+        .route("/api/scheduled-agents", put(scheduler::put))
+        .route("/api/scheduled-agents/:id/run", post(scheduler::run))
+        .route("/api/push/register", post(scheduler::register_push))
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))

@@ -511,6 +511,29 @@ export const memories = {
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
 }
 
+// Scheduled agents
+export interface ScheduledAgent {
+  id: string
+  name: string
+  time: string
+  days: string[]
+  provider: string
+  instructions: string
+  enabled: boolean
+  last_run: string
+}
+
+export const scheduledAgents = {
+  list: () => json<{ agents: ScheduledAgent[] }>('/scheduled-agents'),
+  save: (agents: ScheduledAgent[]) =>
+    json<{ agents: ScheduledAgent[] }>('/scheduled-agents', {
+      method: 'PUT',
+      body: JSON.stringify(agents),
+    }),
+  run: (id: string) =>
+    json<{ session_id: string }>(`/scheduled-agents/${id}/run`, { method: 'POST' }),
+}
+
 // Conversation search
 export interface SearchHit {
   session_id: string
