@@ -89,7 +89,9 @@ session's last pending row is decided — resumes the job through an atomic
 agent→tool→job async-recursion cycle). Everything persists in SQLite, so
 suspend/resume survives restarts. Also fixed en route: assistant text emitted
 alongside tool calls is now persisted per-iteration (it was lost on replay).
-Mobile follow-up deferred: a global Jobs/Approvals tab.
+Mobile follow-up shipped: the Activity tab (Jobs segment) — global
+approval queue with approve/deny, recent runs with status, badge on the tab
+icon, jump-to-session into Chat.
 
 ## Phase 9 — Deep research ✅ (shipped)
 
@@ -108,8 +110,11 @@ inline-SVG bar charts, numbered sources; every model string HTML-escaped).
 Reports persist in a `reports` table, served raw at `/api/reports/:id/html`,
 browsed in a Reports window (iframe + open-in-tab + delete). Four editable
 prompts (`research_plan/distill/reflect/synthesize`); usage purpose
-`research`; SearXNG outages degrade to internal-corpus-only. Follow-ups:
-ingest reports into documents-RAG; mobile Reports view.
+`research`; SearXNG outages degrade to internal-corpus-only. Mobile Reports
+shipped: Activity tab (Reports segment) with a research launcher and a
+no-JS WebView viewer (HTML fetched over the authed client, rendered via
+loadHtmlString — no cookies in the WebView). Remaining follow-up: ingest
+reports into documents-RAG.
 
 ## Phase 10 — Context compaction
 

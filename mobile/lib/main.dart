@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'push.dart';
 import 'screens/login.dart';
 import 'screens/shell.dart';
+import 'state/activity.dart';
 import 'state/auth.dart';
 import 'state/chat.dart';
 import 'state/email.dart';
@@ -43,6 +44,7 @@ class EpistemeApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ChatStore()),
         ChangeNotifierProvider(create: (_) => EmailStore()),
         ChangeNotifierProvider(create: (_) => NotesStore()),
+        ChangeNotifierProvider(create: (_) => ActivityStore()),
       ],
       child: MaterialApp(
         title: 'Episteme',

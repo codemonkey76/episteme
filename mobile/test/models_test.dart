@@ -38,6 +38,55 @@ void main() {
     expect(n.title, 'Rack');
     expect(n.updatedAt, isNotNull);
   });
+
+  test('Job parses API shape with nullable summary/error', () {
+    final j = Job.fromJson({
+      'id': 'j1',
+      'user_id': 'u1',
+      'session_id': 's1',
+      'kind': 'research',
+      'name': 'Research: laptops',
+      'provider': '',
+      'status': 'needs_approval',
+      'summary': null,
+      'error': null,
+      'meta': '{"topic":"laptops","depth":"standard"}',
+      'created_at': '2026-06-07T01:00:00+00:00',
+      'updated_at': '2026-06-07T01:05:00+00:00',
+    });
+    expect(j.kind, 'research');
+    expect(j.status, 'needs_approval');
+    expect(j.summary, isNull);
+    expect(j.updatedAt, isNotNull);
+  });
+
+  test('Global pending approval parses and pretty-prints args', () {
+    final a = PendingApproval.fromGlobalJson({
+      'id': 'a1',
+      'session_id': 's1',
+      'session_title': '⏰ Morning briefing',
+      'tool_name': 'send_email',
+      'tool_args': '{"to":"bob@example.com"}',
+      'created_at': '2026-06-07T01:00:00+00:00',
+    });
+    expect(a.toolName, 'send_email');
+    expect(a.sessionTitle, '⏰ Morning briefing');
+    expect(a.prettyArgs, contains('"to": "bob@example.com"'));
+    // Chat-stream approvals still construct without session context.
+    final chat = PendingApproval(id: 'a2', toolName: 't', toolArgs: 'not json');
+    expect(chat.sessionTitle, isNull);
+    expect(chat.prettyArgs, 'not json');
+  });
+
+  test('Report parses minimal metadata', () {
+    final r = Report.fromJson({
+      'id': 'r1',
+      'title': 'Laptop comparison',
+      'created_at': '2026-06-07T01:00:00+00:00',
+    });
+    expect(r.title, 'Laptop comparison');
+    expect(r.createdAt, isNotNull);
+  });
 }
 
 // (email text helpers)

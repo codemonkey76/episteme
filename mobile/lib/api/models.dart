@@ -187,11 +187,31 @@ class PendingApproval {
     required this.id,
     required this.toolName,
     required this.toolArgs,
+    this.sessionId,
+    this.sessionTitle,
+    this.createdAt,
   });
 
   final String id;
   final String toolName;
   final String toolArgs;
+  // Set only for the global queue (/approvals/pending), not chat approvals.
+  final String? sessionId;
+  final String? sessionTitle;
+  final DateTime? createdAt;
+
+  /// One row of GET /approvals/pending — the global approval queue.
+  factory PendingApproval.fromGlobalJson(Map<String, dynamic> j) =>
+      PendingApproval(
+        id: j['id'] as String,
+        toolName: j['tool_name'] as String,
+        toolArgs: j['tool_args'] as String? ?? '',
+        sessionId: j['session_id'] as String?,
+        sessionTitle: j['session_title'] as String?,
+        createdAt: j['created_at'] != null
+            ? DateTime.tryParse(j['created_at'] as String)?.toLocal()
+            : null,
+      );
 
   String get prettyArgs {
     try {
@@ -200,6 +220,57 @@ class PendingApproval {
       return toolArgs;
     }
   }
+}
+
+class Job {
+  Job({
+    required this.id,
+    required this.sessionId,
+    required this.kind,
+    required this.name,
+    required this.status,
+    required this.summary,
+    required this.error,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String sessionId;
+  final String kind; // background | scheduled | research
+  final String name;
+  final String status; // running | needs_approval | done | failed
+  final String? summary;
+  final String? error;
+  final DateTime? updatedAt;
+
+  factory Job.fromJson(Map<String, dynamic> j) => Job(
+        id: j['id'] as String,
+        sessionId: j['session_id'] as String,
+        kind: j['kind'] as String? ?? 'background',
+        name: j['name'] as String? ?? '',
+        status: j['status'] as String? ?? 'running',
+        summary: j['summary'] as String?,
+        error: j['error'] as String?,
+        updatedAt: j['updated_at'] != null
+            ? DateTime.tryParse(j['updated_at'] as String)?.toLocal()
+            : null,
+      );
+}
+
+class Report {
+  Report({required this.id, required this.title, required this.createdAt});
+
+  final String id;
+  final String title;
+  final DateTime? createdAt;
+
+  factory Report.fromJson(Map<String, dynamic> j) => Report(
+        id: j['id'] as String,
+        title: j['title'] as String? ?? '',
+        createdAt: j['created_at'] != null
+            ? DateTime.tryParse(j['created_at'] as String)?.toLocal()
+            : null,
+      );
 }
 
 class Provider {

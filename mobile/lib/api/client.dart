@@ -97,6 +97,15 @@ class ApiClient {
     return _decode(res);
   }
 
+  /// GET a non-JSON resource (e.g. a report's raw HTML document).
+  Future<String> getText(String path) async {
+    final res = await http.get(_uri(path), headers: _headers(json: false));
+    if (res.statusCode >= 400) {
+      throw ApiException(_errorMessage(res), res.statusCode);
+    }
+    return utf8.decode(res.bodyBytes);
+  }
+
   Future<Map<String, dynamic>> postJson(String path, Object? body) async {
     final res = await http.post(_uri(path),
         headers: _headers(), body: body == null ? null : jsonEncode(body));
