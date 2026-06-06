@@ -240,6 +240,13 @@ async fn stream_ollama(
     if !ollama_tools.is_empty() {
         body["tools"] = serde_json::json!(ollama_tools);
     }
+    // Ollama defaults num_ctx to 4096 and silently truncates bigger prompts
+    // from the FRONT — the system prompt (instructions, JSON schemas) vanishes
+    // first. Raise the window to fit when the prompt is large; small requests
+    // keep the default so they don't pay the extra VRAM.
+    if let Some(num_ctx) = ollama_num_ctx(body.to_string().len()) {
+        body["options"] = serde_json::json!({ "num_ctx": num_ctx });
+    }
 
     let client = reqwest::Client::new();
     let response = client
@@ -458,4 +465,33 @@ fn schemas_to_tools(schemas: Vec<Value>) -> Vec<Tool> {
             Some(tool)
         })
         .collect()
+}
+
+/// Context window override for an Ollama request, from the serialized request
+/// size. None = the prompt fits Ollama's 4096 default; otherwise the needed
+/// window rounded up in 4k steps, capped at 32k (Ollama clamps to the model's
+/// own maximum beyond that). Bytes/3 deliberately over-estimates tokens
+/// (English runs ~4 bytes/token) so truncation stays the rare case.
+fn ollama_num_ctx(request_bytes: usize) -> Option<usize> {
+    const DEFAULT: usize = 4096;
+    const CAP: usize = 32_768;
+    const REPLY_HEADROOM: usize = 2048;
+    let needed = request_bytes / 3 + REPLY_HEADROOM;
+    (needed > DEFAULT).then(|| needed.next_multiple_of(4096).min(CAP))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ollama_num_ctx_scales_with_prompt_size() {
+        // Small prompts keep Ollama's default window (no options sent).
+        assert_eq!(ollama_num_ctx(1_000), None);
+        assert_eq!(ollama_num_ctx(6_000), None);
+        // A deep-research synthesis prompt (~30k bytes) needs ~12k tokens.
+        assert_eq!(ollama_num_ctx(30_000), Some(12_288));
+        // Huge prompts cap at 32k.
+        assert_eq!(ollama_num_ctx(500_000), Some(32_768));
+    }
 }
