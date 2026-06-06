@@ -497,7 +497,7 @@ packages:
     source: hosted
     version: "1.9.1"
   path_provider:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: path_provider
       sha256: "50c5dd5b6e1aaf6fb3a78b33f6aa3afca52bf903a8a5298f53101fdaee55bbcd"
@@ -592,6 +592,54 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  record:
+    dependency: "direct main"
+    description:
+      name: record
+      sha256: "11bab1e1d9e75229588222f66a468aae1967e1ce490c80f8bd782aa165ec822b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "7.0.0"
+  record_android:
+    dependency: transitive
+    description:
+      name: record_android
+      sha256: "16e28607ad92dc2e7d93328f4f4720a9f82a78b639497690022e0e135a326f8e"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.1"
+  record_ios:
+    dependency: transitive
+    description:
+      name: record_ios
+      sha256: a7f456c9b2c5ba10f1ad0a7dfe19dcabcbfda0c2a09d4eef0c43e48e762a7b00
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+  record_linux:
+    dependency: transitive
+    description:
+      name: record_linux
+      sha256: "64c70dede6f3a8235927531067ceb8e2ef1b737071f2ff72390ab49f88644f2a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+  record_macos:
+    dependency: transitive
+    description:
+      name: record_macos
+      sha256: b8cd9dd88aff1b7a5873bb2a2a875b376ce1a68c6f84bce3ce0448e413a84700
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+  record_platform_interface:
+    dependency: transitive
+    description:
+      name: record_platform_interface
+      sha256: fc1b2b26113b8ab2bffa39148288b0b588c7b3b356a21aeee7bea24b91b6f1a4
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
   record_use:
     dependency: transitive
     description:
@@ -600,6 +648,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.6.0"
+  record_web:
+    dependency: transitive
+    description:
+      name: record_web
+      sha256: f3374c9ba6b6f9edcb3589be37515e420faba631b9d54421bb28562667831b05
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+  record_windows:
+    dependency: transitive
+    description:
+      name: record_windows
+      sha256: "603429b542a2a7120ad988218ebebe50ed5565087db68ab694ae6c2d5a6e7749"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
   shared_preferences:
     dependency: "direct main"
     description:

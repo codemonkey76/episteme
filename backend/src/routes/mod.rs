@@ -21,6 +21,7 @@ mod logs;
 mod memories;
 mod prompts;
 mod scheduler;
+mod transcribe;
 mod tasks;
 mod notes;
 mod suggestions;
@@ -137,6 +138,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/scheduled-agents", put(scheduler::put))
         .route("/api/scheduled-agents/:id/run", post(scheduler::run))
         .route("/api/push/register", post(scheduler::register_push))
+        .route(
+            "/api/transcribe",
+            post(transcribe::transcribe).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))
@@ -146,6 +151,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let admin = Router::new()
         // Shared infrastructure config — admin only (the UI also hides these
         // tabs from members, but the API is the real boundary).
+        .route("/api/usage/summary", get(settings::usage_summary))
         .route("/api/settings/providers", post(settings::upsert_provider))
         .route("/api/settings/providers/:name", delete(settings::delete_provider))
         .route("/api/settings/ollama/models", get(settings::list_ollama_models))

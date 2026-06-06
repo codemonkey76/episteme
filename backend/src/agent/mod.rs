@@ -80,6 +80,8 @@ pub async fn run_turn(
 
     // Accumulates the model's visible reply across the turn for extraction.
     let mut assistant_text = String::new();
+    // Token counts summed across all model round-trips in this turn.
+    let mut turn_usage = crate::model_router::TokenUsage::default();
 
     // Cap tool round-trips so a misbehaving model can't loop forever.
     let mut iterations = 0;
@@ -100,6 +102,7 @@ pub async fn run_turn(
                 )
                 .await;
             }
+            db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage)).await;
             return Ok(());
         }
 
@@ -145,6 +148,10 @@ pub async fn run_turn(
         while let Some(chunk) = chunk_rx.recv().await {
             if chunk.done {
                 tool_calls_from_model = chunk.tool_calls;
+                if let Some(u) = chunk.usage {
+                    turn_usage.prompt += u.prompt;
+                    turn_usage.completion += u.completion;
+                }
             } else {
                 assistant_text.push_str(&chunk.text);
                 iter_text.push_str(&chunk.text);
@@ -179,6 +186,7 @@ pub async fn run_turn(
                     crate::memory::extract(&st, &uid, prov, user_text, assistant_text, Some(sess))
                         .await;
                 });
+                db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage)).await;
                 return Ok(());
             }
             Some(calls) => {

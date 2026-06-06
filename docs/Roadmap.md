@@ -58,9 +58,18 @@ scheduled-agent output, commitment detection, and auto-sort flags. Mobile:
 only when `google-services.json` exists (CI builds stay green without it),
 token registered after login.
 
-## Phase 7 — Extras
+## Phase 7 — Extras ✅ (shipped)
 
-- **Voice input**: mic button in the Flutter chat tab → `/api/transcribe` →
-  Whisper via Groq (provider already supported) or local.
-- **Usage tracking**: token counts captured in `model_router::stream`/
-  `complete` per user/provider into a `usage` table; admin view in Settings.
+- **Voice input**: mic button in the Flutter chat tab records AAC (`record`
+  package), `/api/transcribe` forwards it (multipart) to the first configured
+  Groq provider's Whisper endpoint (`whisper-large-v3-turbo`; OpenAI
+  `whisper-1` fallback) and the transcript lands in the composer for review.
+- **Usage tracking**: `StreamChunk.usage` carries provider-reported token
+  counts (genai `capture_usage`; Ollama eval counts); recorded per
+  user/provider/model/purpose in the `usage` table from every call site
+  (chat, memory, style, auto-sort, commitments, email-ai); admin summary at
+  `/api/usage/summary` and a table in Settings → System.
+
+---
+
+All seven phases shipped. New feature ideas start here.

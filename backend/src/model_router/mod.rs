@@ -27,6 +27,15 @@ pub struct StreamChunk {
     pub done: bool,
     /// Non-empty when the model requested a tool call (captured at End event).
     pub tool_calls: Option<Vec<genai::chat::ToolCall>>,
+    /// Token counts when the provider reports them (on the done chunk).
+    pub usage: Option<TokenUsage>,
+}
+
+/// Provider-reported token counts for one request — fed into the usage table.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokenUsage {
+    pub prompt: i64,
+    pub completion: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +88,7 @@ impl ModelRouter {
             chat_req = chat_req.with_tools(genai_tools);
         }
 
-        let options = ChatOptions::default().with_capture_content(true);
+        let options = ChatOptions::default().with_capture_content(true).with_capture_usage(true);
 
         let mut stream = client
             .exec_chat_stream(&provider.model_id, chat_req, Some(&options))
@@ -90,15 +99,25 @@ impl ModelRouter {
             match event? {
                 ChatStreamEvent::Start | ChatStreamEvent::ReasoningChunk(_) => {}
                 ChatStreamEvent::Chunk(chunk) => {
-                    tx.send(StreamChunk { text: chunk.content, done: false, tool_calls: None })
-                        .await?;
+                    tx.send(StreamChunk {
+                        text: chunk.content,
+                        done: false,
+                        tool_calls: None,
+                        usage: None,
+                    })
+                    .await?;
                 }
                 ChatStreamEvent::End(end) => {
+                    let usage = end.captured_usage.map(|u| TokenUsage {
+                        prompt: u.prompt_tokens.unwrap_or(0) as i64,
+                        completion: u.completion_tokens.unwrap_or(0) as i64,
+                    });
                     let tool_calls = end.captured_content.and_then(|c| match c {
                         genai::chat::MessageContent::ToolCalls(calls) => Some(calls),
                         _ => None,
                     });
-                    tx.send(StreamChunk { text: String::new(), done: true, tool_calls }).await?;
+                    tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage })
+                        .await?;
                 }
             }
         }
@@ -110,6 +129,15 @@ impl ModelRouter {
     /// calls. For one-shot uses (e.g. JSON classification) where streaming the
     /// tokens to a client isn't needed.
     pub async fn complete(provider: &ProviderConfig, history: Vec<ChatMessage>) -> Result<String> {
+        Ok(Self::complete_with_usage(provider, history).await?.0)
+    }
+
+    /// `complete`, also returning provider-reported token counts (when given)
+    /// so callers can feed the usage table.
+    pub async fn complete_with_usage(
+        provider: &ProviderConfig,
+        history: Vec<ChatMessage>,
+    ) -> Result<(String, Option<TokenUsage>)> {
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let provider = provider.clone();
         let task = tokio::spawn(async move {
@@ -117,12 +145,16 @@ impl ModelRouter {
         });
 
         let mut out = String::new();
+        let mut usage = None;
         while let Some(chunk) = rx.recv().await {
             out.push_str(&chunk.text);
+            if chunk.usage.is_some() {
+                usage = chunk.usage;
+            }
         }
         // Surface a model/transport error rather than silently returning a partial string.
         task.await??;
-        Ok(out)
+        Ok((out, usage))
     }
 }
 
@@ -267,8 +299,13 @@ async fn stream_ollama(
 
             if let Some(content) = data["message"]["content"].as_str() {
                 if !content.is_empty() {
-                    tx.send(StreamChunk { text: content.to_string(), done: false, tool_calls: None })
-                        .await?;
+                    tx.send(StreamChunk {
+                        text: content.to_string(),
+                        done: false,
+                        tool_calls: None,
+                        usage: None,
+                    })
+                    .await?;
                 }
             }
 
@@ -292,13 +329,21 @@ async fn stream_ollama(
                 } else {
                     Some(std::mem::take(&mut pending_tool_calls))
                 };
-                tx.send(StreamChunk { text: String::new(), done: true, tool_calls }).await?;
+                // Ollama reports token counts on the final message.
+                let usage = match (data["prompt_eval_count"].as_i64(), data["eval_count"].as_i64()) {
+                    (None, None) => None,
+                    (p, c) => Some(TokenUsage {
+                        prompt: p.unwrap_or(0),
+                        completion: c.unwrap_or(0),
+                    }),
+                };
+                tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage }).await?;
                 return Ok(());
             }
         }
     }
 
-    tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None }).await?;
+    tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None, usage: None }).await?;
     Ok(())
 }
 

@@ -344,3 +344,18 @@ pub async fn set_theme(
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub struct UsageQuery {
+    days: Option<i64>,
+}
+
+// GET /api/usage/summary?days=30 — admin: token totals per user/provider/purpose.
+pub async fn usage_summary(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<UsageQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let rows = crate::db::usage::summary(&state.db, days).await.map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "days": days, "usage": rows })))
+}

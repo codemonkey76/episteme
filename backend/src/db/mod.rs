@@ -13,6 +13,7 @@ pub mod memories;
 pub mod tasks;
 pub mod notes;
 pub mod suggestions;
+pub mod usage;
 pub mod invites;
 
 pub async fn init(url: &str) -> Result<SqlitePool> {

@@ -1,11 +1,15 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart' hide Provider;
+import 'package:record/record.dart';
 
+import '../api/client.dart';
 import '../api/models.dart';
 import '../main.dart';
 import '../state/chat.dart';
@@ -62,12 +66,62 @@ class _ChatTabState extends State<ChatTab> {
     });
   }
 
+  // ── Voice input ─────────────────────────────────────────────────────────
+  final _recorder = AudioRecorder();
+  bool _recording = false;
+  bool _transcribing = false;
+
+  Future<void> _toggleRecording() async {
+    if (_recording) {
+      final path = await _recorder.stop();
+      setState(() => _recording = false);
+      if (path == null) return;
+      setState(() => _transcribing = true);
+      try {
+        final bytes = await File(path).readAsBytes();
+        final res = await ApiClient.instance.postJson('/transcribe', {
+          'audio_b64': base64Encode(bytes),
+          'mime': 'audio/m4a',
+        });
+        final text = (res['text'] as String? ?? '').trim();
+        if (text.isNotEmpty) {
+          _input.text = _input.text.isEmpty ? text : '${_input.text} $text';
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Transcription failed: $e')),
+          );
+        }
+      } finally {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+        if (mounted) setState(() => _transcribing = false);
+      }
+      return;
+    }
+    if (!await _recorder.hasPermission()) return;
+    final dir = await getTemporaryDirectory();
+    await _recorder.start(
+      const RecordConfig(encoder: AudioEncoder.aacLc),
+      path: '${dir.path}/voice-${DateTime.now().millisecondsSinceEpoch}.m4a',
+    );
+    setState(() => _recording = true);
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ChatStore>().init();
     });
+  }
+
+  @override
+  void dispose() {
+    _recorder.dispose();
+    super.dispose();
   }
 
   void _autoscroll() {
@@ -236,7 +290,14 @@ class _ChatTabState extends State<ChatTab> {
                 ),
               ),
             ),
-          _InputBar(input: _input, onSend: _send, onAttach: _pickImages),
+          _InputBar(
+            input: _input,
+            onSend: _send,
+            onAttach: _pickImages,
+            onMic: _toggleRecording,
+            recording: _recording,
+            transcribing: _transcribing,
+          ),
         ],
       ),
     );
@@ -421,10 +482,20 @@ class _ApprovalCard extends StatelessWidget {
 }
 
 class _InputBar extends StatelessWidget {
-  const _InputBar({required this.input, required this.onSend, required this.onAttach});
+  const _InputBar({
+    required this.input,
+    required this.onSend,
+    required this.onAttach,
+    required this.onMic,
+    required this.recording,
+    required this.transcribing,
+  });
   final TextEditingController input;
   final Future<void> Function() onSend;
   final Future<void> Function() onAttach;
+  final Future<void> Function() onMic;
+  final bool recording;
+  final bool transcribing;
 
   @override
   Widget build(BuildContext context) {
@@ -445,6 +516,21 @@ class _InputBar extends StatelessWidget {
                   tooltip: 'Attach image',
                   icon: const Icon(Icons.image_outlined, size: 20, color: Palette.muted),
                   onPressed: store.sending ? null : onAttach,
+                ),
+                IconButton(
+                  tooltip: recording ? 'Stop recording' : 'Voice input',
+                  icon: transcribing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          recording ? Icons.stop_circle_outlined : Icons.mic_none,
+                          size: 20,
+                          color: recording ? Palette.danger : Palette.muted,
+                        ),
+                  onPressed: (store.sending || transcribing) ? null : onMic,
                 ),
                 Expanded(
                   child: TextField(

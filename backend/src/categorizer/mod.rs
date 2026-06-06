@@ -251,7 +251,8 @@ pub async fn run_mailbox(
         },
     ];
 
-    let raw = ModelRouter::complete(&provider, history).await?;
+    let (raw, used) = ModelRouter::complete_with_usage(&provider, history).await?;
+    db::usage::record(&state.db, user_id, &provider, "auto-sort", used).await;
     let classifications = match parse_classifications(&raw) {
         Ok(c) => c,
         Err(e) => {

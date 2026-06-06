@@ -250,6 +250,19 @@ async function deleteUser(u: api.UserAccount) {
   userList.value = userList.value.filter(x => x.id !== u.id)
 }
 
+// ── Usage (admin) ─────────────────────────────────────────────────────────────
+const usageDays = ref(30)
+const usageRows = ref<api.UsageRow[]>([])
+
+async function loadUsage() {
+  try {
+    const res = await api.usageSummary(usageDays.value)
+    usageRows.value = res.usage
+  } catch {
+    usageRows.value = []
+  }
+}
+
 // ── Scheduled agents ──────────────────────────────────────────────────────────
 const DAY_TOKENS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
 const agentsList = ref<api.ScheduledAgent[]>([])
@@ -702,7 +715,7 @@ async function logout() {
           </svg>
           Users
         </button>
-        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'system' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'system'">
+        <button :class="['flex items-center gap-2 px-3 py-[0.45rem] rounded-md text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left font-[inherit] transition-[background,color] duration-[120ms] whitespace-nowrap', activeTab === 'system' ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-d0d0d0)]']" @click="activeTab = 'system'; loadUsage()">
           <svg class="shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
           </svg>
@@ -1404,6 +1417,45 @@ async function logout() {
               {{ tzSaving ? 'Saving…' : 'Save' }}
             </button>
             <p v-if="tzMsg" class="text-[0.775rem]" :class="tzMsg === 'Saved.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ tzMsg }}</p>
+          </div>
+        </section>
+
+        <section class="flex flex-col gap-3">
+          <div class="flex items-center gap-2">
+            <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Token usage</h3>
+            <select v-model.number="usageDays" class="ml-auto bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer" @change="loadUsage">
+              <option :value="7">7 days</option>
+              <option :value="30">30 days</option>
+              <option :value="90">90 days</option>
+            </select>
+            <button class="flex items-center justify-center bg-surface text-[var(--c-808080)] border border-raised rounded px-2 py-1 cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Refresh" @click="loadUsage">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+          </div>
+          <div class="bg-[var(--c-111111)] rounded-lg border border-[var(--c-222222)] overflow-hidden">
+            <p v-if="usageRows.length === 0" class="text-[0.775rem] text-[var(--c-585858)] p-3.5">No usage recorded yet — counts accumulate as models report token totals.</p>
+            <table v-else class="w-full text-[0.75rem] border-collapse">
+              <thead>
+                <tr class="text-left text-[var(--c-585858)] uppercase text-[0.62rem] tracking-[0.05em]">
+                  <th class="px-3 py-2 font-semibold">User</th>
+                  <th class="px-3 py-2 font-semibold">Provider</th>
+                  <th class="px-3 py-2 font-semibold">Purpose</th>
+                  <th class="px-3 py-2 font-semibold text-right">Requests</th>
+                  <th class="px-3 py-2 font-semibold text-right">Prompt</th>
+                  <th class="px-3 py-2 font-semibold text-right">Completion</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(r, i) in usageRows" :key="i" class="border-t border-[var(--c-1a1a1a)] text-[var(--c-c0c0c0)]">
+                  <td class="px-3 py-1.5">{{ r.username }}</td>
+                  <td class="px-3 py-1.5">{{ r.provider }} <span class="text-[var(--c-585858)]">{{ r.model_id }}</span></td>
+                  <td class="px-3 py-1.5">{{ r.purpose }}</td>
+                  <td class="px-3 py-1.5 text-right">{{ r.requests.toLocaleString() }}</td>
+                  <td class="px-3 py-1.5 text-right">{{ r.prompt_tokens.toLocaleString() }}</td>
+                  <td class="px-3 py-1.5 text-right">{{ r.completion_tokens.toLocaleString() }}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </section>
       </div>

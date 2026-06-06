@@ -111,8 +111,11 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 
-    let raw = match ModelRouter::complete(&provider, history).await {
-        Ok(r) => r,
+    let raw = match ModelRouter::complete_with_usage(&provider, history).await {
+        Ok((r, used)) => {
+            db::usage::record(&state.db, user_id, &provider, "commitments", used).await;
+            r
+        }
         Err(e) => {
             state
                 .log("suggestions", "error", format!("commitment detection failed: {e}"))

@@ -511,6 +511,20 @@ export const memories = {
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
 }
 
+// Usage (admin)
+export interface UsageRow {
+  username: string
+  provider: string
+  model_id: string
+  purpose: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+}
+
+export const usageSummary = (days = 30) =>
+  json<{ days: number; usage: UsageRow[] }>(`/usage/summary?days=${days}`)
+
 // Scheduled agents
 export interface ScheduledAgent {
   id: string

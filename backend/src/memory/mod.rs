@@ -198,8 +198,11 @@ pub async fn extract(
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 
-    let raw = match ModelRouter::complete(&provider, history).await {
-        Ok(r) => r,
+    let raw = match ModelRouter::complete_with_usage(&provider, history).await {
+        Ok((r, used)) => {
+            db::usage::record(&state.db, user_id, &provider, "memory", used).await;
+            r
+        }
         Err(e) => {
             tracing::warn!("memory extraction failed: {e}");
             return;
@@ -292,8 +295,11 @@ pub async fn extract_style(
         ChatMessage { role: "user".to_string(), content: Value::String(user) },
     ];
 
-    let raw = match ModelRouter::complete(&provider, history).await {
-        Ok(r) => r,
+    let raw = match ModelRouter::complete_with_usage(&provider, history).await {
+        Ok((r, used)) => {
+            db::usage::record(&state.db, user_id, &provider, "style", used).await;
+            r
+        }
         Err(e) => {
             tracing::warn!("style extraction failed: {e}");
             return;

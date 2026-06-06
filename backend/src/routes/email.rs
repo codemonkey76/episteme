@@ -1023,12 +1023,19 @@ previous drafts:\n",
     // provider is unreachable), emits an `error` event — the failure happens
     // after the 200 response has begun, so it can't be reported via the status.
     let (ev_tx, ev_rx) = mpsc::channel::<String>(64);
+    let pool = state.db.clone();
+    let uid = user_id.to_string();
+    let prov_meta = provider.clone();
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let model_task =
             tokio::spawn(async move { ModelRouter::stream(&provider, history, Vec::new(), false, tx).await });
 
+        let mut used = None;
         while let Some(chunk) = rx.recv().await {
+            if chunk.usage.is_some() {
+                used = chunk.usage;
+            }
             let data = if chunk.done {
                 serde_json::json!({ "type": "done" }).to_string()
             } else {
@@ -1038,6 +1045,7 @@ previous drafts:\n",
                 return; // client disconnected
             }
         }
+        db::usage::record(&pool, &uid, &prov_meta, "email-ai", used).await;
 
         if let Ok(Err(e)) = model_task.await {
             tracing::error!("ai_draft stream error: {e}");
@@ -1111,11 +1119,18 @@ pub async fn summarize(
     ];
 
     let (ev_tx, ev_rx) = mpsc::channel::<String>(64);
+    let pool = state.db.clone();
+    let uid = user.id.clone();
+    let prov_meta = provider.clone();
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let model_task =
             tokio::spawn(async move { ModelRouter::stream(&provider, history, Vec::new(), false, tx).await });
+        let mut used = None;
         while let Some(chunk) = rx.recv().await {
+            if chunk.usage.is_some() {
+                used = chunk.usage;
+            }
             let data = if chunk.done {
                 serde_json::json!({ "type": "done" }).to_string()
             } else {
@@ -1125,6 +1140,7 @@ pub async fn summarize(
                 return; // client disconnected
             }
         }
+        db::usage::record(&pool, &uid, &prov_meta, "email-ai", used).await;
         if let Ok(Err(e)) = model_task.await {
             tracing::error!("summarize stream error: {e}");
             let _ = ev_tx
@@ -1234,9 +1250,9 @@ pub async fn ticket_from_email(
     tracing::info!("ticket_from_email: extracting via provider '{}'", provider.name);
     // The model call is the one hop without its own transport timeout — cap it
     // so a wedged provider yields an error instead of an eternal "Creating…".
-    let raw = tokio::time::timeout(
+    let (raw, used) = tokio::time::timeout(
         Duration::from_secs(120),
-        ModelRouter::complete(
+        ModelRouter::complete_with_usage(
             &provider,
             vec![
                 ChatMessage { role: "system".to_string(), content: Value::String(system) },
@@ -1247,6 +1263,7 @@ pub async fn ticket_from_email(
     .await
     .map_err(|_| AppError::Internal(anyhow::anyhow!("AI provider timed out after 120s")))?
     .map_err(AppError::Internal)?;
+    db::usage::record(&state.db, user_id, &provider, "email-ai", used).await;
     tracing::info!("ticket_from_email: model returned {} chars", raw.len());
     // Tolerate code fences / prose around the JSON object.
     let start = raw.find('{').ok_or_else(|| AppError::Internal(anyhow::anyhow!("no JSON in model output")))?;
