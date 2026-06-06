@@ -13,6 +13,7 @@ pub mod calendar;
 pub mod documents;
 pub mod email;
 pub mod helpdesk;
+pub mod history;
 pub mod memories;
 pub mod notes;
 pub mod tasks;
@@ -28,6 +29,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(web::schemas());
     all.extend(memories::schemas());
     all.extend(documents::schemas());
+    all.extend(history::schemas());
     all.extend(helpdesk::schemas());
     all
 }
@@ -40,6 +42,7 @@ pub fn is_native(name: &str) -> bool {
         || web::handles(name)
         || memories::handles(name)
         || documents::handles(name)
+        || history::handles(name)
         || helpdesk::handles(name)
 }
 
@@ -53,6 +56,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("web", web::schemas()),
         ("memory", memories::schemas()),
         ("documents", documents::schemas()),
+        ("history", history::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -92,6 +96,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if documents::handles(name) {
         return documents::execute(state, user_id, name, args).await;
+    }
+    if history::handles(name) {
+        return history::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

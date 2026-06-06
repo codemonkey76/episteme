@@ -60,3 +60,66 @@ pub async fn list_for_session(pool: &SqlitePool, session_id: &str) -> Result<Vec
     .await?;
     Ok(rows)
 }
+
+/// One full-text search hit, with enough context to jump to the session.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct SearchHit {
+    pub session_id: String,
+    pub session_title: String,
+    pub message_id: String,
+    pub role: String,
+    /// FTS5-generated snippet around the match, '…'-elided.
+    pub snippet: String,
+    pub created_at: String,
+}
+
+/// Quote each whitespace-separated term so user input can't break FTS5 query
+/// syntax (implicit AND between terms; embedded quotes are stripped).
+fn fts_query(q: &str) -> String {
+    q.split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Full-text search across the user's sessions, best matches first.
+pub async fn search(
+    pool: &SqlitePool,
+    user_id: &str,
+    q: &str,
+    limit: i64,
+) -> Result<Vec<SearchHit>> {
+    let query = fts_query(q);
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as::<_, SearchHit>(
+        "SELECT m.session_id, s.title AS session_title, m.id AS message_id, m.role,
+                snippet(message_fts, 2, '', '', '…', 12) AS snippet,
+                m.created_at
+         FROM message_fts f
+         JOIN messages m ON m.id = f.message_id
+         JOIN sessions s ON s.id = m.session_id
+         WHERE message_fts MATCH ? AND s.user_id = ?
+         ORDER BY rank
+         LIMIT ?",
+    )
+    .bind(&query)
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_query_quotes_terms_and_strips_embedded_quotes() {
+        assert_eq!(fts_query("hello world"), "\"hello\" \"world\"");
+        assert_eq!(fts_query("a\"b OR *"), "\"ab\" \"OR\" \"*\"");
+        assert_eq!(fts_query("   "), "");
+    }
+}

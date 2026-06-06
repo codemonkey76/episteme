@@ -90,3 +90,26 @@ pub async fn messages(
         .map_err(AppError::Internal)?;
     Ok(Json(serde_json::json!({ "messages": msgs })))
 }
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    q: Option<String>,
+    limit: Option<i64>,
+}
+
+// GET /api/sessions/search?q=… — full-text search across the user's chats.
+pub async fn search(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let q = params.q.as_deref().unwrap_or("").trim();
+    if q.is_empty() {
+        return Ok(Json(serde_json::json!({ "hits": [] })));
+    }
+    let limit = params.limit.unwrap_or(30).clamp(1, 100);
+    let hits = db::messages::search(&state.db, &user.id, q, limit)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "hits": hits })))
+}

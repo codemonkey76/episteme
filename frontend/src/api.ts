@@ -511,6 +511,21 @@ export const memories = {
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
 }
 
+// Conversation search
+export interface SearchHit {
+  session_id: string
+  session_title: string
+  message_id: string
+  role: string
+  snippet: string
+  created_at: string
+}
+
+export const searchSessions = (q: string, limit = 30) => {
+  const p = new URLSearchParams({ q, limit: String(limit) })
+  return json<{ hits: SearchHit[] }>(`/sessions/search?${p}`)
+}
+
 // Documents
 export interface Document {
   id: string

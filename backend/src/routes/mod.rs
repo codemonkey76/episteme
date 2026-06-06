@@ -54,6 +54,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             // Multimodal messages carry base64 images (4 × 8 MB b64 max).
             post(chat::stream).layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
         )
+        .route("/api/sessions/search", get(sessions::search))
         .route("/api/sessions", get(sessions::list))
         .route("/api/sessions", post(sessions::create))
         .route("/api/sessions/:id", get(sessions::get))

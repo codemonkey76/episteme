@@ -10,7 +10,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 - **Streaming chat** — server-sent token streaming over a persistent axum/SSE backend, with keep-alive so slow local models don't drop the connection; assistant replies are persisted and survive a refresh
 - **Images in chat** — paste or drop screenshots into the web composer (or attach from the mobile app) and ask vision-capable models about them; images persist with the conversation
-- **Sessions** — conversations persisted to SQLite; resume any past session
+- **Sessions** — conversations persisted to SQLite; resume any past session, and **full-text search** across all of them from the History window (the agent can too, via `search_history`)
 - **Model router** — route to Anthropic, OpenAI, Ollama, Gemini, Groq, DeepSeek, or any OpenAI-compatible endpoint from a single UI; switching is choosing a name from a list
 - **Agent loop with native tools** — the model can call built-in tools (e.g. calendar management), inspect the result, and loop until it reaches a final answer; tool activity is surfaced live in the chat. Works with Ollama function-calling too
 - **MCP host** — connect third-party MCP tool servers (stdio or streamable HTTP) from Settings; their tools are offered to the model alongside native ones, namespaced per server (`server__tool`). Connection status and tool counts show live in Settings, and connect/error events land in the Logs window. The Docker image ships Node (`npx`) and uv (`uvx`), so common stdio servers work out of the box — package caches persist to the data volume
@@ -37,7 +37,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 See [docs/Roadmap.md](docs/Roadmap.md) for the phased plan; headlines:
 
-- **Conversation search** — full-text search across past chat sessions
 - **Scheduled agents + push** — user-defined recurring agent runs ("summarize overnight email at 7am") with mobile push notifications
 - **Voice input & usage tracking** — mobile STT, per-user token/cost accounting
 

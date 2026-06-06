@@ -33,13 +33,14 @@ image rendering in history; queued messages carry their images. Mobile: attach
 button (file_picker), preview strip, image bubbles. Memory extraction and
 semantic injection read only the text part of multimodal messages.
 
-## Phase 5 — Conversation search
+## Phase 5 — Conversation search ✅ (shipped)
 
-- FTS5 virtual table over `messages` if the bundled SQLite in sqlx enables it
-  (verify first); otherwise `LIKE` over `messages.content` using the existing
-  `(session_id, created_at)` index.
-- `/api/sessions/search?q=` + a search box in the sessions list.
-- Optional `search_history` agent tool.
+FTS5 (confirmed in sqlx's bundled SQLite) virtual table `message_fts` synced
+by insert/delete triggers that extract plain text from the JSON-encoded
+content (multimodal rows index only `$.text` — never base64); backfill in the
+migration; `/api/sessions/search?q=` ranked by FTS rank with snippets; search
+box in the History window; `search_history` agent tool. Covered by an
+in-memory integration test (`db::tests::message_search_via_fts5`).
 
 ## Phase 6 — Scheduled agents + push notifications
 
