@@ -47,7 +47,11 @@ struct Note {
 }
 
 struct ImageCandidate {
+    /// Short id (I1, I2…) the models reference — never a retyped URL.
+    id: String,
     url: String,
+    /// Page the image was found on; sent as Referer (hotlink protection).
+    page_url: String,
     caption: String,
 }
 
@@ -230,7 +234,7 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         } else {
             image_candidates
                 .iter()
-                .map(|i| format!("{} — {}", i.url, i.caption))
+                .map(|i| format!("{} — {} ({})", i.id, i.caption, i.url))
                 .collect::<Vec<_>>()
                 .join("\n")
         },
@@ -325,7 +329,8 @@ async fn gather_web(
             let candidates_text = page
                 .images
                 .iter()
-                .map(|i| format!("{} (alt: {})", i.url, i.alt.as_deref().unwrap_or("-")))
+                .enumerate()
+                .map(|(n, i)| format!("{}. {} (alt: {})", n + 1, i.url, i.alt.as_deref().unwrap_or("-")))
                 .collect::<Vec<_>>()
                 .join("\n");
             let text: String = page.text.chars().take(DISTILL_TEXT_MAX).collect();
@@ -359,12 +364,27 @@ async fn gather_web(
                 used = true;
             }
             for img in v["images"].as_array().into_iter().flatten() {
-                if let Some(u) = img["url"].as_str() {
-                    // Only accept candidates we actually saw on the page.
-                    if page.images.iter().any(|p| p.url == u) {
+                // Accept the candidate number (preferred — no URL retyping) or
+                // an exact URL; either way only images actually on the page.
+                let picked = img["n"]
+                    .as_u64()
+                    .filter(|n| *n >= 1)
+                    .and_then(|n| page.images.get(n as usize - 1))
+                    .or_else(|| {
+                        img["url"].as_str().and_then(|u| page.images.iter().find(|p| p.url == u))
+                    });
+                if let Some(p) = picked {
+                    if !image_candidates.iter().any(|c| c.url == p.url) {
                         image_candidates.push(ImageCandidate {
-                            url: u.to_string(),
-                            caption: img["caption"].as_str().unwrap_or("").to_string(),
+                            id: format!("I{}", image_candidates.len() + 1),
+                            url: p.url.clone(),
+                            page_url: page.url.clone(),
+                            caption: img["caption"]
+                                .as_str()
+                                .filter(|c| !c.trim().is_empty())
+                                .or(p.alt.as_deref())
+                                .unwrap_or("")
+                                .to_string(),
                         });
                     }
                 }
@@ -526,20 +546,60 @@ async fn gather_internal(
 }
 
 /// Fetch the model-picked images and embed them as data URIs (caps applied).
+/// Synthesis picks by id (or legacy exact URL); if it picked none, fall back
+/// to the distill-approved candidates so usable images still ship.
 async fn embed_images(
     state: &Arc<AppState>,
     doc: &ReportDoc,
     candidates: &[ImageCandidate],
 ) -> Vec<EmbeddedImage> {
+    // Only candidates from real page scans are fetchable, never invented URLs.
+    let mut picks: Vec<(&ImageCandidate, String)> = doc
+        .images
+        .iter()
+        .filter_map(|pick| {
+            let cand = candidates.iter().find(|c| {
+                c.id == pick.id.trim() || (!pick.source_url.is_empty() && c.url == pick.source_url)
+            })?;
+            let caption =
+                if pick.caption.trim().is_empty() { cand.caption.clone() } else { pick.caption.clone() };
+            Some((cand, caption))
+        })
+        .collect();
+    if picks.is_empty() {
+        picks = candidates.iter().map(|c| (c, c.caption.clone())).collect();
+    }
+
     let mut out = Vec::new();
-    for pick in doc.images.iter().take(MAX_REPORT_IMAGES) {
-        // Only fetch URLs that came from real page scans, never invented ones.
-        if !candidates.iter().any(|c| c.url == pick.source_url) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (cand, caption) in picks {
+        if out.len() >= MAX_REPORT_IMAGES || !seen.insert(&cand.url) {
             continue;
         }
-        let Ok(url) = crate::integrations::websearch::ssrf_guard(&pick.source_url) else { continue };
-        let Ok(response) = state.http_client.get(url).send().await else { continue };
+        let url = match crate::integrations::websearch::ssrf_guard(&cand.url) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::info!("research image {} skipped: {e}", cand.url);
+                continue;
+            }
+        };
+        // Referer matters: product CDNs hotlink-protect, and we *are* loading
+        // this image for that page's content.
+        let response = match state
+            .http_client
+            .get(url)
+            .header(reqwest::header::REFERER, cand.page_url.clone())
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::info!("research image {} skipped: fetch failed: {e}", cand.url);
+                continue;
+            }
+        };
         if !response.status().is_success() {
+            tracing::info!("research image {} skipped: HTTP {}", cand.url, response.status());
             continue;
         }
         let mime = response
@@ -552,25 +612,16 @@ async fn embed_images(
             .unwrap_or("")
             .to_string();
         if !mime.starts_with("image/") || mime == "image/svg+xml" {
+            tracing::info!("research image {} skipped: content-type '{mime}'", cand.url);
             continue;
         }
         let Ok(bytes) = response.bytes().await else { continue };
         if bytes.is_empty() || bytes.len() > IMAGE_MAX_BYTES {
+            tracing::info!("research image {} skipped: {} bytes", cand.url, bytes.len());
             continue;
         }
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        out.push(EmbeddedImage {
-            caption: if pick.caption.trim().is_empty() {
-                candidates
-                    .iter()
-                    .find(|c| c.url == pick.source_url)
-                    .map(|c| c.caption.clone())
-                    .unwrap_or_default()
-            } else {
-                pick.caption.clone()
-            },
-            data_uri: format!("data:{mime};base64,{b64}"),
-        });
+        out.push(EmbeddedImage { caption, data_uri: format!("data:{mime};base64,{b64}") });
     }
     out
 }

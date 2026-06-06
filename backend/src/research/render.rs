@@ -68,6 +68,10 @@ pub struct Chart {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ImagePick {
+    /// Candidate id (I1, I2…) — the primary reference.
+    #[serde(default)]
+    pub id: String,
+    /// Legacy exact-URL reference, still honoured when given.
     #[serde(default)]
     pub source_url: String,
     #[serde(default)]

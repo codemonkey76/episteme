@@ -219,10 +219,11 @@ relevant to a research topic.\n\nTopic: {topic}\n\nRead the source text and pull
 concrete, citable findings — facts, figures, claims, dates, named entities. Ignore \
 navigation, boilerplate, and anything off-topic. Include a short verbatim quote when \
 one supports a finding. If image candidates are listed, keep only ones that would \
-genuinely illustrate the topic. Judge whether the source is relevant at all.\n\n\
+genuinely illustrate the topic, referenced by their list number. Judge whether the \
+source is relevant at all.\n\n\
 Respond with ONLY a JSON object, no prose, no code fences: {\"relevant\": true, \
 \"notes\": [{\"finding\": \"<concise statement>\", \"quote\": \"<short verbatim quote, \
-optional>\"}], \"images\": [{\"url\": \"<image url from the candidates>\", \"caption\": \
+optional>\"}], \"images\": [{\"n\": <candidate number>, \"caption\": \
 \"<what it shows>\"}]}. If the source is irrelevant: {\"relevant\": false, \"notes\": [], \
 \"images\": []}.",
     },
@@ -255,15 +256,15 @@ provided notes. Every factual paragraph must cite the source ids it draws from. 
 Organize the body into clear sections. When you compare options or alternatives, \
 include a comparison table. When the notes contain comparable numeric values (counts, \
 prices, percentages, scores), include a bar chart so they can be seen at a glance. \
-Choose at most 4 of the candidate images, only when they genuinely illustrate the \
-content. Do not invent facts, numbers, or sources.\n\nRespond with ONLY a JSON object, \
-no prose, no code fences:\n{\"title\": \"<report title>\", \"intro\": \"<1-2 sentence \
-overview>\", \"sections\": [{\"heading\": \"<heading>\", \"paragraphs\": [{\"text\": \
-\"<paragraph>\", \"cites\": [\"S1\"]}]}], \"tables\": [{\"title\": \"<caption>\", \
-\"columns\": [\"<col>\"], \"rows\": [[\"<cell>\"]]}], \"charts\": [{\"title\": \
-\"<caption>\", \"labels\": [\"<label>\"], \"values\": [1.0], \"unit\": \"<unit, \
-optional>\"}], \"images\": [{\"source_url\": \"<candidate image url>\", \"caption\": \
-\"<caption>\"}]}. Omit tables, charts, or images when not warranted.",
+Choose at most 4 of the candidate images (referenced by their id, e.g. I2) when they \
+illustrate the content. Do not invent facts, numbers, or sources.\n\nRespond with ONLY \
+a JSON object, no prose, no code fences:\n{\"title\": \"<report title>\", \"intro\": \
+\"<1-2 sentence overview>\", \"sections\": [{\"heading\": \"<heading>\", \"paragraphs\": \
+[{\"text\": \"<paragraph>\", \"cites\": [\"S1\"]}]}], \"tables\": [{\"title\": \
+\"<caption>\", \"columns\": [\"<col>\"], \"rows\": [[\"<cell>\"]]}], \"charts\": \
+[{\"title\": \"<caption>\", \"labels\": [\"<label>\"], \"values\": [1.0], \"unit\": \
+\"<unit, optional>\"}], \"images\": [{\"id\": \"<candidate image id>\", \"caption\": \
+\"<caption>\"}]}. Omit tables or charts when not warranted.",
     },
 ];
 

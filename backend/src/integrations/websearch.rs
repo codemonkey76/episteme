@@ -14,7 +14,7 @@ pub const PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 /// Char budget for the extracted text (~3k tokens).
 pub const PAGE_TEXT_MAX: usize = 12_000;
 /// Image candidates remembered per page.
-const PAGE_IMAGES_MAX: usize = 3;
+const PAGE_IMAGES_MAX: usize = 5;
 
 /// Where the SearXNG sidecar lives. Env-only on purpose: it's compose
 /// topology, not a user setting.
@@ -82,39 +82,98 @@ pub fn page_title(html: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_string())
 }
 
-/// Scan raw HTML for content images (src + alt), resolving relative URLs
-/// against the page. Skips data URIs, tracker-style names, and SVGs.
+/// Scan raw HTML for content images, resolving relative URLs against the
+/// page. The page's own og:image/twitter:image pick leads; <img> tags follow,
+/// reading lazy-load attributes (data-src, srcset) when src is a placeholder.
+/// Skips data URIs, SVGs, and tracker/chrome-style names (pixels, logos,
+/// icons) plus anything with declared tiny dimensions.
 fn page_images(html: &str, base: &url::Url) -> Vec<PageImage> {
     let mut out: Vec<PageImage> = Vec::new();
+
+    if let Some(meta) = meta_image(html) {
+        push_image(&mut out, base, &meta, None);
+    }
+
     let mut rest = html;
     while let Some(pos) = find_ci(rest, "<img") {
         let tag_start = &rest[pos..];
         let Some(end) = tag_start.find('>') else { break };
         let tag = &tag_start[..end];
-
-        if let Some(src) = attr_value(tag, "src") {
-            let resolved = base.join(&src).map(|u| u.to_string()).unwrap_or_default();
-            let lower = resolved.to_lowercase();
-            let skip = resolved.is_empty()
-                || lower.starts_with("data:")
-                || lower.ends_with(".svg")
-                || lower.contains("pixel")
-                || lower.contains("spacer")
-                || lower.contains("1x1")
-                || out.iter().any(|i| i.url == resolved);
-            if !skip && ssrf_guard(&resolved).is_ok() {
-                out.push(PageImage {
-                    url: resolved,
-                    alt: attr_value(tag, "alt").filter(|a| !a.trim().is_empty()),
-                });
-                if out.len() >= PAGE_IMAGES_MAX {
-                    break;
-                }
-            }
-        }
         rest = &rest[pos + end..];
+
+        if out.len() >= PAGE_IMAGES_MAX {
+            break;
+        }
+        // Declared-tiny images are icons/trackers regardless of name.
+        let tiny = ["width", "height"].iter().any(|d| {
+            attr_value(tag, d).and_then(|v| v.trim().parse::<u32>().ok()).is_some_and(|px| px < 80)
+        });
+        if tiny {
+            continue;
+        }
+        // Lazy-loaded pages put a placeholder in src and the real URL in
+        // data-src / srcset; chase those before giving up.
+        let src = attr_value(tag, "src")
+            .filter(|s| !s.trim().is_empty() && !s.starts_with("data:"))
+            .or_else(|| attr_value(tag, "data-src"))
+            .or_else(|| attr_value(tag, "srcset").and_then(|s| srcset_largest(&s)))
+            .or_else(|| attr_value(tag, "data-srcset").and_then(|s| srcset_largest(&s)));
+        if let Some(src) = src {
+            push_image(&mut out, base, &src, attr_value(tag, "alt"));
+        }
     }
     out
+}
+
+/// Append one image candidate if it passes the URL-level filters.
+fn push_image(out: &mut Vec<PageImage>, base: &url::Url, src: &str, alt: Option<String>) {
+    if out.len() >= PAGE_IMAGES_MAX {
+        return;
+    }
+    let resolved = base.join(src).map(|u| u.to_string()).unwrap_or_default();
+    let lower = resolved.to_lowercase();
+    let skip = resolved.is_empty()
+        || lower.starts_with("data:")
+        || lower.ends_with(".svg")
+        || ["pixel", "spacer", "1x1", "logo", "icon", "sprite", "avatar"]
+            .iter()
+            .any(|junk| lower.contains(junk))
+        || out.iter().any(|i| i.url == resolved);
+    if !skip && ssrf_guard(&resolved).is_ok() {
+        out.push(PageImage { url: resolved, alt: alt.filter(|a| !a.trim().is_empty()) });
+    }
+}
+
+/// The page's own lead-image declaration, when present.
+fn meta_image(html: &str) -> Option<String> {
+    let mut rest = html;
+    while let Some(pos) = find_ci(rest, "<meta") {
+        let tag_start = &rest[pos..];
+        let end = tag_start.find('>')?;
+        let tag = &tag_start[..end];
+        rest = &rest[pos + end..];
+
+        let key = attr_value(tag, "property")
+            .or_else(|| attr_value(tag, "name"))
+            .unwrap_or_default()
+            .to_lowercase();
+        if matches!(key.as_str(), "og:image" | "og:image:url" | "twitter:image") {
+            if let Some(content) = attr_value(tag, "content").filter(|c| !c.trim().is_empty()) {
+                return Some(content);
+            }
+        }
+    }
+    None
+}
+
+/// Last (conventionally largest) URL in a srcset list.
+fn srcset_largest(srcset: &str) -> Option<String> {
+    srcset
+        .split(',')
+        .filter_map(|entry| entry.split_whitespace().next())
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+        .next_back()
 }
 
 /// Value of an HTML attribute within a tag string.
@@ -280,6 +339,34 @@ mod fetch_tests {
         // Empty alt filtered to None; relative resolves against the page dir.
         assert_eq!(images[1].url, "https://blog.example.com/posts/nvr/cam.jpg");
         assert!(images[1].alt.is_none());
+    }
+
+    #[test]
+    fn page_images_prefers_og_image_and_reads_lazy_attrs() {
+        let base = url::Url::parse("https://shop.example.com/laptops/x1").unwrap();
+        let html = r#"<html><head>
+            <meta name="viewport" content="width=device-width">
+            <meta property="og:image" content="https://cdn.example.com/x1-hero.jpg">
+            </head><body>
+            <img src="/site-logo.png" alt="Shop logo">
+            <img src="/badge.png" width="32" height="32" alt="badge">
+            <img src="data:image/gif;base64,AAAA" data-src="https://cdn.example.com/x1-side.jpg" alt="Side view">
+            <img srcset="/small.jpg 320w, /large.jpg 1280w" alt="Gallery">
+        </body></html>"#;
+        let images = page_images(html, &base);
+        // og:image leads; lazy data-src and the largest srcset entry are read.
+        assert_eq!(images[0].url, "https://cdn.example.com/x1-hero.jpg");
+        assert!(images.iter().any(|i| i.url == "https://cdn.example.com/x1-side.jpg"));
+        assert!(images.iter().any(|i| i.url == "https://shop.example.com/large.jpg"));
+        // Site chrome (logo by name, badge by tiny declared size) is filtered.
+        assert!(!images.iter().any(|i| i.url.contains("logo") || i.url.contains("badge")));
+    }
+
+    #[test]
+    fn srcset_largest_takes_the_last_entry() {
+        assert_eq!(srcset_largest("a.jpg 320w, b.jpg 640w").as_deref(), Some("b.jpg"));
+        assert_eq!(srcset_largest("only.jpg").as_deref(), Some("only.jpg"));
+        assert!(srcset_largest(" , ").is_none());
     }
 
     #[test]
