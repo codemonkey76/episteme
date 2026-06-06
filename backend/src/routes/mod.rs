@@ -17,6 +17,7 @@ mod chat;
 mod documents;
 pub(crate) mod email;
 mod integrations;
+mod jobs;
 mod logs;
 mod memories;
 mod prompts;
@@ -71,6 +72,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/settings/theme", get(settings::get_theme))
         .route("/api/settings/theme", post(settings::set_theme))
         .route("/api/sessions/:id/approvals", get(approvals::list_pending))
+        .route("/api/approvals/pending", get(approvals::list_all_pending))
+        .route("/api/jobs", get(jobs::list))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))
         .route("/api/integrations/email/config", get(integrations::get_config))

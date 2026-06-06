@@ -18,6 +18,16 @@ pub enum AgentEvent {
     AwaitingApproval { action_id: String, tool_name: String, tool_args: Value },
 }
 
+/// How a turn ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    /// One or more gated tool calls were parked as pending approvals and the
+    /// turn ended early (unattended runs only). The run resumes — via
+    /// `jobs::run` — once every parked call is decided.
+    Suspended { pending: usize },
+}
+
 /// Run one agent turn for the given session, streaming `AgentEvent`s through `tx`.
 pub async fn run_turn(
     state: Arc<AppState>,
@@ -25,10 +35,11 @@ pub async fn run_turn(
     session_id: String,
     provider: ProviderConfig,
     tx: mpsc::Sender<AgentEvent>,
-    // Unattended runs (scheduled agents) have nobody to answer an approval
-    // card: "ask"-gated tools are skipped — never auto-approved.
+    // Unattended runs (scheduled agents, background jobs) have nobody at the
+    // keyboard: "ask"-gated tools are PARKED as pending approvals — never
+    // auto-approved — and the turn suspends.
     unattended: bool,
-) -> Result<()> {
+) -> Result<TurnOutcome> {
     let raw_messages = db::messages::list_for_session(&state.db, &session_id).await?;
     let mut history: Vec<ChatMessage> = raw_messages
         .into_iter()
@@ -89,21 +100,12 @@ pub async fn run_turn(
     loop {
         iterations += 1;
         if iterations > 6 {
+            // All text so far was persisted per-iteration (alongside its tool
+            // calls), so there's nothing left to save at the cap.
             tracing::warn!("agent turn hit iteration cap");
             tx.send(AgentEvent::Done).await?;
-            if !assistant_text.trim().is_empty() {
-                let _ = db::messages::insert(
-                    &state.db,
-                    &session_id,
-                    "assistant",
-                    &serde_json::to_string(&assistant_text).unwrap_or_default(),
-                    None,
-                    None,
-                )
-                .await;
-            }
             db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage)).await;
-            return Ok(());
+            return Ok(TurnOutcome::Completed);
         }
 
         let tools = {
@@ -163,14 +165,15 @@ pub async fn run_turn(
             None => {
                 // Model returned a final text answer.
                 tx.send(AgentEvent::Done).await?;
-                // Persist the reply so it survives a page refresh (history is
-                // rebuilt from the DB). Content is JSON-encoded like other messages.
-                if !assistant_text.trim().is_empty() {
+                // Persist this iteration's reply so it survives a page refresh
+                // (earlier iterations' text was already persisted alongside
+                // their tool calls). Content is JSON-encoded like other messages.
+                if !iter_text.trim().is_empty() {
                     let _ = db::messages::insert(
                         &state.db,
                         &session_id,
                         "assistant",
-                        &serde_json::to_string(&assistant_text).unwrap_or_default(),
+                        &serde_json::to_string(&iter_text).unwrap_or_default(),
                         None,
                         None,
                     )
@@ -187,11 +190,22 @@ pub async fn run_turn(
                         .await;
                 });
                 db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage)).await;
-                return Ok(());
+                return Ok(TurnOutcome::Completed);
             }
             Some(calls) => {
-                // Keep any text the model emitted alongside the calls.
+                // Keep any text the model emitted alongside the calls — and
+                // persist it, so a suspended turn replays it on resume (the
+                // in-memory copy alone would be lost with the process).
                 if !iter_text.trim().is_empty() {
+                    let _ = db::messages::insert(
+                        &state.db,
+                        &session_id,
+                        "assistant",
+                        &serde_json::to_string(&iter_text).unwrap_or_default(),
+                        None,
+                        None,
+                    )
+                    .await;
                     history.push(ChatMessage {
                         role: "assistant".to_string(),
                         content: Value::String(iter_text.clone()),
@@ -212,6 +226,9 @@ pub async fn run_turn(
                 .await?;
                 history.push(ChatMessage { role: "tool_call".to_string(), content: calls_value });
 
+                // Gated calls parked this batch (unattended runs only).
+                let mut parked = 0usize;
+
                 for call in calls {
                     // Per-tool policy: tools marked "ask" in Settings → Tools
                     // (or ask-by-default, e.g. helpdesk writes) pause the turn
@@ -221,18 +238,34 @@ pub async fn run_turn(
                         .map(String::as_str)
                         .unwrap_or_else(|| crate::tools::default_policy(&call.fn_name));
                     if policy == "ask" {
-                        let approved = if unattended {
-                            false // skip below, with a message naming the reason
-                        } else {
-                            approval::await_decision(&state, &session_id, &call, &tx).await?
-                        };
+                        if unattended {
+                            // Park: persist the call as a pending approval (with
+                            // its call_id, so the decision handler can write the
+                            // tool-result row later) and move on. The turn
+                            // suspends after the batch; deciding the last parked
+                            // action resumes the job.
+                            let action = db::pending_actions::insert_parked(
+                                &state.db,
+                                &session_id,
+                                &call.fn_name,
+                                &call.fn_arguments.to_string(),
+                                &call.call_id,
+                            )
+                            .await?;
+                            state
+                                .log(
+                                    "agent",
+                                    "info",
+                                    format!("parked for approval: {} ({})", call.fn_name, action.id),
+                                )
+                                .await;
+                            parked += 1;
+                            continue;
+                        }
+                        let approved =
+                            approval::await_decision(&state, &session_id, &call, &tx).await?;
                         if !approved {
-                            let declined = if unattended {
-                                "skipped: this tool requires approval and the run is unattended — \
-                                 ask the user to run it interactively"
-                            } else {
-                                "user declined this tool call"
-                            };
+                            let declined = "user declined this tool call";
                             db::messages::insert(
                                 &state.db,
                                 &session_id,
@@ -257,24 +290,8 @@ pub async fn run_turn(
                     // Tell the UI a tool is running.
                     let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
-                    let result = if crate::tools::is_native(&call.fn_name) {
-                        crate::tools::execute(&state, &user_id, &call.fn_name, call.fn_arguments.clone())
-                            .await
-                    } else {
-                        // Resolve the peer under the lock, but run the (possibly
-                        // slow) tool call without holding it.
-                        let peer = {
-                            let mcp = state.mcp_host.lock().await;
-                            mcp.peer_for(&call.fn_name)
-                        };
-                        match peer {
-                            Ok((peer, tool)) => {
-                                crate::mcp_host::call_on_peer(&peer, &tool, call.fn_arguments.clone())
-                                    .await
-                            }
-                            Err(e) => Err(e),
-                        }
-                    };
+                    let result = execute_tool(&state, &user_id, &call.fn_name, call.fn_arguments.clone())
+                        .await;
 
                     let result_str = match result {
                         Ok(v) => {
@@ -311,9 +328,45 @@ pub async fn run_turn(
                         }),
                     });
                 }
+
+                // One or more calls await approval: suspend. The replay
+                // invariant holds — auto calls wrote their result rows above;
+                // parked calls get theirs when decided, and the job only
+                // resumes once no pending rows remain for this session.
+                if parked > 0 {
+                    tx.send(AgentEvent::Done).await?;
+                    db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage))
+                        .await;
+                    return Ok(TurnOutcome::Suspended { pending: parked });
+                }
+
                 // Loop again with the tool results appended.
                 continue;
             }
         }
+    }
+}
+
+/// Execute one tool call — native registry or MCP — returning the raw result.
+/// Shared by the agent loop and the approval-resume path, so a parked call
+/// executes exactly the way a live one would have.
+pub async fn execute_tool(
+    state: &Arc<AppState>,
+    user_id: &str,
+    name: &str,
+    args: Value,
+) -> Result<Value> {
+    if crate::tools::is_native(name) {
+        return crate::tools::execute(state, user_id, name, args).await;
+    }
+    // Resolve the peer under the lock, but run the (possibly slow) tool call
+    // without holding it.
+    let peer = {
+        let mcp = state.mcp_host.lock().await;
+        mcp.peer_for(name)
+    };
+    match peer {
+        Ok((peer, tool)) => crate::mcp_host::call_on_peer(&peer, &tool, args).await,
+        Err(e) => Err(e),
     }
 }

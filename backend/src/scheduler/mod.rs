@@ -1,22 +1,19 @@
 //! Scheduled agents: user-defined recurring agent runs ("summarize overnight
-//! email at 7am"). Each run is a real chat session executed unattended — tools
-//! enabled, but anything gated "ask" is skipped, never auto-approved. Output
-//! lands in the session (visible in History), the Logs window, and a push
-//! notification when FCM is configured.
+//! email at 7am"). Each fire runs as a tracked job (`crate::jobs`) over a
+//! fresh session — tools enabled; anything gated "ask" parks as a pending
+//! approval and the job suspends until decided, never auto-approved. Output
+//! lands in the session (visible in History), the Jobs window, the Logs
+//! window, and a push notification when FCM is configured.
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{Datelike, Timelike};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::agent::{self, AgentEvent};
 use crate::db;
-use crate::integrations::fcm;
-use crate::model_router::ProviderConfig;
 use crate::state::AppState;
 
 /// Worker tick. Schedules are minute-granular, so once a minute is plenty.
@@ -125,18 +122,10 @@ pub fn spawn_worker(state: Arc<AppState>) {
     });
 }
 
-/// Execute one scheduled agent immediately: fresh session, unattended turn,
-/// then log + push the outcome. Returns the session id.
+/// Execute one scheduled agent immediately as a tracked job: fresh session,
+/// unattended turn; gated tools park as approvals (the job suspends) instead
+/// of being skipped. Returns the session id.
 pub async fn run_now(state: &Arc<AppState>, user_id: &str, agent: &ScheduledAgent) -> Result<String> {
-    let providers: Vec<ProviderConfig> =
-        db::settings::get(&state.db, "providers").await?.unwrap_or_default();
-    let provider = if agent.provider.is_empty() {
-        providers.into_iter().next()
-    } else {
-        providers.into_iter().find(|p| p.name == agent.provider)
-    }
-    .ok_or_else(|| anyhow!("no matching provider configured"))?;
-
     let tz = state.home_tz(user_id).await;
     let title = format!("⏰ {} — {}", agent.name, chrono::Utc::now().with_timezone(&tz).format("%-d %b"));
     let session = db::sessions::create(&state.db, user_id, &title).await?;
@@ -152,37 +141,9 @@ pub async fn run_now(state: &Arc<AppState>, user_id: &str, agent: &ScheduledAgen
 
     state.log("scheduler", "info", format!("Running '{}'", agent.name)).await;
 
-    // Drain the event stream; the transcript persists to the session anyway.
-    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
-    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    let result = agent::run_turn(
-        Arc::clone(state),
-        user_id.to_string(),
-        session.id.clone(),
-        provider,
-        tx,
-        true, // unattended: "ask"-gated tools are skipped, not auto-approved
-    )
-    .await;
-    let _ = drain.await;
-    result?;
-
-    // Summarize the outcome from the final assistant message.
-    let summary = db::messages::list_for_session(&state.db, &session.id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .rev()
-        .find(|m| m.role == "assistant")
-        .map(|m| {
-            serde_json::from_str::<String>(&m.content).unwrap_or(m.content)
-        })
-        .unwrap_or_else(|| "(no output)".to_string());
-
-    state
-        .log("scheduler", "info", format!("'{}' finished: {}", agent.name, summary.chars().take(120).collect::<String>()))
-        .await;
-    fcm::notify(state, user_id, &agent.name, &summary).await;
+    let job = crate::jobs::start(state, user_id, &session.id, &agent.provider, "scheduled", &agent.name)
+        .await?;
+    crate::jobs::run(Arc::clone(state), job).await;
 
     Ok(session.id)
 }

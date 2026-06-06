@@ -8,6 +8,7 @@ mod db;
 mod documents;
 mod error;
 mod integrations;
+mod jobs;
 mod memory;
 mod prompts;
 mod suggestions;
@@ -38,11 +39,13 @@ async fn main() -> Result<()> {
     let db_url = format!("sqlite://{data_dir}/episteme.db?mode=rwc");
     let pool = db::init(&db_url).await?;
 
-    let state = Arc::new(AppState::new(pool));
+    let (state, job_rx) = AppState::new(pool);
+    let state = Arc::new(state);
     integrations::microsoft::migrate_legacy(&state).await;
     integrations::microsoft::migrate_shared_to_per_user(&state).await;
     categorizer::spawn_worker(state.clone());
     scheduler::spawn_worker(state.clone());
+    jobs::spawn_worker(state.clone(), job_rx);
     spawn_mcp_connect(state.clone());
     let app = routes::router(state);
 

@@ -1,7 +1,7 @@
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
 use crate::mcp_host::McpHost;
 
@@ -17,12 +17,20 @@ pub struct AppState {
     /// The agent turn blocks on the receiver; the approve/reject endpoints
     /// send the decision. Entries die with the process (rows stay "pending").
     pub pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// Hand-off queue for background jobs: senders enqueue, the worker spawned
+    /// in main runs them. A queue (rather than spawning `jobs::run` directly)
+    /// breaks the async-recursion cycle when the agent's own
+    /// `start_background_task` tool launches a job.
+    pub job_tx: mpsc::UnboundedSender<crate::db::jobs::Job>,
 }
 
 impl AppState {
-    pub fn new(db: SqlitePool) -> Self {
+    /// Returns the state plus the job-queue receiver; main hands the receiver
+    /// to `jobs::spawn_worker`.
+    pub fn new(db: SqlitePool) -> (Self, mpsc::UnboundedReceiver<crate::db::jobs::Job>) {
         let (log_tx, _) = broadcast::channel(2000);
-        Self {
+        let (job_tx, job_rx) = mpsc::unbounded_channel();
+        let state = Self {
             db,
             mcp_host: Arc::new(Mutex::new(McpHost::new())),
             oauth_state: Arc::new(Mutex::new(HashMap::new())),
@@ -35,7 +43,9 @@ impl AppState {
                 .expect("http client"),
             log_tx,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
-        }
+            job_tx,
+        };
+        (state, job_rx)
     }
 
     /// The user's home timezone — every model-facing time is resolved into

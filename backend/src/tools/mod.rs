@@ -14,6 +14,7 @@ pub mod documents;
 pub mod email;
 pub mod helpdesk;
 pub mod history;
+pub mod jobs;
 pub mod memories;
 pub mod notes;
 pub mod tasks;
@@ -30,6 +31,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(memories::schemas());
     all.extend(documents::schemas());
     all.extend(history::schemas());
+    all.extend(jobs::schemas());
     all.extend(helpdesk::schemas());
     all
 }
@@ -43,6 +45,7 @@ pub fn is_native(name: &str) -> bool {
         || memories::handles(name)
         || documents::handles(name)
         || history::handles(name)
+        || jobs::handles(name)
         || helpdesk::handles(name)
 }
 
@@ -57,6 +60,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("memory", memories::schemas()),
         ("documents", documents::schemas()),
         ("history", history::schemas()),
+        ("jobs", jobs::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -74,8 +78,15 @@ pub fn default_policy(name: &str) -> &'static str {
     }
 }
 
-/// Execute a native tool, returning a JSON result for the model.
-pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
+/// Execute a native tool, returning a JSON result for the model. Takes the
+/// `Arc` so tools that spawn detached work (background jobs) can clone it;
+/// plain-`&AppState` tools get it via deref coercion.
+pub async fn execute(
+    state: &std::sync::Arc<AppState>,
+    user_id: &str,
+    name: &str,
+    args: Value,
+) -> Result<Value> {
     if calendar::handles(name) {
         return calendar::execute(state, user_id, name, args).await;
     }
@@ -99,6 +110,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if history::handles(name) {
         return history::execute(state, user_id, name, args).await;
+    }
+    if jobs::handles(name) {
+        return jobs::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

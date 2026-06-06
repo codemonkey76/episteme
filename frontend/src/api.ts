@@ -216,6 +216,36 @@ export const approvals = {
     fetch(BASE + `/approvals/${actionId}/reject`, { method: 'POST' }),
 }
 
+// Jobs (background/scheduled agent runs) + the global approval queue
+export interface Job {
+  id: string
+  user_id: string
+  session_id: string
+  kind: 'background' | 'scheduled'
+  name: string
+  provider: string
+  status: 'running' | 'needs_approval' | 'done' | 'failed'
+  summary: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PendingActionGlobal {
+  id: string
+  session_id: string
+  session_title: string
+  tool_name: string
+  tool_args: string
+  created_at: string
+}
+
+export const jobs = {
+  list: () => json<{ jobs: Job[] }>('/jobs'),
+  pendingAll: () =>
+    json<{ pending_actions: PendingActionGlobal[] }>('/approvals/pending'),
+}
+
 // Email (Microsoft Graph proxy)
 export interface MailFolder {
   id: string

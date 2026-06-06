@@ -28,7 +28,8 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
 - **Inbox zero on reply** — replying to a message marks its follow-up flag complete and files it from the Inbox into a "Processed" folder automatically, so the Inbox only holds mail still awaiting action
 - **Commitment detection** — every email you send is scanned for promises with a date/time ("I'll do the maintenance Saturday 9pm"); episteme pops an accept/dismiss card offering to add it as a calendar event or task
-- **Scheduled agents** — recurring agent runs you define in **Settings → Agents** ("summarize overnight email and today's agenda", weekdays at 7:00, in your timezone). Each run is a real chat session you can open from History; tools work, but anything gated "ask first" is skipped — never auto-approved
+- **Scheduled agents** — recurring agent runs you define in **Settings → Agents** ("summarize overnight email and today's agenda", weekdays at 7:00, in your timezone). Each run is a real chat session you can open from History
+- **Background tasks + approval queue** — ask the agent to "do this in the background" and it hands off to an unattended run, returning immediately; every run (background or scheduled) is a tracked job in the **Jobs** window. Tools gated "ask first" are never auto-approved — they **park in your approval queue**, the job suspends, you get a push notification, and approving executes the tool and resumes the run exactly where it stopped — even across a server restart
 - **Push notifications** — drop a Firebase service-account JSON on the server and `google-services.json` into the Android app, and episteme pushes scheduled-agent output, detected commitments, and "needs attention" mail to your phone. Without the files everything no-ops — push is strictly opt-in
 - **Per-tool approval** — every tool (native and MCP) has an "ask first" toggle in **Settings → Tools**; flagged tools pause the chat with an inline approve/deny card and only run once you allow them. Approvals and denials are logged
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
@@ -41,7 +42,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 The original roadmap is fully shipped; the second arc is planned in [docs/Roadmap.md](docs/Roadmap.md):
 
-- **Background agent runs + approval queue** — the agent acts while you're away; gated tools park as push-notified approvals instead of being skipped
 - **Deep research** — multi-step web + personal-corpus research producing a rich self-contained report page: comparison charts, images, per-claim citations
 - **Context compaction** — long sessions stop degrading; old turns summarize, recent ones stay verbatim
 

@@ -288,7 +288,7 @@ pub async fn run_mailbox(
                                 state,
                                 user_id,
                                 "Email needs attention",
-                                &subject,
+                                subject,
                             )
                             .await;
                         }

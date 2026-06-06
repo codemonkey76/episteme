@@ -75,24 +75,21 @@ token registered after login.
 Phases 1–7 shipped (June 2026). The second arc below makes the agent able to
 act and research on its own, safely.
 
-## Phase 8 — Background agent runs + approval queue
+## Phase 8 — Background agent runs + approval queue ✅ (shipped)
 
-Today a gated tool in an unattended run is skipped, and a long agent turn
-blocks the chat's SSE connection. This phase is the substrate for autonomy:
-
-- **Background runs**: "do this in the background" from chat (and every
-  scheduled-agent run) executes as a tracked job — a `jobs` table with status
-  (running/needs-approval/done/failed), the session id, and a summary. Jobs
-  survive inspection in History; a small UI affordance lists active jobs.
-- **Approval queue**: in unattended runs, an "ask"-gated tool **parks** as a
-  `pending_action` instead of being skipped. The run suspends, the user gets a
-  push ("Morning briefing wants to log 0.5h to ticket #4521"), and approving
-  resumes the run where it stopped (re-entering the agent loop with the tool
-  result). Denying resumes with the decline message, as in live chat.
-- Notify on completion (push + Logs); failures land with the error attached.
-- Builds on: `pending_actions` + approve/reject routes, FCM, scheduler's
-  unattended turns. New: job tracking, suspend/resume of a turn across
-  process restarts (persist the pending call; resume re-runs from history).
+`jobs` table + `jobs` module wrap every unattended run (chat-triggered
+`start_background_task` tool and all scheduled-agent fires) with status
+running/needs_approval/done/failed, summary, and push notifications. Gated
+tools **park**: `run_turn` returns `TurnOutcome::Suspended`, each gated call
+becomes a `pending_actions` row carrying its `call_id`; deciding it (web Jobs
+window's global queue, chat cards, or mobile) executes/declines the tool via
+the shared `agent::execute_tool`, writes the result row, and — when the
+session's last pending row is decided — resumes the job through an atomic
+`try_resume` gate and the job queue on AppState (which also breaks the
+agent→tool→job async-recursion cycle). Everything persists in SQLite, so
+suspend/resume survives restarts. Also fixed en route: assistant text emitted
+alongside tool calls is now persisted per-iteration (it was lost on replay).
+Mobile follow-up deferred: a global Jobs/Approvals tab.
 
 ## Phase 9 — Deep research
 
