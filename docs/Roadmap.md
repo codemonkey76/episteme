@@ -72,4 +72,72 @@ token registered after login.
 
 ---
 
-All seven phases shipped. New feature ideas start here.
+Phases 1–7 shipped (June 2026). The second arc below makes the agent able to
+act and research on its own, safely.
+
+## Phase 8 — Background agent runs + approval queue
+
+Today a gated tool in an unattended run is skipped, and a long agent turn
+blocks the chat's SSE connection. This phase is the substrate for autonomy:
+
+- **Background runs**: "do this in the background" from chat (and every
+  scheduled-agent run) executes as a tracked job — a `jobs` table with status
+  (running/needs-approval/done/failed), the session id, and a summary. Jobs
+  survive inspection in History; a small UI affordance lists active jobs.
+- **Approval queue**: in unattended runs, an "ask"-gated tool **parks** as a
+  `pending_action` instead of being skipped. The run suspends, the user gets a
+  push ("Morning briefing wants to log 0.5h to ticket #4521"), and approving
+  resumes the run where it stopped (re-entering the agent loop with the tool
+  result). Denying resumes with the decline message, as in live chat.
+- Notify on completion (push + Logs); failures land with the error attached.
+- Builds on: `pending_actions` + approve/reject routes, FCM, scheduler's
+  unattended turns. New: job tracking, suspend/resume of a turn across
+  process restarts (persist the pending call; resume re-runs from history).
+
+## Phase 9 — Deep research
+
+"Research X and write it up" → acknowledged in chat, runs as a Phase-8
+background job, push notification when the report is ready.
+
+- **Orchestrator** (sibling of the categorizer, not the generic agent loop):
+  plan (topic → subquestions → queries) → search/fetch/distill per lead →
+  reflect (gaps → follow-up queries, hard budget e.g. 20 fetches) →
+  synthesize. Every fetched page goes through an extraction prompt and only
+  the distilled, citation-tagged note enters the working memo — raw pages
+  never accumulate in context (the scratchpad pattern), so local models cope.
+- **Sources beyond the web**: the same pass can consult the user's own corpus
+  — `search_documents`, `email_search`, `search_memories`, `search_history` —
+  so reports cite internal material alongside web sources.
+- **Output: a rich, self-contained report page** (decided): the synthesizer
+  emits structured findings (sections, claims with citation ids, comparison
+  data, image references) and a renderer builds a polished HTML page —
+  comparison tables and charts (inline SVG/CSS, no external JS), relevant
+  images collected during fetching, and a numbered sources section with
+  per-claim citations. Stored server-side (`reports` table or as a document,
+  embedded for future RAG) and viewable in a Reports window / browser route;
+  mobile opens it in a webview. Decision point at implementation: hotlink
+  images vs. download-and-store (privacy favors storing thumbnails locally).
+- Cost is visible per run via usage tracking (`purpose = "research"`);
+  provider selectable per run, defaulting to the chat default.
+
+## Phase 10 — Context compaction
+
+Every turn replays the session's entire history, including fat tool results
+(8k-char email bodies, 12k-char pages). Long sessions degrade quietly.
+
+- Past a size threshold, old turns are summarized (one `complete_with_usage`
+  call, purpose `compaction`) into a compact preamble; the recent window stays
+  verbatim. Tool results older than N turns are aggressively truncated first
+  (cheap, no model call) before summarization kicks in.
+- Persisted alongside the session so compaction happens once, not per turn;
+  the full transcript remains in `messages` for display/search — only the
+  model-facing history shrinks.
+- Generalizes the scratchpad lessons from Phase 9.
+
+## Backlog (quick wins, any time)
+
+- **Dollar costs**: per-model price table → $ column in Settings → System.
+- **Semantic email**: embed incoming mail (Phase-2 infra) so email search
+  works by meaning, not just Graph `$search`.
+- **Web push**: browser notifications for commitment cards and job/agent
+  output (currently mobile-only via FCM).

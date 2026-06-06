@@ -39,7 +39,11 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 ## What's next
 
-The original roadmap ([docs/Roadmap.md](docs/Roadmap.md)) is fully shipped — new ideas land there first.
+The original roadmap is fully shipped; the second arc is planned in [docs/Roadmap.md](docs/Roadmap.md):
+
+- **Background agent runs + approval queue** — the agent acts while you're away; gated tools park as push-notified approvals instead of being skipped
+- **Deep research** — multi-step web + personal-corpus research producing a rich self-contained report page: comparison charts, images, per-claim citations
+- **Context compaction** — long sessions stop degrading; old turns summarize, recent ones stay verbatim
 
 ## Mobile app
 
