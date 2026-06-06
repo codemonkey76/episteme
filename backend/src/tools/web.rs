@@ -4,16 +4,11 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::integrations::graph::{find_ci, html_to_text};
-use crate::integrations::websearch::{map_results, searxng_url, ssrf_guard};
+use crate::integrations::websearch::{fetch_readable, map_results, searxng_url};
 use crate::state::AppState;
 
 const RESULTS_DEFAULT: usize = 8;
 const RESULTS_MAX: usize = 15;
-/// Stop reading a page after this many bytes (pre-extraction).
-const PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
-/// Char budget for the extracted text (~3k tokens).
-const PAGE_TEXT_MAX: usize = 12_000;
 
 pub fn schemas() -> Vec<Value> {
     vec![
@@ -102,52 +97,13 @@ async fn search(state: &AppState, args: Value) -> Result<Value> {
     Ok(json!({ "query": query, "results": map_results(&body, max) }))
 }
 
-/// Pull the <title> out of an HTML page, if present.
-fn page_title(html: &str) -> Option<String> {
-    let start = find_ci(html, "<title")?;
-    let open_end = html[start..].find('>')? + start + 1;
-    let close = find_ci(&html[open_end..], "</title>")? + open_end;
-    let title = html[open_end..close].trim();
-    (!title.is_empty()).then(|| title.to_string())
-}
-
 async fn fetch(state: &AppState, args: Value) -> Result<Value> {
     let raw = args["url"].as_str().ok_or_else(|| anyhow!("url is required"))?;
-    let url = ssrf_guard(raw)?;
-
-    let mut response = state
-        .http_client
-        .get(url.clone())
-        .send()
-        .await
-        .map_err(|e| anyhow!("fetch failed: {e}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow!("fetch failed: {status}"));
-    }
-
-    // Read up to PAGE_MAX_BYTES, then stop — don't trust Content-Length alone.
-    let mut bytes: Vec<u8> = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        let remaining = PAGE_MAX_BYTES - bytes.len();
-        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        if bytes.len() >= PAGE_MAX_BYTES {
-            break;
-        }
-    }
-    let html = String::from_utf8_lossy(&bytes);
-
-    let title = page_title(&html);
-    let mut text = html_to_text(&html);
-    if text.chars().count() > PAGE_TEXT_MAX {
-        text = text.chars().take(PAGE_TEXT_MAX).collect();
-        text.push_str("\n…[truncated]");
-    }
-
+    let page = fetch_readable(&state.http_client, raw).await?;
     Ok(json!({
-        "url": url.as_str(),
-        "title": title,
-        "text": text,
+        "url": page.url,
+        "title": page.title,
+        "text": page.text,
     }))
 }
 
@@ -164,13 +120,4 @@ mod tests {
         assert!(!handles("web_fetch"));
     }
 
-    #[test]
-    fn page_title_extraction() {
-        assert_eq!(
-            page_title("<html><head><TITLE lang=\"en\"> Hello World </TITLE></head></html>"),
-            Some("Hello World".to_string())
-        );
-        assert_eq!(page_title("<html><head></head></html>"), None);
-        assert_eq!(page_title("<title></title>"), None);
-    }
 }

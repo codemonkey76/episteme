@@ -20,11 +20,13 @@ pub struct Job {
     pub status: String,
     pub summary: Option<String>,
     pub error: Option<String>,
+    /// Small JSON blob for kind-specific settings (research: {"topic","depth"}).
+    pub meta: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-const COLS: &str = "id, user_id, session_id, kind, name, provider, status, summary, error, created_at, updated_at";
+const COLS: &str = "id, user_id, session_id, kind, name, provider, status, summary, error, meta, created_at, updated_at";
 
 pub async fn insert(
     pool: &SqlitePool,
@@ -33,12 +35,13 @@ pub async fn insert(
     kind: &str,
     name: &str,
     provider: &str,
+    meta: Option<&str>,
 ) -> Result<Job> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO jobs (id, user_id, session_id, kind, name, provider, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)",
+        "INSERT INTO jobs (id, user_id, session_id, kind, name, provider, status, meta, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
@@ -46,6 +49,7 @@ pub async fn insert(
     .bind(kind)
     .bind(name)
     .bind(provider)
+    .bind(meta)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -61,6 +65,7 @@ pub async fn insert(
         status: "running".to_string(),
         summary: None,
         error: None,
+        meta: meta.map(str::to_string),
         created_at: now.clone(),
         updated_at: now,
     })

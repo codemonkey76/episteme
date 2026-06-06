@@ -17,6 +17,7 @@ pub mod history;
 pub mod jobs;
 pub mod memories;
 pub mod notes;
+pub mod research;
 pub mod tasks;
 pub mod web;
 
@@ -32,6 +33,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(documents::schemas());
     all.extend(history::schemas());
     all.extend(jobs::schemas());
+    all.extend(research::schemas());
     all.extend(helpdesk::schemas());
     all
 }
@@ -46,6 +48,7 @@ pub fn is_native(name: &str) -> bool {
         || documents::handles(name)
         || history::handles(name)
         || jobs::handles(name)
+        || research::handles(name)
         || helpdesk::handles(name)
 }
 
@@ -61,6 +64,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("documents", documents::schemas()),
         ("history", history::schemas()),
         ("jobs", jobs::schemas()),
+        ("research", research::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -113,6 +117,9 @@ pub async fn execute(
     }
     if jobs::handles(name) {
         return jobs::execute(state, user_id, name, args).await;
+    }
+    if research::handles(name) {
+        return research::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

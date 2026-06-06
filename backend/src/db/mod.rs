@@ -7,6 +7,7 @@ pub mod messages;
 pub mod settings;
 pub mod pending_actions;
 pub mod push_tokens;
+pub mod reports;
 pub mod documents;
 pub mod logs;
 pub mod memories;
@@ -43,7 +44,7 @@ mod tests {
         sqlx::query("INSERT INTO sessions (id, user_id, title, created_at, updated_at) VALUES ('s1', 'u1', '⚙ digest', '2026-01-01', '2026-01-01')")
             .execute(&pool).await.unwrap();
 
-        let job = jobs::insert(&pool, "u1", "s1", "background", "digest", "").await.unwrap();
+        let job = jobs::insert(&pool, "u1", "s1", "background", "digest", "", None).await.unwrap();
         assert_eq!(job.status, "running");
 
         // Two parked calls suspend the job.

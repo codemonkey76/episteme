@@ -91,31 +91,25 @@ suspend/resume survives restarts. Also fixed en route: assistant text emitted
 alongside tool calls is now persisted per-iteration (it was lost on replay).
 Mobile follow-up deferred: a global Jobs/Approvals tab.
 
-## Phase 9 — Deep research
+## Phase 9 — Deep research ✅ (shipped)
 
-"Research X and write it up" → acknowledged in chat, runs as a Phase-8
-background job, push notification when the report is ready.
-
-- **Orchestrator** (sibling of the categorizer, not the generic agent loop):
-  plan (topic → subquestions → queries) → search/fetch/distill per lead →
-  reflect (gaps → follow-up queries, hard budget e.g. 20 fetches) →
-  synthesize. Every fetched page goes through an extraction prompt and only
-  the distilled, citation-tagged note enters the working memo — raw pages
-  never accumulate in context (the scratchpad pattern), so local models cope.
-- **Sources beyond the web**: the same pass can consult the user's own corpus
-  — `search_documents`, `email_search`, `search_memories`, `search_history` —
-  so reports cite internal material alongside web sources.
-- **Output: a rich, self-contained report page** (decided): the synthesizer
-  emits structured findings (sections, claims with citation ids, comparison
-  data, image references) and a renderer builds a polished HTML page —
-  comparison tables and charts (inline SVG/CSS, no external JS), relevant
-  images collected during fetching, and a numbered sources section with
-  per-claim citations. Stored server-side (`reports` table or as a document,
-  embedded for future RAG) and viewable in a Reports window / browser route;
-  mobile opens it in a webview. Decision point at implementation: hotlink
-  images vs. download-and-store (privacy favors storing thumbnails locally).
-- Cost is visible per run via usage tracking (`purpose = "research"`);
-  provider selectable per run, defaulting to the chat default.
+`deep_research(topic, depth quick|standard|deep)` tool → `kind='research'`
+job (migration 018 rebuilds jobs for the kind + a `meta` JSON column).
+`research::run` orchestrates plan → gather (SearXNG + `fetch_readable`, which
+also scrapes ≤3 image candidates/page) → distill-per-source (scratchpad memo
+of citation-tagged notes, 24k-char cap) → internal corpus pass (documents/
+memories cosine, chat FTS, email `$search`) → reflect rounds within budget
+(6/12/20 fetches, 0/1/2 rounds) → synthesize to a structured ReportDoc, with
+tolerant JSON parsing, one retry, and a grouped-notes fallback report. Images
+the model picks (only from real page scans) are fetched (SSRF-guarded,
+`image/*`, ≤1.5MB) and embedded as data URIs. The pure renderer emits one
+self-contained HTML doc (light/dark CSS, per-claim `[n]` anchors, tables,
+inline-SVG bar charts, numbered sources; every model string HTML-escaped).
+Reports persist in a `reports` table, served raw at `/api/reports/:id/html`,
+browsed in a Reports window (iframe + open-in-tab + delete). Four editable
+prompts (`research_plan/distill/reflect/synthesize`); usage purpose
+`research`; SearXNG outages degrade to internal-corpus-only. Follow-ups:
+ingest reports into documents-RAG; mobile Reports view.
 
 ## Phase 10 — Context compaction
 

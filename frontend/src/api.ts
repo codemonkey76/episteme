@@ -578,6 +578,20 @@ export const scheduledAgents = {
     json<{ session_id: string }>(`/scheduled-agents/${id}/run`, { method: 'POST' }),
 }
 
+// Research reports
+export interface Report {
+  id: string
+  job_id: string | null
+  title: string
+  created_at: string
+}
+
+export const reports = {
+  list: () => json<{ reports: Report[] }>('/reports'),
+  htmlPath: (id: string) => `${BASE}/reports/${id}/html`,
+  remove: (id: string) => fetch(BASE + `/reports/${id}`, { method: 'DELETE' }),
+}
+
 // Conversation search
 export interface SearchHit {
   session_id: string

@@ -11,6 +11,7 @@ mod integrations;
 mod jobs;
 mod memory;
 mod prompts;
+mod research;
 mod suggestions;
 mod model_router;
 mod tools;

@@ -70,7 +70,7 @@ pub async fn execute(state: &Arc<AppState>, user_id: &str, name: &str, args: Val
     .await?;
 
     let job =
-        crate::jobs::start(state, user_id, &session.id, provider_arg, "background", task_name)
+        crate::jobs::start(state, user_id, &session.id, provider_arg, "background", task_name, None)
             .await?;
     // Enqueue rather than spawn: the queue worker (spawned in main) runs it,
     // which keeps this tool's future out of the agent loop's Send cycle.

@@ -35,8 +35,9 @@ pub async fn start(
     provider_name: &str,
     kind: &str,
     name: &str,
+    meta: Option<&str>,
 ) -> Result<Job> {
-    db::jobs::insert(&state.db, user_id, session_id, kind, name, provider_name).await
+    db::jobs::insert(&state.db, user_id, session_id, kind, name, provider_name, meta).await
 }
 
 /// Run (or continue) a job to its next stopping point and record the outcome:
@@ -94,6 +95,13 @@ async fn run_inner(state: &Arc<AppState>, job: &Job) -> Result<TurnOutcome> {
         providers.into_iter().find(|p| p.name == job.provider)
     }
     .ok_or_else(|| anyhow!("no matching provider configured"))?;
+
+    // Research jobs run their own orchestrator, not the agent loop, and never
+    // park tools (all their inputs are read-only) — so they always complete.
+    if job.kind == "research" {
+        crate::research::run(state, job, provider).await?;
+        return Ok(TurnOutcome::Completed);
+    }
 
     // Drain the event stream; the transcript persists to the session anyway.
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);

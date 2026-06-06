@@ -159,6 +159,17 @@ function toggleSettings(tab: string) {
         <span v-if="!collapsed">Jobs</span>
       </button>
 
+      <!-- Reports -->
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('reports') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Reports' : ''" :aria-pressed="isOpen('reports')" @click="toggleKey('reports')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          <line x1="8.5" y1="10" x2="13.5" y2="10"/>
+          <line x1="8.5" y1="13" x2="12" y2="13"/>
+        </svg>
+        <span v-if="!collapsed">Reports</span>
+      </button>
+
       <!-- Memories -->
       <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('memories') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Memories' : ''" :aria-pressed="isOpen('memories')" @click="toggleKey('memories')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

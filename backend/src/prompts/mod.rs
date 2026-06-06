@@ -193,6 +193,78 @@ pane to help draft a reply. The email is appended after it.",
 deadlines, or actions the user needs to respond to. If the email quotes earlier \
 messages, focus on the most recent one. Output only the summary — no preamble.",
     },
+    PromptDef {
+        key: "research_plan",
+        name: "Research: plan",
+        description: "First stage of a deep-research run: breaks the topic into \
+sub-questions and web search queries. Must keep instructing the model to answer \
+with ONLY a JSON object of {\"subquestions\", \"queries\"}.",
+        variables: &["{topic}"],
+        default: "You are planning a research investigation into a topic. Break it into \
+the key sub-questions that must be answered to cover it well, and propose focused web \
+search queries that will surface authoritative, current sources. Prefer specific \
+queries over broad ones; avoid duplicates.\n\nTopic: {topic}\n\nRespond with ONLY a \
+JSON object, no prose, no code fences: {\"subquestions\": [\"<question>\", ...], \
+\"queries\": [\"<search query>\", ...]}. Provide at most 6 queries.",
+    },
+    PromptDef {
+        key: "research_distill",
+        name: "Research: distill page",
+        description: "Runs once per fetched source during deep research: extracts only \
+the findings relevant to the topic. Must keep instructing the model to answer with \
+ONLY a JSON object of {\"relevant\", \"notes\", \"images\"}.",
+        variables: &["{topic}"],
+        default: "You are extracting only the information from a source document that is \
+relevant to a research topic.\n\nTopic: {topic}\n\nRead the source text and pull out \
+concrete, citable findings — facts, figures, claims, dates, named entities. Ignore \
+navigation, boilerplate, and anything off-topic. Include a short verbatim quote when \
+one supports a finding. If image candidates are listed, keep only ones that would \
+genuinely illustrate the topic. Judge whether the source is relevant at all.\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: {\"relevant\": true, \
+\"notes\": [{\"finding\": \"<concise statement>\", \"quote\": \"<short verbatim quote, \
+optional>\"}], \"images\": [{\"url\": \"<image url from the candidates>\", \"caption\": \
+\"<what it shows>\"}]}. If the source is irrelevant: {\"relevant\": false, \"notes\": [], \
+\"images\": []}.",
+    },
+    PromptDef {
+        key: "research_reflect",
+        name: "Research: reflect",
+        description: "Between research rounds: reviews collected notes for gaps and \
+proposes follow-up queries. Must keep instructing the model to answer with ONLY a \
+JSON object of {\"done\", \"queries\"}.",
+        variables: &["{topic}"],
+        default: "You are reviewing research gathered so far against the topic and its \
+sub-questions.\n\nTopic: {topic}\n\nDecide whether the collected notes are sufficient \
+to write a thorough, well-supported report. If important sub-questions are still \
+unanswered or thinly sourced, propose a few NEW, more targeted web search queries to \
+fill the gaps — do not repeat earlier queries.\n\nRespond with ONLY a JSON object, no \
+prose, no code fences: {\"done\": true, \"queries\": [\"<new query>\", ...]}. Provide at \
+most 3 queries; return an empty list when done.",
+    },
+    PromptDef {
+        key: "research_synthesize",
+        name: "Research: synthesize report",
+        description: "Final research stage: writes the structured report from the \
+collected notes. Must keep the exact JSON schema (title/intro/sections/tables/charts/\
+images) — the report renderer consumes it.",
+        variables: &["{topic}"],
+        default: "You are writing a structured research report from collected notes. \
+Each note is tagged with a source id (e.g. S1, doc:contract.pdf, email:Invoice).\n\n\
+Topic: {topic}\n\nWrite an accurate, well-organized report grounded ONLY in the \
+provided notes. Every factual paragraph must cite the source ids it draws from. \
+Organize the body into clear sections. When you compare options or alternatives, \
+include a comparison table. When the notes contain comparable numeric values (counts, \
+prices, percentages, scores), include a bar chart so they can be seen at a glance. \
+Choose at most 4 of the candidate images, only when they genuinely illustrate the \
+content. Do not invent facts, numbers, or sources.\n\nRespond with ONLY a JSON object, \
+no prose, no code fences:\n{\"title\": \"<report title>\", \"intro\": \"<1-2 sentence \
+overview>\", \"sections\": [{\"heading\": \"<heading>\", \"paragraphs\": [{\"text\": \
+\"<paragraph>\", \"cites\": [\"S1\"]}]}], \"tables\": [{\"title\": \"<caption>\", \
+\"columns\": [\"<col>\"], \"rows\": [[\"<cell>\"]]}], \"charts\": [{\"title\": \
+\"<caption>\", \"labels\": [\"<label>\"], \"values\": [1.0], \"unit\": \"<unit, \
+optional>\"}], \"images\": [{\"source_url\": \"<candidate image url>\", \"caption\": \
+\"<caption>\"}]}. Omit tables, charts, or images when not warranted.",
+    },
 ];
 
 pub fn def(key: &str) -> Option<&'static PromptDef> {

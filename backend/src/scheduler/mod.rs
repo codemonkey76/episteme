@@ -141,7 +141,7 @@ pub async fn run_now(state: &Arc<AppState>, user_id: &str, agent: &ScheduledAgen
 
     state.log("scheduler", "info", format!("Running '{}'", agent.name)).await;
 
-    let job = crate::jobs::start(state, user_id, &session.id, &agent.provider, "scheduled", &agent.name)
+    let job = crate::jobs::start(state, user_id, &session.id, &agent.provider, "scheduled", &agent.name, None)
         .await?;
     crate::jobs::run(Arc::clone(state), job).await;
 
