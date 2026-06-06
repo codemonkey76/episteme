@@ -320,6 +320,7 @@ async fn gather_web(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn gather_internal(
     state: &Arc<AppState>,
     job: &Job,
