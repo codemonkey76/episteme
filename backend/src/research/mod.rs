@@ -51,6 +51,62 @@ struct ImageCandidate {
     caption: String,
 }
 
+/// Validate inputs, create the 🔎 session + research job, and enqueue it.
+/// Shared by the `deep_research` chat tool and the Reports-window launcher.
+/// Returns (job_id, session_id).
+pub async fn launch(
+    state: &Arc<AppState>,
+    user_id: &str,
+    topic: &str,
+    depth: &str,
+    provider_arg: &str,
+) -> Result<(String, String)> {
+    let topic = topic.trim();
+    if topic.is_empty() {
+        return Err(anyhow!("topic is required"));
+    }
+    let depth = match depth {
+        d @ ("quick" | "deep") => d,
+        _ => "standard",
+    };
+
+    let providers: Vec<ProviderConfig> =
+        db::settings::get(&state.db, "providers").await?.unwrap_or_default();
+    if providers.is_empty() {
+        return Err(anyhow!("no model providers configured"));
+    }
+    if !provider_arg.is_empty() && !providers.iter().any(|p| p.name == provider_arg) {
+        return Err(anyhow!("provider '{provider_arg}' not found"));
+    }
+
+    let session = db::sessions::create(&state.db, user_id, &format!("🔎 {topic}")).await?;
+    db::messages::insert(
+        &state.db,
+        &session.id,
+        "user",
+        &serde_json::to_string(topic).unwrap_or_default(),
+        None,
+        None,
+    )
+    .await?;
+
+    let name_clipped: String = topic.chars().take(60).collect();
+    let meta = serde_json::json!({ "topic": topic, "depth": depth }).to_string();
+    let job = crate::jobs::start(
+        state,
+        user_id,
+        &session.id,
+        provider_arg,
+        "research",
+        &format!("Research: {name_clipped}"),
+        Some(&meta),
+    )
+    .await?;
+    let job_id = job.id.clone();
+    state.job_tx.send(job).map_err(|_| anyhow!("job queue unavailable"))?;
+    Ok((job_id, session.id))
+}
+
 /// Execute one research job end-to-end. The session collects progress
 /// messages; the report lands in the reports table; the final assistant
 /// message carries the outcome (drives the job summary + push).

@@ -50,3 +50,32 @@ pub async fn delete(
     db::reports::delete(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(serde::Deserialize)]
+pub struct StartResearch {
+    topic: String,
+    #[serde(default)]
+    depth: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+// POST /api/research — the Reports window's "New research" launcher.
+pub async fn start_research(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<StartResearch>,
+) -> AppResult<Json<serde_json::Value>> {
+    let (job_id, session_id) = crate::research::launch(
+        &state,
+        &user.id,
+        &body.topic,
+        body.depth.as_deref().unwrap_or("standard"),
+        body.provider.as_deref().unwrap_or(""),
+    )
+    .await
+    // Launch failures are user-facing config problems (empty topic, unknown
+    // provider) — surface them as 400s with the message.
+    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "job_id": job_id, "session_id": session_id })))
+}

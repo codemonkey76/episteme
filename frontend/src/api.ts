@@ -590,6 +590,11 @@ export const reports = {
   list: () => json<{ reports: Report[] }>('/reports'),
   htmlPath: (id: string) => `${BASE}/reports/${id}/html`,
   remove: (id: string) => fetch(BASE + `/reports/${id}`, { method: 'DELETE' }),
+  startResearch: (topic: string, depth: 'quick' | 'standard' | 'deep') =>
+    json<{ job_id: string; session_id: string }>('/research', {
+      method: 'POST',
+      body: JSON.stringify({ topic, depth }),
+    }),
 }
 
 // Conversation search

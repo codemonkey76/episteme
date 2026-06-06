@@ -7,8 +7,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::db;
-use crate::model_router::ProviderConfig;
 use crate::state::AppState;
 
 pub fn schemas() -> Vec<Value> {
@@ -35,57 +33,17 @@ pub async fn execute(state: &Arc<AppState>, user_id: &str, name: &str, args: Val
     if name != "deep_research" {
         return Err(anyhow!("unknown research tool '{name}'"));
     }
-    let topic = args["topic"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("topic is required"))?;
-    let depth = match args["depth"].as_str().unwrap_or("standard") {
-        d @ ("quick" | "deep") => d,
-        _ => "standard",
-    };
+    let topic = args["topic"].as_str().unwrap_or("");
+    let depth = args["depth"].as_str().unwrap_or("standard");
     let provider_arg = args["provider"].as_str().unwrap_or("").trim();
 
-    // Validate the provider now so a typo fails the tool call, not the job.
-    let providers: Vec<ProviderConfig> =
-        db::settings::get(&state.db, "providers").await?.unwrap_or_default();
-    if providers.is_empty() {
-        return Err(anyhow!("no model providers configured"));
-    }
-    if !provider_arg.is_empty() && !providers.iter().any(|p| p.name == provider_arg) {
-        return Err(anyhow!("provider '{provider_arg}' not found"));
-    }
-
-    let session = db::sessions::create(&state.db, user_id, &format!("🔎 {topic}")).await?;
-    db::messages::insert(
-        &state.db,
-        &session.id,
-        "user",
-        &serde_json::to_string(topic).unwrap_or_default(),
-        None,
-        None,
-    )
-    .await?;
-
-    let name_clipped: String = topic.chars().take(60).collect();
-    let meta = json!({ "topic": topic, "depth": depth }).to_string();
-    let job = crate::jobs::start(
-        state,
-        user_id,
-        &session.id,
-        provider_arg,
-        "research",
-        &format!("Research: {name_clipped}"),
-        Some(&meta),
-    )
-    .await?;
-    state.job_tx.send(job.clone()).map_err(|_| anyhow!("job queue unavailable"))?;
+    let (job_id, session_id) =
+        crate::research::launch(state, user_id, topic, depth, provider_arg).await?;
 
     Ok(json!({
         "started": true,
-        "job_id": job.id,
-        "session_id": session.id,
-        "depth": depth,
+        "job_id": job_id,
+        "session_id": session_id,
         "note": "Deep research started in the background — the user will be notified when the report appears in their Reports window.",
     }))
 }

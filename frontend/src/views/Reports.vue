@@ -54,10 +54,55 @@ async function remove(r: api.Report) {
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
 }
+
+// ── New research launcher ────────────────────────────────────────────────────
+const topic = ref('')
+const depth = ref<'quick' | 'standard' | 'deep'>('standard')
+const starting = ref(false)
+const startedNote = ref('')
+
+async function startResearch() {
+  const t = topic.value.trim()
+  if (!t || starting.value) return
+  starting.value = true
+  error.value = ''
+  try {
+    await api.reports.startResearch(t, depth.value)
+    startedNote.value = `Researching "${t}" — the report will appear here when ready.`
+    topic.value = ''
+    setTimeout(() => (startedNote.value = ''), 8000)
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to start research'
+  } finally {
+    starting.value = false
+  }
+}
 </script>
 
 <template>
-  <div class="flex h-full bg-bg overflow-hidden">
+  <div class="flex flex-col h-full bg-bg overflow-hidden">
+    <!-- New research launcher -->
+    <div class="flex items-center gap-2 px-3 py-2 border-b border-[var(--c-1e1e1e)] shrink-0">
+      <input
+        v-model="topic"
+        class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] outline-none min-w-0 focus:border-[var(--c-3a6adf)] placeholder:text-[var(--c-404040)]"
+        placeholder="Research a topic… (e.g. compare Frigate vs Blue Iris for a self-hosted NVR)"
+        @keydown.enter="startResearch"
+      />
+      <select v-model="depth" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1.5 text-xs font-[inherit] cursor-pointer">
+        <option value="quick">quick</option>
+        <option value="standard">standard</option>
+        <option value="deep">deep</option>
+      </select>
+      <button
+        class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1.5 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50 whitespace-nowrap"
+        :disabled="starting || !topic.trim()"
+        @click="startResearch"
+      >{{ starting ? 'Starting…' : 'Research' }}</button>
+    </div>
+    <div v-if="startedNote" class="px-3 py-1.5 text-[0.75rem] text-[var(--c-7adfbb)] border-b border-[var(--c-1e1e1e)] shrink-0">{{ startedNote }}</div>
+
+    <div class="flex flex-1 min-h-0">
     <!-- Report list -->
     <div class="w-[16rem] shrink-0 border-r border-[var(--c-1e1e1e)] flex flex-col">
       <div v-if="error" class="px-3 py-2 text-danger text-[0.75rem] border-b border-[var(--c-1e1e1e)]">{{ error }}</div>
@@ -101,6 +146,7 @@ function fmtDate(iso: string): string {
       <div v-else class="flex-1 flex items-center justify-center text-[var(--c-383838)] text-[0.8125rem]">
         {{ loading ? 'Loading…' : 'Select a report' }}
       </div>
+    </div>
     </div>
   </div>
 </template>
