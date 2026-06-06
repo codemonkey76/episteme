@@ -1,0 +1,30 @@
+# Keep the build context small: the image build only needs frontend sources,
+# backend sources, and the Cargo manifests.
+
+# Build artifacts (multi-GB)
+target/
+frontend/node_modules/
+frontend/dist/
+backend/static/
+
+# Not part of the server image
+mobile/
+docs/
+assets/
+deploy/
+searxng/
+.git/
+.github/
+.claude/
+
+# Local state / secrets
+.env
+.env.*
+*.db
+*.sqlite*
+data/
+shared/
+
+# Compose/proxy config (mounted, not baked in)
+docker-compose.yml
+Caddyfile

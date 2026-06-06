@@ -19,32 +19,18 @@ use crate::agent::{self, AgentEvent};
 use crate::db;
 use crate::routes::auth::CurrentUser;
 use crate::error::{AppError, AppResult};
+use crate::integrations::graph::{
+    self, graph_delete, graph_get, graph_patch, graph_post, html_to_text, prepend_html,
+    recipients, GRAPH,
+};
 use crate::integrations::microsoft;
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig, StreamChunk};
 use crate::state::AppState;
 use tokio::sync::mpsc;
 
-const GRAPH: &str = "https://graph.microsoft.com/v1.0";
-
-/// Graph mailbox path segment: `me` for the signed-in user, or `users/{address}`
-/// for a shared mailbox the user has delegated access to. The address is
-/// validated to block path injection; Graph still enforces the real access
-/// rights, so an address the user can't open just yields a 403.
+/// Route-layer wrapper preserving the 400 (not 500) on a malformed address.
 pub fn mailbox_seg(mailbox: Option<&str>) -> AppResult<String> {
-    match mailbox.map(str::trim).filter(|s| !s.is_empty()) {
-        None => Ok("me".to_string()),
-        Some(addr) => {
-            let valid = addr.contains('@')
-                && !addr.contains('/')
-                && !addr.contains(char::is_whitespace)
-                && addr.len() <= 320;
-            if valid {
-                Ok(format!("users/{addr}"))
-            } else {
-                Err(AppError::BadRequest("invalid mailbox address".into()))
-            }
-        }
-    }
+    graph::mailbox_seg(mailbox).map_err(|e| AppError::BadRequest(e.to_string()))
 }
 
 /// Optional `?mailbox=<address>` selecting a shared mailbox (absent = own).
@@ -52,96 +38,6 @@ pub fn mailbox_seg(mailbox: Option<&str>) -> AppResult<String> {
 pub struct MailboxQuery {
     #[serde(default)]
     mailbox: Option<String>,
-}
-
-pub async fn graph_get(
-    state: &AppState,
-    user_id: &str,
-    url: &str,
-    params: &[(&str, &str)],
-) -> AppResult<Value> {
-    let token = microsoft::get_valid_token(state, user_id)
-        .await
-        .map_err(AppError::Internal)?;
-
-    let response = state
-        .http_client
-        .get(url)
-        .query(params)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-
-    let status = response.status();
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-
-    if !status.is_success() {
-        let msg = body["error"]["message"]
-            .as_str()
-            .unwrap_or("Graph API error")
-            .to_string();
-        tracing::error!("Graph API {status}: {msg}");
-        return Err(AppError::Internal(anyhow::anyhow!("Graph API {status}: {msg}")));
-    }
-
-    Ok(body)
-}
-
-/// POST a JSON body to Graph and return the parsed response. Used by the
-/// categorizer worker for folder creation and message moves.
-pub async fn graph_post(state: &AppState, user_id: &str, url: &str, body: &Value) -> AppResult<Value> {
-    let token = microsoft::get_valid_token(state, user_id)
-        .await
-        .map_err(AppError::Internal)?;
-
-    let response = state
-        .http_client
-        .post(url)
-        .bearer_auth(&token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-
-    let status = response.status();
-    let parsed: Value = response.json().await.unwrap_or(Value::Null);
-
-    if !status.is_success() {
-        let msg = parsed["error"]["message"]
-            .as_str()
-            .unwrap_or("Graph API error")
-            .to_string();
-        tracing::error!("Graph POST {status}: {msg}");
-        return Err(AppError::Internal(anyhow::anyhow!("Graph POST {status}: {msg}")));
-    }
-
-    Ok(parsed)
-}
-
-/// DELETE a Graph resource. Treats any 2xx as success.
-pub async fn graph_delete(state: &AppState, user_id: &str, url: &str) -> AppResult<()> {
-    let token = microsoft::get_valid_token(state, user_id)
-        .await
-        .map_err(AppError::Internal)?;
-
-    let response = state
-        .http_client
-        .delete(url)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        tracing::error!("Graph DELETE {status}");
-        return Err(AppError::Internal(anyhow::anyhow!("Graph DELETE {status}")));
-    }
-    Ok(())
 }
 
 /// Return the id of the mail folder named `name`, creating it under the mailbox
@@ -808,66 +704,6 @@ pub struct AttachmentUpload {
     /// Content-ID for inline images (the body references `cid:<contentId>`).
     #[serde(default)]
     content_id: Option<String>,
-}
-
-/// Map plain addresses to Graph recipient objects.
-fn recipients(addrs: &[String]) -> Vec<Value> {
-    addrs
-        .iter()
-        .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
-        .collect()
-}
-
-/// PATCH a JSON body to Graph (draft updates).
-async fn graph_patch(state: &AppState, user_id: &str, url: &str, body: &Value) -> AppResult<Value> {
-    let token = microsoft::get_valid_token(state, user_id)
-        .await
-        .map_err(AppError::Internal)?;
-
-    let response = state
-        .http_client
-        .patch(url)
-        .bearer_auth(&token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(e.into()))?;
-
-    let status = response.status();
-    let parsed: Value = response.json().await.unwrap_or(Value::Null);
-
-    if !status.is_success() {
-        let msg = parsed["error"]["message"]
-            .as_str()
-            .unwrap_or("Graph API error")
-            .to_string();
-        tracing::error!("Graph PATCH {status}: {msg}");
-        return Err(AppError::Internal(anyhow::anyhow!("Graph PATCH {status}: {msg}")));
-    }
-
-    Ok(parsed)
-}
-
-/// Byte-wise ASCII-case-insensitive substring search (HTML tags are ASCII, and
-/// byte offsets stay valid in the original string — unlike `to_lowercase()`,
-/// which can change length).
-fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-/// Insert the user's message just inside <body>, above the quoted history that
-/// Graph put in the createReply/createForward draft.
-fn prepend_html(user_html: &str, draft_html: &str) -> String {
-    if let Some(start) = find_ci(draft_html, "<body") {
-        if let Some(close) = draft_html[start..].find('>') {
-            let at = start + close + 1;
-            return format!("{}{}{}", &draft_html[..at], user_html, &draft_html[at..]);
-        }
-    }
-    format!("{user_html}{draft_html}")
 }
 
 /// Graph caps direct fileAttachment POSTs at ~3 MB; anything bigger goes
@@ -1600,53 +1436,6 @@ pub async fn advise(
     });
 
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
-}
-
-/// Minimal HTML→text: block tags to newlines, drop script/style, strip tags,
-/// decode a few entities, tidy whitespace. Good enough to give the model context.
-fn html_to_text(html: &str) -> String {
-    let mut s = html.to_string();
-    for tag in ["</p>", "<br>", "<br/>", "<br />", "</div>", "</tr>", "</li>", "</h1>", "</h2>", "</h3>"] {
-        s = s.replace(tag, "\n");
-    }
-    // Drop <script>/<style> blocks.
-    for (open, close) in [("<script", "</script>"), ("<style", "</style>")] {
-        loop {
-            let lower = s.to_lowercase();
-            match (lower.find(open), lower.find(close)) {
-                (Some(a), Some(b)) if b > a => s.replace_range(a..b + close.len(), " "),
-                _ => break,
-            }
-        }
-    }
-    // Strip remaining tags.
-    let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    let out = out
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'");
-    // Collapse runs of blank lines / trailing spaces.
-    out.lines()
-        .map(|l| l.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .split("\n\n\n")
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .trim()
-        .to_string()
 }
 
 // ── Email signatures ─────────────────────────────────────────────────────────

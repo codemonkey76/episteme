@@ -1,6 +1,6 @@
 //! Microsoft 365 calendar operations, shared by the HTTP routes and the chat
-//! agent's native tools. Reuses the email module's Graph helpers and the
-//! Microsoft token plumbing.
+//! agent's native tools. Reuses the shared Graph helpers and the Microsoft
+//! token plumbing.
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::integrations::microsoft;
-use crate::routes::email::{graph_delete, graph_post};
+use crate::integrations::graph::{graph_delete, graph_post};
 use crate::state::AppState;
 
 const GRAPH: &str = "https://graph.microsoft.com/v1.0";

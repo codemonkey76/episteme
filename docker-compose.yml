@@ -14,9 +14,23 @@ services:
       DATA_DIR: /data
       STATIC_DIR: /app/static
       RUST_LOG: "episteme=info,tower_http=info"
+      # The agent's web_search tool queries the SearXNG sidecar below.
+      SEARXNG_URL: "http://searxng:8080"
     env_file:
       - path: .env
         required: false
+
+  # Self-hosted metasearch for the agent's web_search tool. Internal-only:
+  # reachable from the episteme container, never published through Caddy.
+  # Copy searxng/settings.yml.example to searxng/settings.yml and set a real
+  # secret_key before first start (see that file).
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
 
   caddy:
     image: caddy:2

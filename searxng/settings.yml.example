@@ -1,0 +1,21 @@
+# SearXNG config for the episteme web_search sidecar.
+#
+#   cp searxng/settings.yml.example searxng/settings.yml
+#   openssl rand -hex 32   # paste the output as secret_key below
+#
+# `use_default_settings: true` merges this over SearXNG's bundled defaults,
+# so only the deltas live here. The `json` format is what the backend's
+# web_search tool consumes — without it SearXNG answers 403.
+
+use_default_settings: true
+
+server:
+  secret_key: "CHANGE_ME_RUN_openssl_rand_-hex_32"
+  # The instance is only reachable inside the compose network, so the
+  # bot/abuse limiter just gets in the way.
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json

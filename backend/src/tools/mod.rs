@@ -10,9 +10,11 @@ use crate::model_router::ChatMessage;
 use crate::state::AppState;
 
 pub mod calendar;
+pub mod email;
 pub mod helpdesk;
 pub mod notes;
 pub mod tasks;
+pub mod web;
 
 /// JSON schemas advertised to the model, across all integrations.
 pub fn schemas() -> Vec<Value> {
@@ -20,12 +22,19 @@ pub fn schemas() -> Vec<Value> {
     all.extend(calendar::schemas());
     all.extend(tasks::schemas());
     all.extend(notes::schemas());
+    all.extend(email::schemas());
+    all.extend(web::schemas());
     all.extend(helpdesk::schemas());
     all
 }
 
 pub fn is_native(name: &str) -> bool {
-    calendar::handles(name) || tasks::handles(name) || notes::handles(name) || helpdesk::handles(name)
+    calendar::handles(name)
+        || tasks::handles(name)
+        || notes::handles(name)
+        || email::handles(name)
+        || web::handles(name)
+        || helpdesk::handles(name)
 }
 
 /// Native tools grouped by integration, for the settings Tools page.
@@ -34,6 +43,8 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("calendar", calendar::schemas()),
         ("tasks", tasks::schemas()),
         ("notes", notes::schemas()),
+        ("email", email::schemas()),
+        ("web", web::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -61,6 +72,12 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if notes::handles(name) {
         return notes::execute(state, user_id, name, args).await;
+    }
+    if email::handles(name) {
+        return email::execute(state, user_id, name, args).await;
+    }
+    if web::handles(name) {
+        return web::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

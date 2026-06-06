@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::db::logs::LogEntry;
+use crate::integrations::graph;
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::routes::email;
 use crate::state::AppState;
@@ -191,7 +192,7 @@ pub async fn run_mailbox(
 
     // Fetch the most recent inbox messages.
     let top = cfg.batch_limit.clamp(1, 50).to_string();
-    let inbox = email::graph_get(
+    let inbox = graph::graph_get(
         state,
         user_id,
         &format!("{GRAPH}/{seg}/mailFolders/inbox/messages"),

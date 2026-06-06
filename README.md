@@ -16,6 +16,8 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Persistent memory** — durable facts and preferences are auto-extracted from conversations (and addable by hand) and injected into future chats, so the assistant improves over time. The **Memories** window lets you view, filter, edit, and delete them
 - **Style learning for email drafts** — when you edit an AI-drafted reply before sending, the diff is analyzed and durable writing-style lessons (tone, length, sign-offs) are saved as `style` memories that steer every future draft — the AI converges on your voice
 - **Email (Microsoft 365)** — folders, message list with search, reading pane, flagged / replied-to indicators, attachment viewer, AI-drafted replies/forwards, and **AI auto-sort** that files low-priority mail into folders and flags what needs attention
+- **Email agent tools** — the chat agent can search, list, and read your mail ("what did Jo say about the invoice?") and prepare replies/forwards/new messages as **drafts in your Drafts folder** — sending always stays with you (there is deliberately no send tool)
+- **Web search** — a self-hosted [SearXNG](https://github.com/searxng/searxng) sidecar ships in docker-compose; the agent searches the web and reads pages through it (`web_search` / `fetch_page`), so queries never go to a search provider you don't control. Copy `searxng/settings.yml.example` to `searxng/settings.yml` and set a `secret_key` to enable it
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Tasks** — a to-do window (priorities, due dates, search) the AI can also drive: "remind me to buy milk tomorrow" creates a task via the task tools, and the window refreshes live when chat changes the list
 - **Notes** — freeform markdown notes with search and inline rendering, also AI-driven: "save a note about…" creates one, "add X to that note" appends, and "check my notes" recalls — refreshing the window live
@@ -30,7 +32,13 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 ## What's next
 
-- **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval would scale to large stores
+See [docs/Roadmap.md](docs/Roadmap.md) for the phased plan; headlines:
+
+- **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval (Ollama embeddings) would scale to large stores
+- **Documents + RAG** — upload PDFs/docs into a searchable knowledge base the agent can pull from
+- **Multimodal chat** — paste images into chat (the model router already supports it; the composer doesn't yet)
+- **Scheduled agents + push** — user-defined recurring agent runs ("summarize overnight email at 7am") with mobile push notifications
+- **Voice input & usage tracking** — mobile STT, per-user token/cost accounting
 
 ## Mobile app
 

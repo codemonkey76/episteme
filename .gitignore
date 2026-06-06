@@ -40,3 +40,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# SearXNG instance config (copy settings.yml.example, contains secret_key)
+searxng/settings.yml
