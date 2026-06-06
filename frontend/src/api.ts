@@ -248,14 +248,27 @@ export interface SearchResult {
   next_link: string | null
 }
 
+export interface AttachmentUpload {
+  name: string
+  content_type: string
+  /// Raw file bytes, base64-encoded (no data: prefix).
+  content_bytes: string
+  is_inline?: boolean
+  /// Content-ID for inline images, referenced in the body as `cid:<contentId>`.
+  content_id?: string
+}
+
 export interface SendEmailPayload {
   to: string[]
   cc?: string[]
   bcc?: string[]
   subject?: string
+  /// HTML body of the user's message. Quoted history is NOT included on
+  /// replies/forwards — the backend's createReply/createForward draft keeps it.
   body: string
   reply_to_message_id?: string
   action?: 'reply' | 'replyAll' | 'forward'
+  attachments?: AttachmentUpload[]
   /// Original AI draft, when the send started from "AI reply" — the backend
   /// diffs it against `body` to learn writing-style preferences.
   ai_draft?: string
@@ -327,6 +340,14 @@ export const email = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+  // Per-mailbox HTML signatures ("" key = the user's own mailbox).
+  getSignatures: () => json<Record<string, string>>('/email/signatures'),
+  saveSignatures: (map: Record<string, string>) =>
+    fetch(BASE + '/email/signatures', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(map),
     }),
 }
 

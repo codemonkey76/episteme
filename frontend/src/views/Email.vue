@@ -6,6 +6,7 @@ import { useWindowsStore } from '../stores/windows'
 import { useTasksStore } from '../stores/tasks'
 import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
+import RichTextEditor from '../components/RichTextEditor.vue'
 import { currentTheme, THEMES } from '../theme'
 import { renderMarkdown } from '../lib/markdown'
 
@@ -49,6 +50,11 @@ onMounted(async () => {
     providersList.value = providers
     if (providers.length) aiProvider.value = providers[0].name
   } catch { /* no providers configured; AI reply will surface the error */ }
+  if (connected.value) {
+    try {
+      signatures.value = await api.email.getSignatures()
+    } catch { /* none saved yet */ }
+  }
   // Pick up suggestions left over from earlier sends.
   if (connected.value) await loadSuggestions()
 })
@@ -518,16 +524,103 @@ watch(selectedMessage, () => {
 })
 
 // ── Compose / reply ───────────────────────────────────────────────────────────
+// `body` is HTML — the composer is a rich-text editor. Replies/forwards hold
+// only the user's message; Graph's createReply/createForward draft carries the
+// quoted history server-side.
 const composeForm = ref({ to: '', cc: '', bcc: '', subject: '', body: '' })
 const showCcBcc = ref(false)
 const sending = ref(false)
 const sendMsg = ref('')
 
+// ── Signatures ────────────────────────────────────────────────────────────────
+// Per-mailbox HTML signatures ('' = own mailbox), edited in Settings and
+// inserted into the composer so they're visible and editable before sending.
+const signatures = ref<Record<string, string>>({})
+function sigBlock(): string {
+  const sig = signatures.value[currentMailbox.value || ''] ?? ''
+  return sig.trim() ? `<div><br></div><div><br></div>${sig}` : ''
+}
+
+// ── Outgoing attachments ──────────────────────────────────────────────────────
+// Files picked or dropped on the composer, held client-side until send.
+// Inline images pasted into the editor are handled separately (data: URI →
+// cid: attachment at send time).
+const MAX_ATTACH_TOTAL = 35 * 1024 * 1024 // Outlook's message cap
+const pendingFiles = ref<{ name: string; type: string; size: number; b64: string }[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function fileToB64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve((r.result as string).split(',', 2)[1] ?? '')
+    r.onerror = () => reject(r.error ?? new Error('read failed'))
+    r.readAsDataURL(f)
+  })
+}
+
+async function addFiles(list: FileList | File[]) {
+  for (const f of Array.from(list)) {
+    const total = pendingFiles.value.reduce((s, x) => s + x.size, 0)
+    if (total + f.size > MAX_ATTACH_TOTAL) {
+      sendMsg.value = `Skipped ${f.name} — attachments are capped at 35 MB total.`
+      continue
+    }
+    try {
+      const b64 = await fileToB64(f)
+      pendingFiles.value.push({ name: f.name, type: f.type || 'application/octet-stream', size: f.size, b64 })
+    } catch {
+      sendMsg.value = `Could not read ${f.name}.`
+    }
+  }
+}
+
+function onFilePick(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) addFiles(input.files)
+  input.value = '' // re-picking the same file should fire change again
+}
+
+// Pull data:-URI images (pasted/dropped into the editor) out of the HTML and
+// turn them into cid:-referenced inline attachments Graph understands.
+function extractInlineImages(html: string): { html: string; inline: api.AttachmentUpload[] } {
+  const tpl = document.createElement('template')
+  tpl.innerHTML = html
+  const inline: api.AttachmentUpload[] = []
+  let n = 0
+  for (const img of Array.from(tpl.content.querySelectorAll('img'))) {
+    const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(img.getAttribute('src') ?? '')
+    if (!m) continue
+    n += 1
+    const ext = m[1].split('/')[1]?.replace('+xml', '') || 'png'
+    const cid = `img${n}-${Date.now()}@episteme`
+    inline.push({
+      name: `image${n}.${ext}`,
+      content_type: m[1],
+      content_bytes: m[2],
+      is_inline: true,
+      content_id: cid,
+    })
+    img.setAttribute('src', `cid:${cid}`)
+  }
+  return { html: tpl.innerHTML, inline }
+}
+
+// Plain text → simple HTML (escaped, newlines as breaks) for AI drafts that
+// stream into the rich-text composer.
+function textToHtml(text: string): string {
+  const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return esc
+    .split('\n')
+    .map(l => (l.trim() ? `<div>${l}</div>` : '<div><br></div>'))
+    .join('')
+}
+
 function openCompose() {
   selectedMessage.value = null
   showReply.value = false
   view.value = 'compose'
-  composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
+  composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: sigBlock() }
+  pendingFiles.value = []
   showCcBcc.value = false
   sendMsg.value = ''
 }
@@ -620,7 +713,11 @@ async function aiReply() {
   }
   aiDrafting.value = true
   aiWarming.value = false
-  composeForm.value.body = ''
+  // The draft streams as plain text; render it into the rich editor above the
+  // signature, which stays in place.
+  const sig = sigBlock()
+  let draftText = ''
+  composeForm.value.body = sig
   // If no token arrives within a few seconds, the model is likely cold-loading.
   let firstToken = false
   const t0 = Date.now()
@@ -641,10 +738,11 @@ async function aiReply() {
           aiWarming.value = false
           logs.info('Email', `AI draft started after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
         }
-        composeForm.value.body += text
+        draftText += text
+        composeForm.value.body = textToHtml(draftText) + sig
       },
     )
-    aiDraftOriginal.value = composeForm.value.body
+    aiDraftOriginal.value = draftText
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Draft failed'
     sendMsg.value = `AI draft failed: ${msg}`
@@ -853,34 +951,41 @@ watch(selectedMessage, () => {
   ticketMsg.value = ''
 })
 
+const replyFormEl = ref<HTMLFormElement | null>(null)
+
 function startReply(mode: ReplyMode) {
   const m = selectedMessage.value
   if (!m) return
   replyMode.value = mode
   showReply.value = true
+  // The composer sits above the email body — bring it into view in case the
+  // user hit Reply while scrolled deep into a long message.
+  nextTick(() => replyFormEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
   sendMsg.value = ''
   showCcBcc.value = false
   aiDraftOriginal.value = ''
+  pendingFiles.value = []
   const subject = m.subject ?? ''
+  const body = sigBlock()
   if (mode === 'forward') {
     composeForm.value = {
       to: '', cc: '', bcc: '',
       subject: subject.startsWith('Fwd:') ? subject : `Fwd: ${subject}`,
-      body: '',
+      body,
     }
   } else if (mode === 'replyAll') {
     const cc = replyAllCc(m)
     composeForm.value = {
       to: replyAllTo(m), cc, bcc: '',
       subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
-      body: '',
+      body,
     }
     if (cc) showCcBcc.value = true // reveal Cc so the prefilled recipients are visible
   } else {
     composeForm.value = {
       to: m.from.emailAddress.address, cc: '', bcc: '',
       subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
-      body: '',
+      body,
     }
   }
 }
@@ -890,18 +995,38 @@ function parseAddrs(s: string): string[] {
 }
 
 async function sendEmail() {
+  // The rich editor can't carry `required` — enforce a non-empty message
+  // ourselves (forwards may legitimately go out with no comment).
+  const isForward = showReply.value && replyMode.value === 'forward'
+  if (!isForward && !htmlToText(composeForm.value.body).trim()) {
+    sendMsg.value = 'Write a message first.'
+    return
+  }
   sending.value = true
   sendMsg.value = ''
   const toList = parseAddrs(composeForm.value.to)
   logs.info('Email', `Sending email to ${toList.join(', ')}`)
   try {
+    // Pasted/dropped images become cid: inline attachments; picked files ride
+    // along as regular ones.
+    const { html, inline } = extractInlineImages(composeForm.value.body)
+    const attachments: api.AttachmentUpload[] = [
+      ...inline,
+      ...pendingFiles.value.map(f => ({
+        name: f.name,
+        content_type: f.type,
+        content_bytes: f.b64,
+        is_inline: false,
+      })),
+    ]
     const payload: api.SendEmailPayload = {
       to: toList,
       cc: parseAddrs(composeForm.value.cc),
       bcc: parseAddrs(composeForm.value.bcc),
-      body: composeForm.value.body,
+      body: html,
       mailbox: mbox.value,
     }
+    if (attachments.length) payload.attachments = attachments
     if (showReply.value && selectedMessage.value) {
       payload.reply_to_message_id = selectedMessage.value.id
       payload.action = replyMode.value
@@ -948,6 +1073,7 @@ async function sendEmail() {
       }
     }
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
+    pendingFiles.value = []
     showCcBcc.value = false
     aiDraftOriginal.value = ''
   } catch (e: unknown) {
@@ -1076,13 +1202,6 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
   return null
 }
 
-const replyBody = computed(() => {
-  const m = selectedMessage.value
-  if (!m) return ''
-  const date = new Date(m.receivedDateTime).toLocaleString()
-  const from = `${m.from.emailAddress.name} <${m.from.emailAddress.address}>`
-  return `\n\n— On ${date}, ${from} wrote:\n`
-})
 </script>
 
 <template>
@@ -1317,12 +1436,24 @@ const replyBody = computed(() => {
             <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Subject</span>
             <input v-model="composeForm.subject" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="Subject" />
           </label>
-          <textarea v-model="composeForm.body" class="flex-1 min-h-[180px] resize-none bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[var(--c-404040)]" placeholder="Write your message…" required />
+          <RichTextEditor v-model="composeForm.body" class="flex-1" min-height="180px" placeholder="Write your message…" @files="addFiles" />
+          <div v-if="pendingFiles.length" class="flex flex-wrap gap-1.5">
+            <span v-for="(f, i) in pendingFiles" :key="`${f.name}-${i}`" class="inline-flex items-center gap-1.5 bg-surface border border-raised rounded px-2 py-[0.2rem] text-[0.75rem] text-[var(--c-a0a0a0)]">
+              {{ f.name }}
+              <span class="text-[var(--c-585858)]">{{ formatSize(f.size) }}</span>
+              <button type="button" class="bg-transparent border-none text-[var(--c-585858)] cursor-pointer p-0 leading-none hover:text-[var(--c-c05050)]" title="Remove attachment" @click="pendingFiles.splice(i, 1)">×</button>
+            </span>
+          </div>
           <div class="flex items-center gap-2 pt-1">
             <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending">{{ sending ? 'Sending…' : 'Send' }}</button>
+            <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              Attach
+            </button>
             <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
             <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
           </div>
+          <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePick" />
         </form>
       </div>
 
@@ -1479,6 +1610,52 @@ const replyBody = computed(() => {
             <p v-else-if="!summarizing" class="text-[0.775rem] text-[var(--c-585858)]">No summary yet.</p>
           </div>
 
+          <!-- Reply / forward composer — above the email body so it's usable
+               without scrolling past a long message. -->
+          <form v-if="showReply" ref="replyFormEl" class="flex flex-col gap-2 border-b border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
+              <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[var(--c-7ab0ff)]">
+                <span class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+                {{ aiWarming ? 'Loading model (first use can take a while)…' : 'Drafting…' }}
+              </span>
+            </div>
+            <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+              <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
+              <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="recipient@example.com" required />
+              <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[var(--c-5a7da0)] hover:text-[var(--c-7ab0ff)] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
+            </label>
+            <template v-if="showCcBcc">
+              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Cc</span>
+                <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="cc@example.com" />
+              </label>
+              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
+                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Bcc</span>
+                <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="bcc@example.com" />
+              </label>
+            </template>
+            <RichTextEditor v-model="composeForm.body" class="flex-1" min-height="120px" :placeholder="replyMode === 'forward' ? 'Add a message…' : 'Write your reply…'" @files="addFiles" />
+            <div class="text-[0.7rem] text-[var(--c-484848)]">{{ replyMode === 'forward' ? 'The forwarded message is included automatically.' : 'The earlier conversation is included automatically.' }}</div>
+            <div v-if="pendingFiles.length" class="flex flex-wrap gap-1.5">
+              <span v-for="(f, i) in pendingFiles" :key="`${f.name}-${i}`" class="inline-flex items-center gap-1.5 bg-surface border border-raised rounded px-2 py-[0.2rem] text-[0.75rem] text-[var(--c-a0a0a0)]">
+                {{ f.name }}
+                <span class="text-[var(--c-585858)]">{{ formatSize(f.size) }}</span>
+                <button type="button" class="bg-transparent border-none text-[var(--c-585858)] cursor-pointer p-0 leading-none hover:text-[var(--c-c05050)]" title="Remove attachment" @click="pendingFiles.splice(i, 1)">×</button>
+              </span>
+            </div>
+            <div class="flex items-center gap-2 pt-1">
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending || aiDrafting">{{ sending ? 'Sending…' : replyMode === 'forward' ? 'Send Forward' : 'Send Reply' }}</button>
+              <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                Attach
+              </button>
+              <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="showReply = false">Cancel</button>
+              <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
+            </div>
+            <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePick" />
+          </form>
+
           <!-- Attachments -->
           <div v-if="visibleAttachments.length" class="flex flex-wrap gap-2 px-5 py-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
             <button
@@ -1528,37 +1705,6 @@ const replyBody = computed(() => {
             />
             <pre v-else class="text-[0.8125rem] text-[var(--c-c0c0c0)] whitespace-pre-wrap break-words leading-[1.6] font-mono">{{ selectedMessage.body.content }}</pre>
           </div>
-
-          <form v-if="showReply" class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] py-[0.875rem] px-5 flex-shrink-0" @submit.prevent="sendEmail">
-            <div class="flex items-center gap-2 mb-3">
-              <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em]">{{ replyMode === 'forward' ? 'Forward' : replyMode === 'replyAll' ? 'Reply all' : 'Reply' }}</span>
-              <span v-if="aiDrafting" class="inline-flex items-center gap-[0.35rem] text-[0.75rem] text-[var(--c-7ab0ff)]">
-                <span class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
-                {{ aiWarming ? 'Loading model (first use can take a while)…' : 'Drafting…' }}
-              </span>
-            </div>
-            <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
-              <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
-              <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="recipient@example.com" required />
-              <button v-if="!showCcBcc" type="button" class="text-[0.7rem] text-[var(--c-5a7da0)] hover:text-[var(--c-7ab0ff)] flex-shrink-0" @click.prevent.stop="showCcBcc = true">Cc/Bcc</button>
-            </label>
-            <template v-if="showCcBcc">
-              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
-                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Cc</span>
-                <input v-model="composeForm.cc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="cc@example.com" />
-              </label>
-              <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
-                <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Bcc</span>
-                <input v-model="composeForm.bcc" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="bcc@example.com" />
-              </label>
-            </template>
-            <textarea v-model="composeForm.body" class="flex-1 min-h-[120px] resize-none bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none leading-[1.6] py-2 px-0 placeholder:text-[var(--c-404040)]" :placeholder="(replyMode === 'forward' ? 'Add a message…' : 'Write your reply…') + replyBody" :required="replyMode !== 'forward'" />
-            <div class="flex items-center gap-2 pt-1">
-              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending || aiDrafting">{{ sending ? 'Sending…' : replyMode === 'forward' ? 'Send Forward' : 'Send Reply' }}</button>
-              <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="showReply = false">Cancel</button>
-              <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
-            </div>
-          </form>
         </template>
       </div>
 

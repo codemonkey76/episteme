@@ -4,6 +4,7 @@ import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 import { useAuthStore } from '../stores/auth'
 import { THEMES, saveTheme, currentTheme } from '../theme'
+import RichTextEditor from './RichTextEditor.vue'
 
 const logs = useLogsStore()
 const activeTheme = ref(currentTheme())
@@ -81,6 +82,7 @@ onMounted(async () => {
   await loadEmailConfig()
   await loadCategorizer()
   await loadHelpdeskConfig()
+  if (emailConfig.value.connected) await loadSignatures()
 })
 
 async function saveProvider() {
@@ -422,6 +424,45 @@ async function removeShared(address: string) {
   catConfig.value.tasks = catConfig.value.tasks.filter(t => t.mailbox !== address)
 }
 
+// ── Email signatures ────────────────────────────────────────────────────────────
+// Per-mailbox HTML signatures ('' = own mailbox); the email composer inserts
+// the active mailbox's signature into new messages and replies.
+const signatures = ref<Record<string, string>>({})
+const sigMailbox = ref('')
+const sigHtml = ref('')
+const sigMsg = ref('')
+const sigSaving = ref(false)
+
+async function loadSignatures() {
+  try {
+    signatures.value = await api.email.getSignatures()
+    sigHtml.value = signatures.value[sigMailbox.value] ?? ''
+  } catch { /* none saved yet */ }
+}
+
+function switchSigMailbox(address: string) {
+  // Keep unsaved edits for the mailbox we're leaving so flipping back doesn't lose them.
+  signatures.value[sigMailbox.value] = sigHtml.value
+  sigMailbox.value = address
+  sigHtml.value = signatures.value[address] ?? ''
+}
+
+async function saveSignatures() {
+  sigSaving.value = true
+  sigMsg.value = ''
+  signatures.value[sigMailbox.value] = sigHtml.value
+  try {
+    const res = await api.email.saveSignatures(signatures.value)
+    if (!res.ok) throw new Error(`${res.status}`)
+    sigMsg.value = 'Saved.'
+    logs.info('Settings', 'Email signatures saved')
+  } catch (e: unknown) {
+    sigMsg.value = e instanceof Error ? `Save failed: ${e.message}` : 'Save failed.'
+  } finally {
+    sigSaving.value = false
+  }
+}
+
 // ── Email auto-sort (categorizer) ───────────────────────────────────────────────
 const catConfig = ref<api.CategorizerConfig>({
   interval_secs: 300, batch_limit: 25, tasks: [],
@@ -624,6 +665,28 @@ async function logout() {
             </button>
           </div>
           <p v-if="accountMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ accountMsg }}</p>
+        </section>
+
+        <section v-if="emailConfig.connected" class="flex flex-col gap-3">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Email signature</h3>
+          <div class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]">
+            <label v-if="mailboxRows.length > 1" class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Mailbox
+              <select
+                class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)] self-start"
+                :value="sigMailbox"
+                @change="switchSigMailbox(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="row in mailboxRows" :key="row.address" :value="row.address">{{ row.label }}</option>
+              </select>
+            </label>
+            <RichTextEditor v-model="sigHtml" min-height="100px" placeholder="Your signature — formatting and pasted images are kept." />
+            <p class="text-[0.75rem] text-[var(--c-585858)]">Appended to new messages and replies sent from this mailbox. Paste from Outlook/Word to keep an existing signature's layout.</p>
+            <div class="flex items-center gap-2">
+              <button type="button" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] self-start font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sigSaving" @click="saveSignatures">{{ sigSaving ? 'Saving…' : 'Save signature' }}</button>
+              <span v-if="sigMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ sigMsg }}</span>
+            </div>
+          </div>
         </section>
 
         <section class="flex flex-col gap-3 border-t border-[var(--c-222222)] pt-5">
