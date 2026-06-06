@@ -11,6 +11,7 @@ class Task {
     required this.dueAt,
     required this.priority,
     required this.status,
+    required this.listId,
   });
 
   final String id;
@@ -19,6 +20,8 @@ class Task {
   final DateTime? dueAt;
   final String priority; // low | normal | high
   final String status; // open | done
+  /// To-do list this task belongs to; null = the implicit "General" list.
+  final String? listId;
 
   bool get isDone => status == 'done';
   bool get isOverdue =>
@@ -33,6 +36,31 @@ class Task {
             : null,
         priority: j['priority'] as String? ?? 'normal',
         status: j['status'] as String? ?? 'open',
+        listId: j['list_id'] as String?,
+      );
+}
+
+class TodoList {
+  TodoList({required this.id, required this.name});
+  final String id;
+  final String name;
+
+  factory TodoList.fromJson(Map<String, dynamic> j) => TodoList(
+        id: j['id'] as String,
+        name: j['name'] as String,
+      );
+}
+
+class SharedMailbox {
+  SharedMailbox({required this.address, required this.name});
+  final String address;
+  final String? name;
+
+  String get label => (name?.isNotEmpty ?? false) ? name! : address;
+
+  factory SharedMailbox.fromJson(Map<String, dynamic> j) => SharedMailbox(
+        address: j['address'] as String,
+        name: j['name'] as String?,
       );
 }
 

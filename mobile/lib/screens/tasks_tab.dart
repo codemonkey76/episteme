@@ -18,8 +18,145 @@ class _TasksTabState extends State<TasksTab> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<TasksStore>().load();
+      final store = context.read<TasksStore>();
+      store.load();
+      store.loadLists();
     });
+  }
+
+  Future<void> _promptListName({TodoList? rename}) async {
+    final store = context.read<TasksStore>();
+    final ctrl = TextEditingController(text: rename?.name ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Palette.surface,
+        title: Text(rename == null ? 'New list' : 'Rename list',
+            style: const TextStyle(color: Palette.fg, fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'List name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Palette.muted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: Text(rename == null ? 'Create' : 'Rename',
+                style: const TextStyle(color: Palette.accent)),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+    try {
+      if (rename == null) {
+        await store.createList(name);
+      } else {
+        await store.renameList(rename, name);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  /// Long-press menu on a named list chip: rename or delete.
+  Future<void> _listMenu(TodoList list) async {
+    final store = context.read<TasksStore>();
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Palette.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined,
+                  size: 18, color: Palette.muted),
+              title: const Text('Rename',
+                  style: TextStyle(color: Palette.fg, fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'rename'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline,
+                  size: 18, color: Palette.danger),
+              title: const Text('Delete (tasks move to General)',
+                  style: TextStyle(color: Palette.danger, fontSize: 14)),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'rename') await _promptListName(rename: list);
+    if (action == 'delete') {
+      try {
+        await store.deleteList(list);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('$e')));
+        }
+      }
+    }
+  }
+
+  Widget _listChips(TasksStore store) {
+    Widget chip(String value, String label, {TodoList? list}) {
+      final active = store.currentList == value;
+      return Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: GestureDetector(
+          onLongPress: list == null ? null : () => _listMenu(list),
+          child: ChoiceChip(
+            label: Text(label, style: const TextStyle(fontSize: 12.5)),
+            selected: active,
+            showCheckmark: false,
+            selectedColor: Palette.accentBg,
+            backgroundColor: Palette.surface,
+            labelStyle:
+                TextStyle(color: active ? Palette.accent : Palette.muted),
+            side: BorderSide(
+                color: active ? const Color(0xFF2A4A8A) : Palette.raised),
+            onSelected: (_) => store.selectList(value),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          chip('', 'All'),
+          chip('general', 'General'),
+          for (final l in store.lists) chip(l.id, l.name, list: l),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: ActionChip(
+              avatar: const Icon(Icons.add, size: 15, color: Palette.muted),
+              label: const Text('New list',
+                  style: TextStyle(fontSize: 12.5, color: Palette.muted)),
+              backgroundColor: Palette.surface,
+              side: const BorderSide(color: Palette.raised),
+              onPressed: () => _promptListName(),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -34,7 +171,20 @@ class _TasksTabState extends State<TasksTab> {
         onPressed: () => _showEditor(context),
         child: const Icon(Icons.add),
       ),
-      body: RefreshIndicator(
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: _listChips(store),
+          ),
+          Expanded(child: _taskList(store, open, done)),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskList(TasksStore store, List<Task> open, List<Task> done) {
+    return RefreshIndicator(
         onRefresh: store.load,
         child: store.loading && store.tasks.isEmpty
             ? const Center(child: CircularProgressIndicator())
@@ -67,7 +217,6 @@ class _TasksTabState extends State<TasksTab> {
                       ],
                     ],
                   ),
-      ),
     );
   }
 }

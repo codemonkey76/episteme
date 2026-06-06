@@ -41,6 +41,11 @@ dependencies:
   intl: ^0.20.2
   flutter_markdown_plus: ^1.0.7
   flutter_widget_from_html_core: ^0.17.2
+  # DOM types for HtmlWidget's customStylesBuilder (email colour sanitizing).
+  html: ^0.15.4
+  # Outgoing attachments: native file/photo picking + mime detection.
+  file_picker: ^10.1.0
+  mime: ^2.0.0
 
 dev_dependencies:
   flutter_test:

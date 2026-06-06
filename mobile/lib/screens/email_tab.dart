@@ -17,6 +17,63 @@ class EmailTab extends StatefulWidget {
 class _EmailTabState extends State<EmailTab> {
   final _scroll = ScrollController();
 
+  /// Multi-select (long-press to start): selected message ids.
+  final _selected = <String>{};
+  bool _deleting = false;
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty || _deleting) return;
+    final count = _selected.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Palette.surface,
+        title: Text('Delete $count message${count == 1 ? '' : 's'}?',
+            style: const TextStyle(color: Palette.fg, fontSize: 16)),
+        content: const Text('They move to Deleted Items (recoverable).',
+            style: TextStyle(color: Palette.muted, fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Palette.muted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child:
+                const Text('Delete', style: TextStyle(color: Palette.danger)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      final deleted = await context
+          .read<EmailStore>()
+          .deleteMessages(_selected.toList());
+      if (mounted) {
+        _selected.clear();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Deleted $deleted message${deleted == 1 ? '' : 's'}'),
+            duration: const Duration(seconds: 2)));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -94,40 +151,106 @@ class _EmailTabState extends State<EmailTab> {
       backgroundColor: Palette.bg,
       body: Column(
         children: [
-          // Folder bar
+          // Folder bar — swaps to a selection bar while messages are selected.
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
-            child: Row(
-              children: [
-                TextButton.icon(
-                  onPressed: _showFolders,
-                  icon: const Icon(Icons.folder_outlined,
-                      size: 16, color: Palette.muted),
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
+            child: _selected.isNotEmpty
+                ? Row(
                     children: [
-                      Text(store.folder?.displayName ?? '',
+                      IconButton(
+                        icon: const Icon(Icons.close,
+                            size: 18, color: Palette.muted),
+                        onPressed: () => setState(_selected.clear),
+                      ),
+                      Text('${_selected.length} selected',
                           style: const TextStyle(
                               color: Palette.fg, fontSize: 13.5)),
-                      if ((store.folder?.unread ?? 0) > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 6),
-                          child: Text('${store.folder!.unread}',
-                              style: const TextStyle(
-                                  color: Palette.accent, fontSize: 12)),
+                      const Spacer(),
+                      _deleting
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2)),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.delete_outline,
+                                  size: 19, color: Palette.danger),
+                              onPressed: _deleteSelected,
+                            ),
+                    ],
+                  )
+                : Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: _showFolders,
+                        icon: const Icon(Icons.folder_outlined,
+                            size: 16, color: Palette.muted),
+                        label: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(store.folder?.displayName ?? '',
+                                style: const TextStyle(
+                                    color: Palette.fg, fontSize: 13.5)),
+                            if ((store.folder?.unread ?? 0) > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 6),
+                                child: Text('${store.folder!.unread}',
+                                    style: const TextStyle(
+                                        color: Palette.accent, fontSize: 12)),
+                              ),
+                            const Icon(Icons.arrow_drop_down,
+                                size: 18, color: Palette.faint),
+                          ],
                         ),
-                      const Icon(Icons.arrow_drop_down,
-                          size: 18, color: Palette.faint),
+                      ),
+                      const Spacer(),
+                      // Mailbox switcher: own + any shared mailboxes added in
+                      // web Settings. Hidden when there are none.
+                      if (store.sharedMailboxes.isNotEmpty)
+                        PopupMenuButton<String>(
+                          tooltip: 'Switch mailbox',
+                          color: Palette.surface,
+                          icon: Icon(
+                            Icons.inbox_outlined,
+                            size: 18,
+                            color: store.currentMailbox.isEmpty
+                                ? Palette.muted
+                                : Palette.accent,
+                          ),
+                          onSelected: store.switchMailbox,
+                          itemBuilder: (_) => [
+                            PopupMenuItem(
+                              value: '',
+                              child: Text('My mailbox',
+                                  style: TextStyle(
+                                      fontSize: 13.5,
+                                      color: store.currentMailbox.isEmpty
+                                          ? Palette.accent
+                                          : Palette.fg)),
+                            ),
+                            for (final m in store.sharedMailboxes)
+                              PopupMenuItem(
+                                value: m.address,
+                                child: Text(m.label,
+                                    style: TextStyle(
+                                        fontSize: 13.5,
+                                        color:
+                                            store.currentMailbox == m.address
+                                                ? Palette.accent
+                                                : Palette.fg)),
+                              ),
+                          ],
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh,
+                            size: 18, color: Palette.muted),
+                        onPressed: store.loading ? null : store.loadFolders,
+                      ),
                     ],
                   ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.refresh, size: 18, color: Palette.muted),
-                  onPressed: store.loading ? null : store.loadFolders,
-                ),
-              ],
-            ),
           ),
           // Commitment suggestion cards
           ...store.suggestions.map((s) => _SuggestionCard(suggestion: s)),
@@ -155,7 +278,13 @@ class _EmailTabState extends State<EmailTab> {
                                         strokeWidth: 2))),
                           );
                         }
-                        return _MessageTile(message: store.messages[i]);
+                        final m = store.messages[i];
+                        return _MessageTile(
+                          message: m,
+                          selectionMode: _selected.isNotEmpty,
+                          selected: _selected.contains(m.id),
+                          onToggleSelect: () => _toggleSelect(m.id),
+                        );
                       },
                     ),
             ),
@@ -167,8 +296,16 @@ class _EmailTabState extends State<EmailTab> {
 }
 
 class _MessageTile extends StatelessWidget {
-  const _MessageTile({required this.message});
+  const _MessageTile({
+    required this.message,
+    required this.selectionMode,
+    required this.selected,
+    required this.onToggleSelect,
+  });
   final MessageSummary message;
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback onToggleSelect;
 
   String _when(DateTime? d) {
     if (d == null) return '';
@@ -184,8 +321,20 @@ class _MessageTile extends StatelessWidget {
     final unread = !message.isRead;
     return ListTile(
       dense: true,
-      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => MessageScreen(summary: message))),
+      selected: selected,
+      selectedTileColor: const Color(0xFF14233A),
+      onLongPress: onToggleSelect,
+      leading: selectionMode
+          ? Icon(
+              selected ? Icons.check_circle : Icons.radio_button_unchecked,
+              size: 19,
+              color: selected ? Palette.accent : Palette.faint,
+            )
+          : null,
+      onTap: selectionMode
+          ? onToggleSelect
+          : () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => MessageScreen(summary: message))),
       title: Row(
         children: [
           if (message.flagStatus == 'flagged')

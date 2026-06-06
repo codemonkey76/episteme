@@ -22,6 +22,39 @@ class EmailStore extends ChangeNotifier {
   List<Provider> providers = [];
   String aiProvider = '';
 
+  /// Per-mailbox HTML signatures ('' = own mailbox), appended to outgoing
+  /// bodies — the plain-text composer can't show them inline like the web.
+  Map<String, String> signatures = {};
+  String get signature => signatures[currentMailbox] ?? '';
+
+  /// Shared mailboxes the user added (web Settings → Integrations).
+  /// '' = the user's own mailbox; otherwise the shared address. Threaded as
+  /// ?mailbox= / payload field into every Graph-backed call.
+  List<SharedMailbox> sharedMailboxes = [];
+  String currentMailbox = '';
+
+  /// `?mailbox=` suffix for path-built requests (POST/PATCH helpers have no
+  /// query parameter argument).
+  String get _mbq => currentMailbox.isEmpty
+      ? ''
+      : '?mailbox=${Uri.encodeQueryComponent(currentMailbox)}';
+
+  /// Query-map entry for GET requests.
+  Map<String, String> get _mbParams =>
+      currentMailbox.isEmpty ? const {} : {'mailbox': currentMailbox};
+
+  Future<void> switchMailbox(String address) async {
+    if (address == currentMailbox) return;
+    currentMailbox = address;
+    folders = [];
+    folder = null;
+    messages = [];
+    exhausted = false;
+    error = null;
+    notifyListeners();
+    await loadFolders();
+  }
+
   List<Suggestion> suggestions = [];
   Timer? _suggestionTimer;
 
@@ -49,13 +82,23 @@ class EmailStore extends ChangeNotifier {
           .toList();
       if (providers.isNotEmpty) aiProvider = providers.first.name;
     } catch (_) {}
+    try {
+      final sigs = await _api.getJson('/email/signatures');
+      signatures = sigs.map((k, v) => MapEntry(k, (v as String?) ?? ''));
+    } catch (_) {}
+    try {
+      final res = await _api.getJson('/integrations/email/shared');
+      sharedMailboxes = (res['mailboxes'] as List)
+          .map((m) => SharedMailbox.fromJson(m as Map<String, dynamic>))
+          .toList();
+    } catch (_) {}
     await loadFolders();
     await loadSuggestions();
   }
 
   Future<void> loadFolders() async {
     try {
-      final res = await _api.getJson('/email/folders');
+      final res = await _api.getJson('/email/folders', _mbParams);
       final all = (res['value'] as List)
           .map((f) => MailFolder.fromJson(f as Map<String, dynamic>))
           .toList();
@@ -92,8 +135,8 @@ class EmailStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final res = await _api
-          .getJson('/email/folders/${f.id}/messages', {'skip': '0', 'top': '30'});
+      final res = await _api.getJson('/email/folders/${f.id}/messages',
+          {'skip': '0', 'top': '30', ..._mbParams});
       messages = (res['value'] as List)
           .map((m) => MessageSummary.fromJson(m as Map<String, dynamic>))
           .toList();
@@ -113,7 +156,7 @@ class EmailStore extends ChangeNotifier {
     notifyListeners();
     try {
       final res = await _api.getJson('/email/folders/${f.id}/messages',
-          {'skip': '${messages.length}', 'top': '30'});
+          {'skip': '${messages.length}', 'top': '30', ..._mbParams});
       final more = (res['value'] as List)
           .map((m) => MessageSummary.fromJson(m as Map<String, dynamic>))
           .toList();
@@ -128,7 +171,7 @@ class EmailStore extends ChangeNotifier {
   }
 
   Future<MessageDetail> getMessage(MessageSummary summary) async {
-    final res = await _api.getJson('/email/messages/${summary.id}');
+    final res = await _api.getJson('/email/messages/${summary.id}', _mbParams);
     if (!summary.isRead) {
       summary.isRead = true;
       if (folder != null && folder!.unread > 0) folder!.unread--;
@@ -141,12 +184,13 @@ class EmailStore extends ChangeNotifier {
 
   Future<void> _markRead(String id) async {
     try {
-      await _api.patch('/email/messages/$id/read');
+      await _api.patch('/email/messages/$id/read$_mbq');
     } catch (_) {}
   }
 
   Future<List<Attachment>> listAttachments(String messageId) async {
-    final res = await _api.getJson('/email/messages/$messageId/attachments');
+    final res = await _api.getJson(
+        '/email/messages/$messageId/attachments', _mbParams);
     return (res['value'] as List)
         .map((a) => Attachment.fromJson(a as Map<String, dynamic>))
         .toList();
@@ -157,7 +201,7 @@ class EmailStore extends ChangeNotifier {
       String messageId, Attachment att) async {
     try {
       final uri = Uri.parse(
-          '${_api.baseUrl}/api/email/messages/${Uri.encodeComponent(messageId)}/attachments/${Uri.encodeComponent(att.id)}/raw');
+          '${_api.baseUrl}/api/email/messages/${Uri.encodeComponent(messageId)}/attachments/${Uri.encodeComponent(att.id)}/raw$_mbq');
       final res = await http.get(uri, headers: {
         if (_api.sessionCookie != null) 'Cookie': _api.sessionCookie!,
       });
@@ -170,14 +214,41 @@ class EmailStore extends ChangeNotifier {
 
   /// "No response needed" — complete the flag and file to Processed.
   Future<void> markDone(String messageId) async {
-    await _api.postJson('/email/messages/$messageId/done', null);
+    await _api.postJson('/email/messages/$messageId/done$_mbq', null);
     messages.removeWhere((m) => m.id == messageId);
     notifyListeners();
     // Refresh counts/folders in the background.
     Future<void>.delayed(const Duration(seconds: 1), loadFolders);
   }
 
+  /// Soft delete — move the messages to Deleted Items.
+  Future<int> deleteMessages(List<String> ids) async {
+    final res = await _api.postJson('/email/messages/delete', {
+      'ids': ids,
+      if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+    });
+    messages.removeWhere((m) => ids.contains(m.id));
+    notifyListeners();
+    Future<void>.delayed(const Duration(seconds: 1), loadFolders);
+    return (res['deleted'] as num?)?.toInt() ?? ids.length;
+  }
+
+  /// Create a helpdesk ticket from the email (sender matched server-side).
+  Future<Map<String, dynamic>> createTicket(String messageId) =>
+      _api.postJson('/email/messages/$messageId/ticket', {
+        'provider': aiProvider,
+        if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+      });
+
+  /// Stream a short AI summary of the email (token/error/done events).
+  Stream<Map<String, dynamic>> streamSummary(String messageId) =>
+      _api.streamSse('/email/messages/$messageId/summarize', {
+        'provider': aiProvider,
+        if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+      });
+
   Future<void> send(Map<String, dynamic> payload) async {
+    if (currentMailbox.isNotEmpty) payload['mailbox'] = currentMailbox;
     await _api.postJson('/email/send', payload);
     _pollSuggestions();
     // Replied mail gets filed server-side a moment later.

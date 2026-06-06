@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:mime/mime.dart';
 import 'package:provider/provider.dart' hide Provider;
 
 import '../api/models.dart';
@@ -41,6 +45,13 @@ class ComposeScreen extends StatefulWidget {
   State<ComposeScreen> createState() => _ComposeScreenState();
 }
 
+class _PendingAttachment {
+  _PendingAttachment(this.name, this.mime, this.bytes);
+  final String name;
+  final String mime;
+  final Uint8List bytes;
+}
+
 class _ComposeScreenState extends State<ComposeScreen> {
   final _to = TextEditingController();
   final _body = TextEditingController();
@@ -49,6 +60,10 @@ class _ComposeScreenState extends State<ComposeScreen> {
   bool _sending = false;
   String? _status;
   StreamSubscription<Map<String, dynamic>>? _draftStream;
+
+  /// Outlook's message cap; the backend chunks big files via upload sessions.
+  static const _maxAttachTotal = 35 * 1024 * 1024;
+  final List<_PendingAttachment> _attachments = [];
 
   bool get _isReplyAll => widget.mode == 'replyAll';
   bool get _isForward => widget.mode == 'forward';
@@ -122,6 +137,43 @@ class _ComposeScreenState extends State<ComposeScreen> {
     }
   }
 
+  Future<void> _pickFiles({bool images = false}) async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: true,
+      type: images ? FileType.image : FileType.any,
+    );
+    if (result == null || !mounted) return;
+    for (final f in result.files) {
+      final bytes = f.bytes;
+      if (bytes == null) continue;
+      final total = _attachments.fold<int>(0, (s, a) => s + a.bytes.length);
+      if (total + bytes.length > _maxAttachTotal) {
+        _status = 'Skipped ${f.name} — attachments are capped at 35 MB total.';
+        continue;
+      }
+      _attachments.add(_PendingAttachment(
+        f.name,
+        lookupMimeType(f.name) ?? 'application/octet-stream',
+        bytes,
+      ));
+    }
+    setState(() {});
+  }
+
+  /// The backend now treats `body` as HTML (the web composer is rich text) —
+  /// escape and convert newlines so plain text survives the trip.
+  static String _textToHtml(String text) {
+    final esc = text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    return esc
+        .split('\n')
+        .map((l) => l.trim().isEmpty ? '<div><br></div>' : '<div>$l</div>')
+        .join();
+  }
+
   Future<void> _send() async {
     final store = context.read<EmailStore>();
     final body = _body.text.trim();
@@ -139,10 +191,23 @@ class _ComposeScreenState extends State<ComposeScreen> {
         });
         return;
       }
+      // Signature rides along as HTML below the message (the plain-text
+      // composer can't render it inline like the web's rich editor).
+      final sig = store.signature.trim();
       await store.send({
         'to': to,
         'cc': _ccFor(store.selfEmail),
-        'body': body,
+        'body': _textToHtml(body) +
+            (sig.isEmpty ? '' : '<div><br></div><div><br></div>$sig'),
+        if (_attachments.isNotEmpty)
+          'attachments': _attachments
+              .map((a) => {
+                    'name': a.name,
+                    'content_type': a.mime,
+                    'content_bytes': base64Encode(a.bytes),
+                    'is_inline': false,
+                  })
+              .toList(),
         'reply_to_message_id': widget.detail.summary.id,
         'action': _isForward
             ? 'forward'
@@ -255,6 +320,54 @@ class _ComposeScreenState extends State<ComposeScreen> {
                       : 'Write your reply…',
             ),
           ),
+          if (_attachments.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (var i = 0; i < _attachments.length; i++)
+                  Chip(
+                    backgroundColor: Palette.surface,
+                    side: const BorderSide(color: Palette.raised),
+                    label: Text(
+                      '${_attachments[i].name} · ${_fmtSize(_attachments[i].bytes.length)}',
+                      style:
+                          const TextStyle(color: Palette.fg, fontSize: 12),
+                    ),
+                    deleteIcon: const Icon(Icons.close,
+                        size: 15, color: Palette.muted),
+                    onDeleted: () =>
+                        setState(() => _attachments.removeAt(i)),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              TextButton.icon(
+                onPressed: _sending ? null : () => _pickFiles(),
+                icon: const Icon(Icons.attach_file,
+                    size: 15, color: Palette.muted),
+                label: const Text('Attach file',
+                    style: TextStyle(color: Palette.muted, fontSize: 12.5)),
+              ),
+              TextButton.icon(
+                onPressed: _sending ? null : () => _pickFiles(images: true),
+                icon: const Icon(Icons.image_outlined,
+                    size: 15, color: Palette.muted),
+                label: const Text('Photo',
+                    style: TextStyle(color: Palette.muted, fontSize: 12.5)),
+              ),
+            ],
+          ),
+          if (context.read<EmailStore>().signature.trim().isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text('Your signature is added automatically.',
+                  style: TextStyle(color: Palette.faint, fontSize: 11.5)),
+            ),
           if (_status != null) ...[
             const SizedBox(height: 8),
             Text(_status!,
@@ -268,5 +381,11 @@ class _ComposeScreenState extends State<ComposeScreen> {
         ],
       ),
     );
+  }
+
+  static String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
+    return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
   }
 }
