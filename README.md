@@ -14,6 +14,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Agent loop with native tools** — the model can call built-in tools (e.g. calendar management), inspect the result, and loop until it reaches a final answer; tool activity is surfaced live in the chat. Works with Ollama function-calling too
 - **MCP host** — connect third-party MCP tool servers (stdio or streamable HTTP) from Settings; their tools are offered to the model alongside native ones, namespaced per server (`server__tool`). Connection status and tool counts show live in Settings, and connect/error events land in the Logs window. The Docker image ships Node (`npx`) and uv (`uvx`), so common stdio servers work out of the box — package caches persist to the data volume
 - **Persistent memory** — durable facts and preferences are auto-extracted from conversations (and addable by hand) and injected into future chats, so the assistant improves over time. The **Memories** window lets you view, filter, edit, and delete them
+- **Semantic memory** — once the store outgrows the injection cap, memories are selected by relevance to your message (local Ollama embeddings, `nomic-embed-text` — pull it on your Ollama host), with the newest always included and a recency fallback if Ollama is down. The agent can also `search_memories` on demand
 - **Style learning for email drafts** — when you edit an AI-drafted reply before sending, the diff is analyzed and durable writing-style lessons (tone, length, sign-offs) are saved as `style` memories that steer every future draft — the AI converges on your voice
 - **Email (Microsoft 365)** — folders, message list with search, reading pane, flagged / replied-to indicators, attachment viewer, AI-drafted replies/forwards, and **AI auto-sort** that files low-priority mail into folders and flags what needs attention
 - **Email agent tools** — the chat agent can search, list, and read your mail ("what did Jo say about the invoice?") and prepare replies/forwards/new messages as **drafts in your Drafts folder** — sending always stays with you (there is deliberately no send tool)
@@ -34,7 +35,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 See [docs/Roadmap.md](docs/Roadmap.md) for the phased plan; headlines:
 
-- **Semantic memory** — memories are currently all injected (capped); relevance-based retrieval (Ollama embeddings) would scale to large stores
 - **Documents + RAG** — upload PDFs/docs into a searchable knowledge base the agent can pull from
 - **Multimodal chat** — paste images into chat (the model router already supports it; the composer doesn't yet)
 - **Scheduled agents + push** — user-defined recurring agent runs ("summarize overnight email at 7am") with mobile push notifications

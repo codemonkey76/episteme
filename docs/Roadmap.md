@@ -5,20 +5,15 @@ Phased plan toward a fully functional AI workspace. Phase 1 (email agent tools
 the previous one's infrastructure. Each gets a detailed design pass when picked
 up — this records the intent and the decisions already made.
 
-## Phase 2 — Embedding infra + semantic memory
+## Phase 2 — Embedding infra + semantic memory ✅ (shipped)
 
-Today every memory is injected into every chat, capped at the newest 50
-(`memory/mod.rs` `INJECT_LIMIT`) — facts silently fall off as the store grows.
-
-- **Embeddings: Ollama only** (decided). `nomic-embed-text` via
-  `POST {ollama}/api/embeddings`; new `integrations/embeddings.rs`.
-- Migration adds `embedding BLOB` to `memories`; embed on insert, detached
-  (same pattern as `memory::extract`).
-- `memory::inject()` becomes: embed the incoming user message, brute-force
-  cosine over the user's memories **in Rust** (fine to thousands of rows — no
-  sqlite-vec native extension), inject top-k plus the newest few. Keep the
-  newest-50 path as fallback when the embedding model is unreachable.
-- New `search_memories` agent tool so the model can pull on demand.
+Ollama-only embeddings (`nomic-embed-text`, overridable via the
+`embedding_model` settings key) in `integrations/embeddings.rs`; `embedding
+BLOB` on `memories` (f32 LE, brute-force cosine in Rust — no sqlite-vec);
+`memory::inject()` selects top-30 by relevance + newest 10 once the store
+exceeds 50, with recency fallback when Ollama is unreachable; lazy backfill
+embeds pre-existing rows; `search_memories` agent tool. Requires
+`ollama pull nomic-embed-text` on the Ollama host.
 
 ## Phase 3 — Documents + RAG
 

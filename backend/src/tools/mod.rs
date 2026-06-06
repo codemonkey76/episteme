@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub mod calendar;
 pub mod email;
 pub mod helpdesk;
+pub mod memories;
 pub mod notes;
 pub mod tasks;
 pub mod web;
@@ -24,6 +25,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(notes::schemas());
     all.extend(email::schemas());
     all.extend(web::schemas());
+    all.extend(memories::schemas());
     all.extend(helpdesk::schemas());
     all
 }
@@ -34,6 +36,7 @@ pub fn is_native(name: &str) -> bool {
         || notes::handles(name)
         || email::handles(name)
         || web::handles(name)
+        || memories::handles(name)
         || helpdesk::handles(name)
 }
 
@@ -45,6 +48,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("notes", notes::schemas()),
         ("email", email::schemas()),
         ("web", web::schemas()),
+        ("memory", memories::schemas()),
         ("helpdesk", helpdesk::schemas()),
     ]
 }
@@ -78,6 +82,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     }
     if web::handles(name) {
         return web::execute(state, user_id, name, args).await;
+    }
+    if memories::handles(name) {
+        return memories::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;

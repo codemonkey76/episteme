@@ -57,8 +57,9 @@ pub async fn run_turn(
         })
         .unwrap_or_default();
 
-    // Prepend stored memories so the model has cross-session context.
-    crate::memory::inject(&mut history, &state.db, &user_id).await;
+    // Prepend stored memories so the model has cross-session context —
+    // relevance-selected against the latest user message once the store is big.
+    crate::memory::inject(&mut history, &state, &user_id, &user_text).await;
     // Then the tool/date preamble at the very front.
     history.insert(0, crate::tools::system_preamble(&state, &user_id).await);
 

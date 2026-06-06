@@ -53,6 +53,7 @@ pub async fn create(
         db::memories::insert(&state.db, &user.id, &body.content, category, "manual", None)
         .await
         .map_err(AppError::Internal)?;
+    crate::memory::embed_detached(&state, memory.id.clone(), memory.content.clone());
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "memory": memory }))))
 }
 
@@ -72,6 +73,7 @@ pub async fn update(
     db::memories::update(&state.db, &user.id, &id, &body.content, &body.category)
         .await
         .map_err(AppError::Internal)?;
+    crate::memory::embed_detached(&state, id, body.content);
     Ok(StatusCode::NO_CONTENT)
 }
 

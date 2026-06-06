@@ -13,6 +13,11 @@ pub struct Memory {
     pub session_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Little-endian f32 embedding blob; None = not yet embedded. Never
+    /// serialized to the UI/API.
+    #[serde(skip)]
+    #[sqlx(default)]
+    pub embedding: Option<Vec<u8>>,
 }
 
 pub async fn insert(
@@ -48,6 +53,7 @@ pub async fn insert(
         session_id: session_id.map(str::to_string),
         created_at: now.clone(),
         updated_at: now,
+        embedding: None,
     })
 }
 
@@ -61,7 +67,7 @@ pub async fn list(
     limit: i64,
 ) -> Result<Vec<Memory>> {
     let mut sql = String::from(
-        "SELECT id, content, category, source, session_id, created_at, updated_at
+        "SELECT id, content, category, source, session_id, created_at, updated_at, embedding
          FROM memories WHERE user_id = ?",
     );
     if category.is_some() { sql.push_str(" AND category = ?"); }
@@ -90,8 +96,10 @@ pub async fn update(
     category: &str,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
+    // Content changed → embedding is stale; NULL it so backfill re-embeds.
     sqlx::query(
-        "UPDATE memories SET content = ?, category = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+        "UPDATE memories SET content = ?, category = ?, updated_at = ?, embedding = NULL
+         WHERE id = ? AND user_id = ?",
     )
     .bind(content)
     .bind(category)
@@ -101,6 +109,29 @@ pub async fn update(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Store (or refresh) a row's embedding blob.
+pub async fn set_embedding(pool: &SqlitePool, id: &str, blob: &[u8]) -> Result<()> {
+    sqlx::query("UPDATE memories SET embedding = ? WHERE id = ?")
+        .bind(blob)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Rows still missing an embedding, oldest first (for lazy backfill).
+pub async fn missing_embeddings(pool: &SqlitePool, user_id: &str, limit: i64) -> Result<Vec<Memory>> {
+    Ok(sqlx::query_as::<_, Memory>(
+        "SELECT id, content, category, source, session_id, created_at, updated_at, embedding
+         FROM memories WHERE user_id = ? AND embedding IS NULL
+         ORDER BY created_at ASC LIMIT ?",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
 }
 
 pub async fn delete(pool: &SqlitePool, user_id: &str, id: &str) -> Result<()> {

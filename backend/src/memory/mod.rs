@@ -8,37 +8,164 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::db;
 use crate::db::logs::LogEntry;
+use crate::integrations::embeddings;
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::state::AppState;
 
-/// Cap on memories injected into a turn's context.
+/// Cap on memories injected into a turn's context (also the recency fallback
+/// when embeddings are unavailable).
 const INJECT_LIMIT: i64 = 50;
 /// Recent memories considered when deduping a freshly-extracted one.
 const DEDUP_LIMIT: i64 = 200;
+/// Candidate pool scored per turn for semantic selection.
+const SEMANTIC_POOL: i64 = 1000;
+/// Relevance-ranked memories injected when the store outgrows INJECT_LIMIT.
+const SEMANTIC_TOP_K: usize = 30;
+/// Newest memories always injected regardless of relevance score.
+const RECENT_ALWAYS: usize = 10;
+/// Embedding rows backfilled per turn (detached).
+const BACKFILL_BATCH: i64 = 20;
+/// A chat turn never waits longer than this on the query embedding.
+const EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 const VALID_CATEGORIES: [&str; 6] = ["preference", "fact", "feedback", "project", "style", "other"];
 
-/// Prepend a system message listing stored memories, if any exist.
-pub async fn inject(history: &mut Vec<ChatMessage>, pool: &SqlitePool, user_id: &str) {
-    let memories = match db::memories::list_recent(pool, user_id, INJECT_LIMIT).await {
+/// Prepend a system message of stored memories, if any exist.
+///
+/// While the store fits in [`INJECT_LIMIT`] everything is injected (newest
+/// first). Beyond that, the incoming user message is embedded and memories are
+/// chosen by cosine relevance ([`SEMANTIC_TOP_K`]) plus the newest
+/// [`RECENT_ALWAYS`]; if the embedding call fails (Ollama down, model missing)
+/// it falls back to the old newest-[`INJECT_LIMIT`] behavior.
+pub async fn inject(history: &mut Vec<ChatMessage>, state: &AppState, user_id: &str, user_text: &str) {
+    let pool = &state.db;
+    let memories = match db::memories::list_recent(pool, user_id, SEMANTIC_POOL).await {
         Ok(m) if !m.is_empty() => m,
         _ => return,
+    };
+
+    // Keep embeddings flowing in even on the small-store path, so the switch
+    // to semantic selection is seamless when the store grows past the cap.
+    spawn_backfill(state, user_id);
+
+    let selected: Vec<&db::memories::Memory> = if memories.len() as i64 <= INJECT_LIMIT {
+        memories.iter().collect()
+    } else {
+        match semantic_select(state, user_text, &memories).await {
+            Some(s) => s,
+            None => memories.iter().take(INJECT_LIMIT as usize).collect(),
+        }
     };
 
     let mut text = crate::prompts::get(pool, "memory_inject").await;
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    for m in &memories {
+    for m in &selected {
         text.push_str(&format!("- [{}] {}\n", m.category, m.content));
     }
 
     history.insert(0, ChatMessage { role: "system".to_string(), content: Value::String(text) });
+}
+
+/// Relevance selection: top-k by cosine against the query embedding, unioned
+/// with the newest few. Returns None when the query can't be embedded so the
+/// caller falls back to recency. Output preserves newest-first order.
+async fn semantic_select<'a>(
+    state: &AppState,
+    user_text: &str,
+    memories: &'a [db::memories::Memory],
+) -> Option<Vec<&'a db::memories::Memory>> {
+    if user_text.trim().is_empty() {
+        return None;
+    }
+    let query = tokio::time::timeout(
+        EMBED_TIMEOUT,
+        embeddings::embed(&state.db, &state.http_client, user_text),
+    )
+    .await
+    .ok()?
+    .map_err(|e| tracing::warn!("memory query embedding failed, falling back to recency: {e}"))
+    .ok()?;
+
+    let mut scored: Vec<(usize, f32)> = memories
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let blob = m.embedding.as_deref()?;
+            Some((i, embeddings::cosine(&query, &embeddings::from_blob(blob))))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    let mut keep: Vec<bool> = vec![false; memories.len()];
+    for (i, _) in scored.iter().take(SEMANTIC_TOP_K) {
+        keep[*i] = true;
+    }
+    // memories is newest-first, so the first RECENT_ALWAYS are the newest.
+    for k in keep.iter_mut().take(RECENT_ALWAYS) {
+        *k = true;
+    }
+    Some(memories.iter().zip(keep).filter(|(_, k)| *k).map(|(m, _)| m).collect())
+}
+
+/// Embed `content` and store it on the memory row, detached — used after
+/// inserts/updates so saves never wait on Ollama.
+pub fn embed_detached(state: &AppState, memory_id: String, content: String) {
+    let pool = state.db.clone();
+    let client = state.http_client.clone();
+    tokio::spawn(async move {
+        match embeddings::embed(&pool, &client, &content).await {
+            Ok(vec) => {
+                if let Err(e) =
+                    db::memories::set_embedding(&pool, &memory_id, &embeddings::to_blob(&vec)).await
+                {
+                    tracing::warn!("failed to store memory embedding: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("memory embedding failed (will backfill later): {e}"),
+        }
+    });
+}
+
+/// One backfill worker at a time across all users — embeds a small batch of
+/// rows whose embedding is NULL (pre-existing memories, failed embeds, edits).
+static BACKFILL_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn spawn_backfill(state: &AppState, user_id: &str) {
+    use std::sync::atomic::Ordering;
+    if BACKFILL_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let pool = state.db.clone();
+    let client = state.http_client.clone();
+    let user_id = user_id.to_string();
+    tokio::spawn(async move {
+        let rows = db::memories::missing_embeddings(&pool, &user_id, BACKFILL_BATCH)
+            .await
+            .unwrap_or_default();
+        for m in rows {
+            match embeddings::embed(&pool, &client, &m.content).await {
+                Ok(vec) => {
+                    if let Err(e) =
+                        db::memories::set_embedding(&pool, &m.id, &embeddings::to_blob(&vec)).await
+                    {
+                        tracing::warn!("backfill: failed to store embedding: {e}");
+                    }
+                }
+                Err(e) => {
+                    // Ollama unreachable — stop the batch, try again next turn.
+                    tracing::warn!("backfill: embedding failed, stopping batch: {e}");
+                    break;
+                }
+            }
+        }
+        BACKFILL_RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,7 +248,10 @@ async fn save_extracted(
         };
 
         match db::memories::insert(&state.db, user_id, content, &category, "auto", session_id).await {
-            Ok(_) => log_event(state, format!("Remembered [{category}]: {content}")),
+            Ok(m) => {
+                embed_detached(state, m.id, m.content);
+                log_event(state, format!("Remembered [{category}]: {content}"));
+            }
             Err(e) => tracing::warn!("failed to save memory: {e}"),
         }
     }
