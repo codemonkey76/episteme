@@ -50,5 +50,8 @@ jobs:
           appId: ${{ secrets.FIREBASE_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           file: mobile/build/app/outputs/flutter-apk/app-release.apk
-          testers: codemonkey076@gmail.com
+          # Group alias from Firebase console → App Distribution → Testers &
+          # Groups (shown under the group name) — members manage themselves
+          # there, no workflow edits needed to add a device.
+          groups: testers
           releaseNotes: ${{ github.event.head_commit.message }}
