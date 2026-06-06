@@ -10,7 +10,10 @@ import 'package:html/dom.dart' as dom;
 /// container. Strategy:
 ///  - drop inline backgrounds that clash with the card (dark ones in light
 ///    mode, light ones in dark mode);
-///  - flip inline text colours that would vanish against the card.
+///  - re-light inline text colours that would vanish against the card,
+///    preserving their hue (dark red → light red) so intentional colour
+///    survives readably;
+///  - give links an explicit palette colour.
 /// Colours we can't parse (gradients, images, var()) are left alone.
 Map<String, String>? emailStyleOverrides(dom.Element e, {required bool dark}) {
   final out = <String, String>{};
@@ -19,20 +22,47 @@ Map<String, String>? emailStyleOverrides(dom.Element e, {required bool dark}) {
   final bg = _cssValue(style, 'background-color') ??
       _cssValue(style, 'background') ??
       e.attributes['bgcolor'];
-  final bgLum = _luminance(bg);
-  if (bgLum != null && (dark ? bgLum > 0.45 : bgLum < 0.45)) {
-    out['background'] = 'none';
-    out['background-color'] = 'transparent';
+  final bgRgb = parseCssColor(bg);
+  if (bgRgb != null) {
+    final bgLum = _luminance(bgRgb);
+    if (dark ? bgLum > 0.45 : bgLum < 0.45) {
+      out['background'] = 'none';
+      out['background-color'] = 'transparent';
+    }
   }
 
   final color = _cssValue(style, 'color') ?? e.attributes['color'];
-  final cLum = _luminance(color);
-  if (cLum != null) {
-    if (dark && cLum < 0.35) out['color'] = '#dedede';
-    if (!dark && cLum > 0.75) out['color'] = '#1a1a1a';
+  final adjusted = readableColor(color, dark: dark);
+  if (adjusted != null) {
+    out['color'] = adjusted;
+  }
+
+  // Links: the renderer's default can sit poorly on either card; pin a
+  // readable palette colour unless the email's own colour already reads fine.
+  if (e.localName == 'a' && !out.containsKey('color')) {
+    if (parseCssColor(color) == null) {
+      out['color'] = dark ? '#7ab0ff' : '#1a5fb4';
+    }
   }
 
   return out.isEmpty ? null : out;
+}
+
+/// If `raw` would be hard to read on the current card, return a hue-preserving
+/// readable replacement (CSS hex); null = leave the colour alone.
+String? readableColor(String? raw, {required bool dark}) {
+  final rgb = parseCssColor(raw);
+  if (rgb == null) return null;
+  final lum = _luminance(rgb);
+  // Card luminances: dark #212121 ≈ 0.13, light white = 1.0. Anything within
+  // ~0.42 of the card is low-contrast and gets re-lit.
+  if (dark && lum < 0.55) {
+    return _toHex(_withLightness(rgb, 0.78));
+  }
+  if (!dark && lum > 0.62) {
+    return _toHex(_withLightness(rgb, 0.30));
+  }
+  return null;
 }
 
 /// Last declaration of `prop` in an inline style string, or null.
@@ -42,46 +72,179 @@ String? _cssValue(String style, String prop) {
   return matches.isEmpty ? null : matches.last.group(1)!.trim();
 }
 
-/// Perceived luminance (0–1) of a CSS colour, or null when unparseable /
-/// fully transparent.
-double? _luminance(String? raw) {
+/// CSS named colours that show up in real email HTML. Transparent-ish keywords
+/// are deliberately absent (parse to null → left alone).
+const _named = <String, (int, int, int)>{
+  'black': (0, 0, 0),
+  'white': (255, 255, 255),
+  'red': (255, 0, 0),
+  'green': (0, 128, 0),
+  'blue': (0, 0, 255),
+  'navy': (0, 0, 128),
+  'darkblue': (0, 0, 139),
+  'royalblue': (65, 105, 225),
+  'teal': (0, 128, 128),
+  'purple': (128, 0, 128),
+  'maroon': (128, 0, 0),
+  'darkred': (139, 0, 0),
+  'crimson': (220, 20, 60),
+  'orange': (255, 165, 0),
+  'gold': (255, 215, 0),
+  'yellow': (255, 255, 0),
+  'olive': (128, 128, 0),
+  'darkgreen': (0, 100, 0),
+  'forestgreen': (34, 139, 34),
+  'gray': (128, 128, 128),
+  'grey': (128, 128, 128),
+  'darkgray': (169, 169, 169),
+  'darkgrey': (169, 169, 169),
+  'dimgray': (105, 105, 105),
+  'dimgrey': (105, 105, 105),
+  'lightgray': (211, 211, 211),
+  'lightgrey': (211, 211, 211),
+  'silver': (192, 192, 192),
+  'gainsboro': (220, 220, 220),
+  'whitesmoke': (245, 245, 245),
+  'ivory': (255, 255, 240),
+  'brown': (165, 42, 42),
+};
+
+/// Parse a CSS colour into (r, g, b) 0–255, or null when unparseable or fully
+/// transparent. Handles #rgb/#rgba/#rrggbb/#rrggbbaa, rgb()/rgba() with
+/// numbers or percentages, hsl()/hsla(), and common named colours.
+(int, int, int)? parseCssColor(String? raw) {
   if (raw == null) return null;
   var v = raw.replaceAll('!important', '').trim().toLowerCase();
+  if (v.isEmpty) return null;
+
+  final named = _named[v];
+  if (named != null) return named;
   switch (v) {
-    case 'white':
-      return 1;
-    case 'black':
-      return 0;
     case 'transparent':
     case 'inherit':
     case 'initial':
     case 'unset':
+    case 'currentcolor':
     case 'none':
       return null;
   }
-  final hex = RegExp(r'^#([0-9a-f]{3}|[0-9a-f]{6})$').firstMatch(v);
+
+  final hex =
+      RegExp(r'^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$').firstMatch(v);
   if (hex != null) {
     var h = hex.group(1)!;
-    if (h.length == 3) h = h.split('').map((c) => '$c$c').join();
-    final r = int.parse(h.substring(0, 2), radix: 16);
-    final g = int.parse(h.substring(2, 4), radix: 16);
-    final b = int.parse(h.substring(4, 6), radix: 16);
-    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    if (h.length <= 4) h = h.split('').map((c) => '$c$c').join();
+    if (h.length == 8) {
+      final a = int.parse(h.substring(6, 8), radix: 16);
+      if (a == 0) return null; // fully transparent
+      h = h.substring(0, 6);
+    }
+    return (
+      int.parse(h.substring(0, 2), radix: 16),
+      int.parse(h.substring(2, 4), radix: 16),
+      int.parse(h.substring(4, 6), radix: 16),
+    );
   }
+
   final rgb = RegExp(r'^rgba?\(([^)]+)\)$').firstMatch(v);
   if (rgb != null) {
-    final parts = rgb
-        .group(1)!
-        .split(',')
-        .map((p) => double.tryParse(p.trim()))
-        .toList();
-    if (parts.length >= 3 &&
-        parts[0] != null &&
-        parts[1] != null &&
-        parts[2] != null) {
-      if (parts.length == 4 && (parts[3] ?? 1) == 0) return null;
-      return (0.299 * parts[0]! + 0.587 * parts[1]! + 0.114 * parts[2]!) / 255;
+    final parts = rgb.group(1)!.split(RegExp(r'[,/\s]+')).where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3) return null;
+    double? channel(String p) {
+      if (p.endsWith('%')) {
+        final pct = double.tryParse(p.substring(0, p.length - 1));
+        return pct == null ? null : pct * 2.55;
+      }
+      return double.tryParse(p);
     }
+
+    final r = channel(parts[0]);
+    final g = channel(parts[1]);
+    final b = channel(parts[2]);
+    if (r == null || g == null || b == null) return null;
+    if (parts.length >= 4) {
+      final a = parts[3].endsWith('%')
+          ? (double.tryParse(parts[3].substring(0, parts[3].length - 1)) ?? 100) / 100
+          : double.tryParse(parts[3]) ?? 1;
+      if (a == 0) return null;
+    }
+    return (r.round().clamp(0, 255), g.round().clamp(0, 255), b.round().clamp(0, 255));
   }
+
+  final hsl = RegExp(r'^hsla?\(([^)]+)\)$').firstMatch(v);
+  if (hsl != null) {
+    final parts = hsl.group(1)!.split(RegExp(r'[,/\s]+')).where((p) => p.isNotEmpty).toList();
+    if (parts.length < 3) return null;
+    final h = double.tryParse(parts[0].replaceAll('deg', ''));
+    final s = double.tryParse(parts[1].replaceAll('%', ''));
+    final l = double.tryParse(parts[2].replaceAll('%', ''));
+    if (h == null || s == null || l == null) return null;
+    if (parts.length >= 4) {
+      final a = parts[3].endsWith('%')
+          ? (double.tryParse(parts[3].substring(0, parts[3].length - 1)) ?? 100) / 100
+          : double.tryParse(parts[3]) ?? 1;
+      if (a == 0) return null;
+    }
+    return _hslToRgb(h % 360, (s / 100).clamp(0.0, 1.0), (l / 100).clamp(0.0, 1.0));
+  }
+
   return null;
 }
+
+/// Perceived luminance (0–1).
+double _luminance((int, int, int) rgb) =>
+    (0.299 * rgb.$1 + 0.587 * rgb.$2 + 0.114 * rgb.$3) / 255;
+
+/// Same hue/saturation, new lightness — the "re-light" operation.
+(int, int, int) _withLightness((int, int, int) rgb, double lightness) {
+  final (h, s, _) = _rgbToHsl(rgb);
+  return _hslToRgb(h, s, lightness);
+}
+
+(double, double, double) _rgbToHsl((int, int, int) rgb) {
+  final r = rgb.$1 / 255, g = rgb.$2 / 255, b = rgb.$3 / 255;
+  final maxC = [r, g, b].reduce((a, c) => a > c ? a : c);
+  final minC = [r, g, b].reduce((a, c) => a < c ? a : c);
+  final l = (maxC + minC) / 2;
+  if (maxC == minC) return (0, 0, l);
+  final d = maxC - minC;
+  final s = l > 0.5 ? d / (2 - maxC - minC) : d / (maxC + minC);
+  double h;
+  if (maxC == r) {
+    h = (g - b) / d + (g < b ? 6 : 0);
+  } else if (maxC == g) {
+    h = (b - r) / d + 2;
+  } else {
+    h = (r - g) / d + 4;
+  }
+  return (h * 60, s, l);
+}
+
+(int, int, int) _hslToRgb(double h, double s, double l) {
+  if (s == 0) {
+    final v = (l * 255).round().clamp(0, 255);
+    return (v, v, v);
+  }
+  final q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  final p = 2 * l - q;
+  double hue(double t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  }
+
+  final hh = h / 360;
+  return (
+    (hue(hh + 1 / 3) * 255).round().clamp(0, 255),
+    (hue(hh) * 255).round().clamp(0, 255),
+    (hue(hh - 1 / 3) * 255).round().clamp(0, 255),
+  );
+}
+
+String _toHex((int, int, int) rgb) =>
+    '#${rgb.$1.toRadixString(16).padLeft(2, '0')}'
+    '${rgb.$2.toRadixString(16).padLeft(2, '0')}'
+    '${rgb.$3.toRadixString(16).padLeft(2, '0')}';
