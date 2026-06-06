@@ -24,16 +24,14 @@ boundaries; chunks embedded detached with live indexing status; cosine top-k
 `search_documents` tool with substring fallback; Documents window
 (upload/drag-drop/delete) in the web UI. Mobile tab still to come.
 
-## Phase 4 — Multimodal chat input
+## Phase 4 — Multimodal chat input ✅ (shipped)
 
-The model router **already supports** image content
-(`{type:"multimodal", text, images:[{mime,b64}]}` — `model_router/mod.rs`);
-only the chat route and composers don't accept it.
-
-- Extend `ChatRequest` (`routes/chat.rs`) to take the multimodal shape.
-- Web: image paste/drop in the chat composer (`views/Chat.vue`), reusing
-  `RichTextEditor.vue`'s paste/FileReader logic.
-- Mobile: wire the already-present `file_picker` into the chat tab.
+`ChatRequest` accepts `images: [{mime, b64}]` (max 4 × 6 MB, 40 MB body
+limit on the chat route); stored as the `{type:"multimodal"}` shape the model
+router already handled. Web composer: paste/drop with pending thumbnails and
+image rendering in history; queued messages carry their images. Mobile: attach
+button (file_picker), preview strip, image bubbles. Memory extraction and
+semantic injection read only the text part of multimodal messages.
 
 ## Phase 5 — Conversation search
 

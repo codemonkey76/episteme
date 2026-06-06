@@ -49,7 +49,11 @@ pub fn router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
         .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/auth/stop-impersonating", post(auth::stop_impersonating))
-        .route("/api/sessions/:id/chat", post(chat::stream))
+        .route(
+            "/api/sessions/:id/chat",
+            // Multimodal messages carry base64 images (4 × 8 MB b64 max).
+            post(chat::stream).layer(axum::extract::DefaultBodyLimit::max(40 * 1024 * 1024)),
+        )
         .route("/api/sessions", get(sessions::list))
         .route("/api/sessions", post(sessions::create))
         .route("/api/sessions/:id", get(sessions::get))

@@ -53,6 +53,11 @@ pub async fn run_turn(
         .find(|m| m.role == "user")
         .map(|m| match &m.content {
             Value::String(s) => s.clone(),
+            // Multimodal: only the text matters for memory/relevance — the
+            // base64 image payload would drown it.
+            other if other.get("type").and_then(Value::as_str) == Some("multimodal") => {
+                other.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+            }
             other => other.to_string(),
         })
         .unwrap_or_default();

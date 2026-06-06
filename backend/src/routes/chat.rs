@@ -23,7 +23,22 @@ use crate::state::AppState;
 pub struct ChatRequest {
     pub message: String,
     pub provider: String,
+    /// Optional pasted/attached images for vision-capable models.
+    #[serde(default)]
+    pub images: Vec<ImageUpload>,
 }
+
+#[derive(Deserialize)]
+pub struct ImageUpload {
+    pub mime: String,
+    /// Raw image bytes, base64-encoded (no `data:` prefix).
+    pub b64: String,
+}
+
+/// Keep a turn's image payload sane: most vision models take a handful of
+/// images; oversized payloads just burn context and upload time.
+const MAX_IMAGES: usize = 4;
+const MAX_IMAGE_B64: usize = 8 * 1024 * 1024; // ~6 MB raw per image
 
 pub async fn stream(
     State(state): State<Arc<AppState>>,
@@ -36,16 +51,28 @@ pub async fn stream(
         .await
         .map_err(AppError::Internal)?
         .ok_or(AppError::NotFound)?;
-    db::messages::insert(
-        &state.db,
-        &session_id,
-        "user",
-        &serde_json::to_string(&req.message).unwrap(),
-        None,
-        None,
-    )
-    .await
-    .map_err(AppError::Internal)?;
+    if req.images.len() > MAX_IMAGES {
+        return Err(AppError::BadRequest(format!("at most {MAX_IMAGES} images per message")));
+    }
+    if req.images.iter().any(|i| i.b64.len() > MAX_IMAGE_B64) {
+        return Err(AppError::BadRequest("image exceeds the 6 MB limit".into()));
+    }
+
+    // Plain text stays a JSON string (the common case); attached images switch
+    // the stored content to the multimodal shape the model router understands.
+    let content = if req.images.is_empty() {
+        serde_json::to_string(&req.message).unwrap()
+    } else {
+        serde_json::json!({
+            "type": "multimodal",
+            "text": req.message,
+            "images": req.images.iter().map(|i| serde_json::json!({ "mime": i.mime, "b64": i.b64 })).collect::<Vec<_>>(),
+        })
+        .to_string()
+    };
+    db::messages::insert(&state.db, &session_id, "user", &content, None, None)
+        .await
+        .map_err(AppError::Internal)?;
 
     db::sessions::touch(&state.db, &session_id)
         .await

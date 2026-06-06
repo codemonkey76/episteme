@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 class Task {
   Task({
@@ -142,6 +143,21 @@ class ChatMessage {
       if (v is Map && v['type'] == 'multimodal') return v['text'] as String? ?? '';
     } catch (_) {}
     return content;
+  }
+
+  /// Decoded image bytes of a multimodal user message (empty otherwise).
+  List<Uint8List> get displayImages {
+    try {
+      final v = jsonDecode(content);
+      if (v is Map && v['type'] == 'multimodal' && v['images'] is List) {
+        return (v['images'] as List)
+            .map((i) => (i is Map ? i['b64'] : null) as String?)
+            .whereType<String>()
+            .map(base64Decode)
+            .toList();
+      }
+    } catch (_) {}
+    return const [];
   }
 
   /// For role `tool_call`: tool names — live chips hold a plain name, DB rows

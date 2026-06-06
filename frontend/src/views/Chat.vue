@@ -73,28 +73,69 @@ onMounted(async () => {
 
 // Messages typed while a reply is streaming wait here and auto-send in
 // order when the turn finishes.
-const queued = ref<string[]>([])
+interface QueuedMessage { text: string; images: api.ChatImage[] }
+const queued = ref<QueuedMessage[]>([])
 
 watch(sending, (now) => {
   if (!now && queued.value.length > 0) {
     const next = queued.value.shift()!
     // Next tick so the finished turn's UI settles before the new one starts.
-    nextTick(() => sendText(next))
+    nextTick(() => sendText(next.text, next.images))
   }
 })
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || !store.activeSession) return
-  input.value = ''
-  if (sending.value) {
-    queued.value.push(text)
-    return
+// ── Image attachments (paste / drop) ─────────────────────────────────────────
+const MAX_IMAGES = 4
+const pendingImages = ref<api.ChatImage[]>([])
+
+function addImageFiles(files: File[]) {
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue
+    if (pendingImages.value.length >= MAX_IMAGES) {
+      error.value = `At most ${MAX_IMAGES} images per message`
+      break
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      pendingImages.value.push({ mime: file.type, b64: result.slice(result.indexOf(',') + 1) })
+    }
+    reader.readAsDataURL(file)
   }
-  await sendText(text)
 }
 
-async function sendText(text: string) {
+function onPaste(e: ClipboardEvent) {
+  const files = Array.from(e.clipboardData?.items ?? [])
+    .filter(i => i.kind === 'file' && i.type.startsWith('image/'))
+    .map(i => i.getAsFile())
+    .filter((f): f is File => f !== null)
+  if (files.length > 0) {
+    e.preventDefault()
+    addImageFiles(files)
+  }
+}
+
+function onDrop(e: DragEvent) {
+  if (e.dataTransfer?.files?.length) {
+    e.preventDefault()
+    addImageFiles(Array.from(e.dataTransfer.files))
+  }
+}
+
+async function send() {
+  const text = input.value.trim()
+  const images = pendingImages.value
+  if ((!text && images.length === 0) || !store.activeSession) return
+  input.value = ''
+  pendingImages.value = []
+  if (sending.value) {
+    queued.value.push({ text, images })
+    return
+  }
+  await sendText(text, images)
+}
+
+async function sendText(text: string, images: api.ChatImage[] = []) {
   if (sending.value || !store.activeSession) return
   let calendarTouched = false
   let tasksTouched = false
@@ -106,7 +147,11 @@ async function sendText(text: string) {
     id: crypto.randomUUID(),
     session_id: store.activeSession.id,
     role: 'user',
-    content: text,
+    // Mirror the DB shape so displayContent/displayImages handle both live
+    // and reloaded messages identically.
+    content: images.length
+      ? JSON.stringify({ type: 'multimodal', text, images })
+      : text,
     created_at: new Date().toISOString(),
   })
   await scrollToBottom()
@@ -149,6 +194,7 @@ async function sendText(text: string) {
         if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
       },
       abortController.signal,
+      images,
     )
   } catch (e) {
     if (e instanceof Error && e.name !== 'AbortError') {
@@ -184,6 +230,17 @@ function displayContent(c: string): string {
     if (v && typeof v === 'object' && v.type === 'multimodal') return v.text ?? ''
   } catch { /* plain text */ }
   return c
+}
+
+/// Data URIs for a multimodal user message's images (empty for plain text).
+function displayImages(c: string): string[] {
+  try {
+    const v = JSON.parse(c)
+    if (v && typeof v === 'object' && v.type === 'multimodal' && Array.isArray(v.images)) {
+      return v.images.map((i: api.ChatImage) => `data:${i.mime};base64,${i.b64}`)
+    }
+  } catch { /* plain text */ }
+  return []
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -251,10 +308,17 @@ function toolCallLabels(content: string): string[] {
             class="md-body bg-surface py-[0.6rem] px-[0.8rem] rounded-lg text-[0.9rem] leading-[1.5] break-words"
             v-html="renderMarkdown(displayContent(msg.content))"
           />
-          <pre
-            v-else
-            :class="['whitespace-pre-wrap font-[inherit] text-[0.9rem]', msg.role === 'user' ? 'bg-[var(--c-1e2a3a)] py-[0.6rem] px-[0.8rem] rounded-lg' : '']"
-          >{{ displayContent(msg.content) }}</pre>
+          <div v-else :class="['flex flex-col gap-1.5', msg.role === 'user' ? 'bg-[var(--c-1e2a3a)] py-[0.6rem] px-[0.8rem] rounded-lg' : '']">
+            <div v-if="displayImages(msg.content).length" class="flex flex-wrap gap-1.5">
+              <img
+                v-for="(src, i) in displayImages(msg.content)"
+                :key="i"
+                :src="src"
+                class="max-w-[14rem] max-h-[14rem] rounded border border-[var(--c-2a3a4e)] object-contain"
+              />
+            </div>
+            <pre v-if="displayContent(msg.content)" class="whitespace-pre-wrap font-[inherit] text-[0.9rem]">{{ displayContent(msg.content) }}</pre>
+          </div>
         </div>
       </template>
 
@@ -286,11 +350,23 @@ function toolCallLabels(content: string): string[] {
         :key="i"
         class="inline-flex items-center gap-1.5 bg-[var(--c-16202e)] border border-[var(--c-24344a)] text-[var(--c-9ab4d4)] rounded-full px-2.5 py-[0.2rem] text-[0.75rem] max-w-[18rem]"
       >
-        <span class="truncate">{{ q }}</span>
+        <span class="truncate">{{ q.text || '(image)' }}{{ q.images.length ? ` 🖼×${q.images.length}` : '' }}</span>
         <button class="bg-none border-none cursor-pointer text-[var(--c-587098)] hover:text-[var(--c-9ab4d4)] p-0 leading-none" title="Remove from queue" @click="queued.splice(i, 1)">✕</button>
       </span>
     </div>
-    <div class="flex gap-2 p-3 border-t border-raised items-end">
+    <!-- Pending image attachments -->
+    <div v-if="pendingImages.length" class="flex flex-wrap gap-2 px-3 pt-2 items-center">
+      <div v-for="(img, i) in pendingImages" :key="i" class="relative group">
+        <img :src="`data:${img.mime};base64,${img.b64}`" class="w-14 h-14 object-cover rounded border border-raised" />
+        <button
+          class="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] text-[0.6rem] leading-none cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Remove image"
+          @click="pendingImages.splice(i, 1)"
+        >✕</button>
+      </div>
+      <span class="text-[0.7rem] text-[var(--c-585858)]">attached — sent with your next message</span>
+    </div>
+    <div class="flex gap-2 p-3 border-t border-raised items-end" @drop="onDrop" @dragover.prevent>
       <button class="bg-surface text-[var(--c-5a8adf)] border border-raised rounded-md py-2 px-[0.6rem] cursor-pointer flex items-center flex-shrink-0 transition-colors duration-100 hover:not-disabled:bg-[var(--c-222222)] hover:not-disabled:text-[var(--c-7ab0ff)] disabled:opacity-40" title="New chat" :disabled="sending" @click="newSession">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -310,12 +386,13 @@ function toolCallLabels(content: string): string[] {
       <textarea
         v-model="input"
         @keydown="onKeydown"
-        :placeholder="sending ? 'Type away — Enter queues it for when the reply finishes…' : 'Message… (Enter to send, Shift+Enter for newline)'"
+        @paste="onPaste"
+        :placeholder="sending ? 'Type away — Enter queues it for when the reply finishes…' : 'Message… (Enter to send, Shift+Enter for newline, paste images)'"
         rows="3"
         class="flex-1 bg-surface text-[inherit] border border-raised rounded-md p-2 font-[inherit] text-[0.9rem] resize-none"
       />
       <div class="flex flex-col gap-1">
-        <button @click="send" :disabled="sending || !input.trim()" class="bg-[var(--c-2a4a7a)] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Send</button>
+        <button @click="send" :disabled="sending || (!input.trim() && pendingImages.length === 0)" class="bg-[var(--c-2a4a7a)] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Send</button>
         <button v-if="sending" @click="cancel" class="bg-[var(--c-5a2a2a)] text-fg border-none rounded-md py-2 px-4 cursor-pointer whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Stop</button>
       </div>
     </div>

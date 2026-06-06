@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:provider/provider.dart' hide Provider;
@@ -35,6 +39,29 @@ class _ChatTabState extends State<ChatTab> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
 
+  static const _maxImages = 4;
+  /// Pending attachments: `{mime, b64}` maps the backend accepts directly.
+  final List<Map<String, String>> _pendingImages = [];
+
+  Future<void> _pickImages() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: true,
+    );
+    if (result == null) return;
+    setState(() {
+      for (final f in result.files) {
+        if (_pendingImages.length >= _maxImages) break;
+        final bytes = f.bytes;
+        if (bytes == null) continue;
+        final ext = (f.extension ?? 'png').toLowerCase();
+        final mime = ext == 'jpg' ? 'image/jpeg' : 'image/$ext';
+        _pendingImages.add({'mime': mime, 'b64': base64Encode(bytes)});
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -54,9 +81,11 @@ class _ChatTabState extends State<ChatTab> {
   Future<void> _send() async {
     final store = context.read<ChatStore>();
     final text = _input.text.trim();
-    if (text.isEmpty || store.sending) return;
+    if ((text.isEmpty && _pendingImages.isEmpty) || store.sending) return;
+    final images = List<Map<String, String>>.from(_pendingImages);
     _input.clear();
-    await store.send(text);
+    setState(_pendingImages.clear);
+    await store.send(text, images: images);
   }
 
   void _showSessions() {
@@ -168,7 +197,46 @@ class _ChatTabState extends State<ChatTab> {
               child: Text(store.error!,
                   style: const TextStyle(color: Color(0xFFE0C0C0), fontSize: 12)),
             ),
-          _InputBar(input: _input, onSend: _send),
+          if (_pendingImages.isNotEmpty)
+            Container(
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              alignment: Alignment.centerLeft,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _pendingImages.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
+                itemBuilder: (_, i) => Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Image.memory(
+                        base64Decode(_pendingImages[i]['b64']!),
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _pendingImages.removeAt(i)),
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                            color: Color(0xCC000000),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.close, size: 12, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          _InputBar(input: _input, onSend: _send, onAttach: _pickImages),
         ],
       ),
     );
@@ -199,6 +267,7 @@ class _MessageRow extends StatelessWidget {
           ),
         );
       case 'user':
+        final images = message.displayImages;
         return Align(
           alignment: Alignment.centerRight,
           child: Container(
@@ -209,8 +278,30 @@ class _MessageRow extends StatelessWidget {
               color: const Color(0xFF1E2A3A),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Text(message.displayText,
-                style: const TextStyle(color: Palette.fg, fontSize: 14.5, height: 1.4)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (images.isNotEmpty)
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: images
+                        .map<Widget>((Uint8List bytes) => ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.memory(bytes,
+                                  width: 180, fit: BoxFit.contain),
+                            ))
+                        .toList(),
+                  ),
+                if (images.isNotEmpty && message.displayText.isNotEmpty)
+                  const SizedBox(height: 6),
+                if (message.displayText.isNotEmpty)
+                  Text(message.displayText,
+                      style: const TextStyle(
+                          color: Palette.fg, fontSize: 14.5, height: 1.4)),
+              ],
+            ),
           ),
         );
       default: // assistant
@@ -330,9 +421,10 @@ class _ApprovalCard extends StatelessWidget {
 }
 
 class _InputBar extends StatelessWidget {
-  const _InputBar({required this.input, required this.onSend});
+  const _InputBar({required this.input, required this.onSend, required this.onAttach});
   final TextEditingController input;
   final Future<void> Function() onSend;
+  final Future<void> Function() onAttach;
 
   @override
   Widget build(BuildContext context) {
@@ -349,6 +441,11 @@ class _InputBar extends StatelessWidget {
           children: [
             Row(
               children: [
+                IconButton(
+                  tooltip: 'Attach image',
+                  icon: const Icon(Icons.image_outlined, size: 20, color: Palette.muted),
+                  onPressed: store.sending ? null : onAttach,
+                ),
                 Expanded(
                   child: TextField(
                     controller: input,

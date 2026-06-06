@@ -106,6 +106,12 @@ export const sessions = {
 }
 
 // Chat — POST returns an SSE stream; use fetch + ReadableStream (EventSource only supports GET).
+export interface ChatImage {
+  mime: string
+  /** Raw image bytes, base64-encoded (no `data:` prefix). */
+  b64: string
+}
+
 export async function streamChat(
   sessionId: string,
   message: string,
@@ -115,11 +121,12 @@ export async function streamChat(
   onApproval: (actionId: string, toolName: string, toolArgs: unknown) => void,
   onTool: (name: string) => void,
   signal?: AbortSignal,
+  images?: ChatImage[],
 ): Promise<void> {
   const res = await fetch(`${BASE}/sessions/${sessionId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, provider }),
+    body: JSON.stringify({ message, provider, images: images ?? [] }),
     signal,
   })
 

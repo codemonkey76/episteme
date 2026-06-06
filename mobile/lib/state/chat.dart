@@ -102,12 +102,22 @@ class ChatStore extends ChangeNotifier {
 
   String _nextId() => 'local-${_localId++}';
 
-  Future<void> send(String text) async {
+  /// `images`: `{mime, b64}` maps, matching the backend's multimodal shape.
+  Future<void> send(String text, {List<Map<String, String>> images = const []}) async {
     final session = active;
-    if (session == null || sending || text.trim().isEmpty) return;
+    if (session == null || sending || (text.trim().isEmpty && images.isEmpty)) {
+      return;
+    }
     sending = true;
     error = null;
-    messages.add(ChatMessage(id: _nextId(), role: 'user', content: text));
+    // Local echo mirrors the DB shape so displayText/displayImages work on it.
+    messages.add(ChatMessage(
+      id: _nextId(),
+      role: 'user',
+      content: images.isEmpty
+          ? text
+          : jsonEncode({'type': 'multimodal', 'text': text, 'images': images}),
+    ));
     notifyListeners();
 
     // Current assistant bubble; reset after each tool chip so text emitted
@@ -116,7 +126,7 @@ class ChatStore extends ChangeNotifier {
     try {
       final stream = _api.streamSse(
         '/sessions/${session.id}/chat',
-        {'message': text, 'provider': provider},
+        {'message': text, 'provider': provider, 'images': images},
       );
       _stream = stream.listen(
         (event) {
