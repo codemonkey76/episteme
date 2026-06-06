@@ -44,27 +44,11 @@ pub struct ChatMessage {
     pub content: Value,
 }
 
-pub struct ModelRouter {
-    providers: Vec<ProviderConfig>,
-}
+/// Stateless façade over the provider adapters — providers are resolved from
+/// settings at each call site, so there's nothing to construct or hold.
+pub struct ModelRouter;
 
 impl ModelRouter {
-    pub fn new() -> Self {
-        Self { providers: Vec::new() }
-    }
-
-    pub fn set_providers(&mut self, providers: Vec<ProviderConfig>) {
-        self.providers = providers;
-    }
-
-    pub fn providers(&self) -> &[ProviderConfig] {
-        &self.providers
-    }
-
-    pub fn get_provider(&self, name: &str) -> Option<&ProviderConfig> {
-        self.providers.iter().find(|p| p.name == name)
-    }
-
     /// Stream a completion for the given provider. Emits text `StreamChunk`s and a final
     /// done chunk that may carry tool calls if the model requested them.
     pub async fn stream(
@@ -125,15 +109,9 @@ impl ModelRouter {
         Ok(())
     }
 
-    /// Run a completion to the end and return the full text, discarding tool
-    /// calls. For one-shot uses (e.g. JSON classification) where streaming the
-    /// tokens to a client isn't needed.
-    pub async fn complete(provider: &ProviderConfig, history: Vec<ChatMessage>) -> Result<String> {
-        Ok(Self::complete_with_usage(provider, history).await?.0)
-    }
-
-    /// `complete`, also returning provider-reported token counts (when given)
-    /// so callers can feed the usage table.
+    /// Run a completion to the end and return the full text plus provider-
+    /// reported token counts (when given), discarding tool calls. For one-shot
+    /// uses (e.g. JSON classification) where streaming to a client isn't needed.
     pub async fn complete_with_usage(
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,

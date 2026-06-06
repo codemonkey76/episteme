@@ -4,11 +4,9 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::mcp_host::McpHost;
-use crate::model_router::ModelRouter;
 
 pub struct AppState {
     pub db: SqlitePool,
-    pub model_router: ModelRouter,
     pub mcp_host: Arc<Mutex<McpHost>>,
     /// In-flight OAuth CSRF states → the user who initiated each connect.
     pub oauth_state: Arc<Mutex<HashMap<String, String>>>,
@@ -26,7 +24,6 @@ impl AppState {
         let (log_tx, _) = broadcast::channel(2000);
         Self {
             db,
-            model_router: ModelRouter::new(),
             mcp_host: Arc::new(Mutex::new(McpHost::new())),
             oauth_state: Arc::new(Mutex::new(HashMap::new())),
             // Timeouts so an unreachable upstream (Graph, helpdesk) fails with
