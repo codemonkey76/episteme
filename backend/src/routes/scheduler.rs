@@ -71,7 +71,18 @@ pub struct RegisterToken {
     platform: Option<String>,
 }
 
-// POST /api/push/register — the mobile app reports its FCM device token.
+// GET /api/push/vapid — the public key browsers pass to pushManager.subscribe.
+pub async fn vapid_public(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let key = crate::integrations::webpush::public_key(&state.db)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "public_key": key })))
+}
+
+// POST /api/push/register — a device reports its push credential: the mobile
+// app's FCM token, or a browser's Web Push subscription JSON (platform "web").
 pub async fn register_push(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,

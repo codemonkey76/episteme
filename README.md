@@ -22,6 +22,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Style learning for email drafts** — when you edit an AI-drafted reply before sending, the diff is analyzed and durable writing-style lessons (tone, length, sign-offs) are saved as `style` memories that steer every future draft — the AI converges on your voice
 - **Email (Microsoft 365)** — folders, message list with search, reading pane, flagged / replied-to indicators, attachment viewer, AI-drafted replies/forwards, and **AI auto-sort** that files low-priority mail into folders and flags what needs attention
 - **Email agent tools** — the chat agent can search, list, and read your mail ("what did Jo say about the invoice?") and prepare replies/forwards/new messages as **drafts in your Drafts folder** — sending always stays with you (there is deliberately no send tool)
+- **Semantic email search** — mail seen by auto-sort is embedded locally (same Ollama embeddings as memory), so `email_search` also matches by meaning: "that invoice dispute" finds the thread even when no email contains those words. Keyword and semantic hits merge in one result list
 - **Web search** — a self-hosted [SearXNG](https://github.com/searxng/searxng) sidecar ships in docker-compose; the agent searches the web and reads pages through it (`web_search` / `fetch_page`), so queries never go to a search provider you don't control. Copy `searxng/settings.yml.example` to `searxng/settings.yml` and set a `secret_key` to enable it
 - **Calendar (Microsoft 365)** — an agenda view with manual add/delete, plus chat-driven scheduling: ask the AI to add appointments or reminders and it creates them via the calendar tools
 - **Tasks** — a to-do window (priorities, due dates, search) the AI can also drive: "remind me to buy milk tomorrow" creates a task via the task tools, and the window refreshes live when chat changes the list
@@ -33,6 +34,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Deep research** — ask for real research ("deep research: self-hosted NVR options for my setup") and a background job plans queries, reads web sources via SearXNG **and your own documents/email/memories/chat history**, distills everything into citation-tagged notes, then writes a polished self-contained report — sections with per-claim citations, comparison tables, inline-SVG bar charts, locally-embedded images (no hotlinks, no trackers) — into the **Reports** window, push-notified on arrival
 - **Background tasks + approval queue** — ask the agent to "do this in the background" and it hands off to an unattended run, returning immediately; every run (background or scheduled) is a tracked job in the **Jobs** window. Tools gated "ask first" are never auto-approved — they **park in your approval queue**, the job suspends, you get a push notification, and approving executes the tool and resumes the run exactly where it stopped — even across a server restart
 - **Push notifications** — drop a Firebase service-account JSON on the server and `google-services.json` into the Android app, and episteme pushes scheduled-agent output, detected commitments, and "needs attention" mail to your phone. Without the files everything no-ops — push is strictly opt-in
+- **Browser notifications** — the same pushes reach your desktop browser over native Web Push (VAPID — no Firebase needed): enable per browser under **Settings → Account → Browser notifications**. Keys generate themselves on first use; requires the HTTPS deploy (service workers don't run on plain http)
 - **Per-tool approval** — every tool (native and MCP) has an "ask first" toggle in **Settings → Tools**; flagged tools pause the chat with an inline approve/deny card and only run once you allow them. Approvals and denials are logged
 - **Floating window workspace** — dockable/snappable windows (chat, email, calendar, memories, logs, settings); the layout and which windows were open are remembered across reloads
 - **Logs** — a live, filterable log window fed by both frontend and backend events
@@ -46,8 +48,6 @@ Both roadmap arcs are fully shipped ([docs/Roadmap.md](docs/Roadmap.md)); what r
 
 - **Research reports into RAG** — ingest finished deep-research reports into the documents store so later chats can retrieve them
 - **Dollar costs** — per-model price table → $ column in Settings → System
-- **Semantic email** — embed incoming mail so email search works by meaning, not just Graph `$search`
-- **Web push** — browser notifications for commitment cards and job/agent output (currently mobile-only via FCM)
 
 ## Mobile app
 

@@ -18,15 +18,27 @@ pub async fn register(pool: &SqlitePool, user_id: &str, token: &str, platform: &
     Ok(())
 }
 
-pub async fn list_for_user(pool: &SqlitePool, user_id: &str) -> Result<Vec<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT token FROM push_tokens WHERE user_id = ?")
-        .bind(user_id)
-        .fetch_all(pool)
-        .await?;
+/// FCM device tokens: everything the mobile app registered (not web).
+pub async fn list_mobile(pool: &SqlitePool, user_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT token FROM push_tokens WHERE user_id = ? AND platform != 'web'")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().map(|(t,)| t).collect())
 }
 
-/// Drop a token FCM reported as unregistered/invalid.
+/// Web Push subscription JSONs registered by browsers.
+pub async fn list_web(pool: &SqlitePool, user_id: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT token FROM push_tokens WHERE user_id = ? AND platform = 'web'")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().map(|(t,)| t).collect())
+}
+
+/// Drop a token its push service reported as unregistered/invalid.
 pub async fn remove(pool: &SqlitePool, token: &str) -> Result<()> {
     sqlx::query("DELETE FROM push_tokens WHERE token = ?")
         .bind(token)

@@ -164,7 +164,7 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
                 state
                     .log("suggestions", "info", format!("detected commitment ({kind}): {title}"))
                     .await;
-                crate::integrations::fcm::notify(
+                crate::integrations::push::notify(
                     state,
                     user_id,
                     "Commitment detected",

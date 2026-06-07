@@ -206,6 +206,18 @@ export async function streamAdvise(
   }
 }
 
+// Web push (browser notifications)
+export const push = {
+  vapidKey: () => json<{ public_key: string }>('/push/vapid'),
+  /** Register this browser's PushSubscription JSON as a web push token. */
+  register: (subscription: string) =>
+    fetch(BASE + '/push/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: subscription, platform: 'web' }),
+    }),
+}
+
 // Approvals
 export const approvals = {
   listPending: (sessionId: string) =>

@@ -64,6 +64,9 @@ base64 = "0.22"
 dotenvy = "0.15"
 pdf-extract = "0.10.0"
 jsonwebtoken = "10.4.0"
+web-push = { version = "0.11.0", default-features = false, features = ["hyper-client"] }
+p256 = "0.13.2"
+getrandom = "0.4.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

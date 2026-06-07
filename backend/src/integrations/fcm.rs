@@ -151,7 +151,7 @@ pub async fn notify(state: &AppState, user_id: &str, title: &str, body: &str) {
     if !configured() {
         return;
     }
-    let tokens = match crate::db::push_tokens::list_for_user(&state.db, user_id).await {
+    let tokens = match crate::db::push_tokens::list_mobile(&state.db, user_id).await {
         Ok(t) if !t.is_empty() => t,
         _ => return,
     };

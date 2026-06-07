@@ -146,6 +146,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/scheduled-agents", put(scheduler::put))
         .route("/api/scheduled-agents/:id/run", post(scheduler::run))
         .route("/api/push/register", post(scheduler::register_push))
+        .route("/api/push/vapid", get(scheduler::vapid_public))
         .route(
             "/api/transcribe",
             post(transcribe::transcribe).layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024)),

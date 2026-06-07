@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{self, AgentEvent, TurnOutcome};
 use crate::db::{self, jobs::Job};
-use crate::integrations::fcm;
+use crate::integrations::push;
 use crate::model_router::ProviderConfig;
 use crate::state::AppState;
 
@@ -52,7 +52,7 @@ pub async fn run(state: Arc<AppState>, job: Job) {
             state
                 .log("jobs", "info", format!("'{}' finished: {}", job.name, clip(&summary, 120)))
                 .await;
-            fcm::notify(&state, &job.user_id, &job.name, &summary).await;
+            push::notify(&state, &job.user_id, &job.name, &summary).await;
         }
         Ok(TurnOutcome::Suspended { pending }) => {
             let tool = db::pending_actions::list_pending(&state.db, &job.session_id)
@@ -68,7 +68,7 @@ pub async fn run(state: Arc<AppState>, job: Job) {
                     format!("'{}' suspended: {pending} action(s) await approval", job.name),
                 )
                 .await;
-            fcm::notify(
+            push::notify(
                 &state,
                 &job.user_id,
                 &format!("{} needs approval", job.name),
@@ -80,7 +80,7 @@ pub async fn run(state: Arc<AppState>, job: Job) {
             let _ =
                 db::jobs::set_status(&state.db, &job.id, "failed", None, Some(&e.to_string())).await;
             state.log("jobs", "error", format!("'{}' failed: {e}", job.name)).await;
-            fcm::notify(&state, &job.user_id, &format!("{} failed", job.name), &e.to_string())
+            push::notify(&state, &job.user_id, &format!("{} failed", job.name), &e.to_string())
                 .await;
         }
     }

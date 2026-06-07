@@ -138,8 +138,19 @@ session uncompacted.
 
 ## Backlog (quick wins, any time)
 
+- **Semantic email** ✅ (shipped): the auto-sort worker embeds every message
+  it fetches (`from + subject + preview`, Phase-2 Ollama infra) into
+  `email_embeddings` (migration 020, capped at the newest 20k rows/user);
+  `email_search` merges Graph `$search` keyword hits with cosine top-k
+  semantic hits (floor 0.5, marked `matched_by: "meaning"`). Coverage is
+  "mail seen by auto-sort" — only mailboxes with sorting enabled get indexed.
+- **Web push** ✅ (shipped): native Web Push (VAPID, no Firebase JS) via the
+  `web-push` crate. Keys auto-generate into settings on first use; browsers
+  subscribe from Settings → Account → Browser notifications (`/sw.js` +
+  `GET /api/push/vapid`), registering their subscription as a
+  `platform="web"` push token. All notify call sites fan out through
+  `integrations::push::notify` → FCM (mobile) + Web Push (browsers); dead
+  subscriptions are pruned on send like FCM tokens.
 - **Dollar costs**: per-model price table → $ column in Settings → System.
-- **Semantic email**: embed incoming mail (Phase-2 infra) so email search
-  works by meaning, not just Graph `$search`.
-- **Web push**: browser notifications for commitment cards and job/agent
-  output (currently mobile-only via FCM).
+- **Research reports into RAG**: ingest finished deep-research reports into
+  the documents store so later chats can retrieve them.

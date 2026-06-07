@@ -654,6 +654,67 @@ async function toggleTwoFactor() {
   }
 }
 
+// ── Browser notifications (web push) ──
+const pushSupported =
+  typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window
+const pushEnabled = ref(false)
+const pushMsg = ref('')
+
+async function currentPushSubscription(): Promise<PushSubscription | null> {
+  if (!pushSupported) return null
+  const reg = await navigator.serviceWorker.getRegistration()
+  return (await reg?.pushManager.getSubscription()) ?? null
+}
+
+onMounted(async () => {
+  pushEnabled.value = !!(await currentPushSubscription())
+})
+
+/** base64url → bytes, the shape pushManager.subscribe wants the VAPID key in. */
+function b64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
+  const pad = '='.repeat((4 - (b64url.length % 4)) % 4)
+  const raw = atob((b64url + pad).replace(/-/g, '+').replace(/_/g, '/'))
+  // Explicit ArrayBuffer backing so TS accepts it as a BufferSource.
+  const bytes = new Uint8Array(new ArrayBuffer(raw.length))
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i)
+  return bytes
+}
+
+async function enablePush() {
+  pushMsg.value = ''
+  try {
+    const perm = await Notification.requestPermission()
+    if (perm !== 'granted') {
+      pushMsg.value = 'Notification permission was denied.'
+      return
+    }
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    const { public_key } = await api.push.vapidKey()
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64urlToBytes(public_key),
+    })
+    await api.push.register(JSON.stringify(sub))
+    pushEnabled.value = true
+    pushMsg.value = 'This browser will now receive notifications.'
+  } catch (e: unknown) {
+    pushMsg.value = e instanceof Error ? e.message : 'Failed to enable notifications.'
+  }
+}
+
+async function disablePush() {
+  try {
+    // Unsubscribing kills the endpoint; the server prunes its row on the
+    // next send, so no explicit deregister call is needed.
+    const sub = await currentPushSubscription()
+    if (sub) await sub.unsubscribe()
+    pushEnabled.value = false
+    pushMsg.value = 'Notifications disabled in this browser.'
+  } catch (e: unknown) {
+    pushMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
+}
+
 async function logout() {
   await authStore.logout()
   // No /login route — clearing `authenticated` drops the app back to AuthGate.
@@ -754,6 +815,20 @@ async function logout() {
             </button>
           </div>
           <p v-if="accountMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ accountMsg }}</p>
+        </section>
+
+        <section class="flex flex-col gap-3">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Browser notifications</h3>
+          <div class="flex items-center justify-between bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg px-3.5 py-3 gap-4">
+            <div>
+              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)]">Web push on this browser</div>
+              <div class="text-[0.75rem] text-[var(--c-585858)] mt-[0.1rem]">{{ !pushSupported ? 'Not supported by this browser' : pushEnabled ? 'Active — job results, approvals, and flagged mail notify here' : 'Not enabled' }}</div>
+            </div>
+            <button v-if="pushSupported" class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="pushEnabled ? disablePush() : enablePush()">
+              {{ pushEnabled ? 'Disable' : 'Enable' }}
+            </button>
+          </div>
+          <p v-if="pushMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ pushMsg }}</p>
         </section>
 
         <section v-if="emailConfig.connected" class="flex flex-col gap-3">
