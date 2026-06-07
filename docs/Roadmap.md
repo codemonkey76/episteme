@@ -115,8 +115,12 @@ prompts (`research_plan/distill/reflect/synthesize`); usage purpose
 `research`; SearXNG outages degrade to internal-corpus-only. Mobile Reports
 shipped: Activity tab (Reports segment) with a research launcher and a
 no-JS WebView viewer (HTML fetched over the authed client, rendered via
-loadHtmlString — no cookies in the WebView). Remaining follow-up: ingest
-reports into documents-RAG.
+loadHtmlString — no cookies in the WebView). Follow-up shipped (June 2026):
+finished reports are rendered to plain markdown (`render_markdown` — no HTML
+boilerplate, data-URI images, or citation anchors) and fed through the
+documents pipeline as `Research report: {title}.md`, so later chats and the
+next research run's internal pass retrieve past reports by meaning. They
+appear in the Documents window like any upload and can be deleted there.
 
 Quality pass (June 2026): the plan's sub-questions — previously generated and
 discarded — now thread through every stage (distill extracts against them,
@@ -162,6 +166,5 @@ session uncompacted.
   `platform="web"` push token. All notify call sites fan out through
   `integrations::push::notify` → FCM (mobile) + Web Push (browsers); dead
   subscriptions are pruned on send like FCM tokens.
+- **Research reports into RAG** ✅ (shipped): see the Phase 9 follow-up note.
 - **Dollar costs**: per-model price table → $ column in Settings → System.
-- **Research reports into RAG**: ingest finished deep-research reports into
-  the documents store so later chats can retrieve them.

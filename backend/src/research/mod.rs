@@ -277,6 +277,39 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     let title = if doc.title.trim().is_empty() { topic.clone() } else { doc.title.clone() };
     db::reports::insert(&state.db, &job.user_id, Some(&job.id), &title, &html).await?;
 
+    // Feed the report back into the documents corpus (markdown, not the HTML
+    // with its data-URI images), so later chats — and the next research run's
+    // internal pass — can retrieve it by meaning. Detached, like an upload;
+    // failures mark the document row, never the finished report.
+    let markdown = render::render_markdown(&doc, &sources);
+    let doc_name = format!("Research report: {title}.md");
+    match db::documents::insert(
+        &state.db,
+        &job.user_id,
+        &doc_name,
+        "text/markdown",
+        markdown.len() as i64,
+    )
+    .await
+    {
+        Ok(doc_row) => {
+            let st = Arc::clone(state);
+            let uid = job.user_id.clone();
+            tokio::spawn(async move {
+                crate::documents::index(
+                    &st,
+                    &uid,
+                    &doc_row.id,
+                    &doc_row.filename,
+                    "text/markdown",
+                    markdown.into_bytes(),
+                )
+                .await;
+            });
+        }
+        Err(e) => tracing::warn!("report→RAG ingestion skipped: {e}"),
+    }
+
     state
         .log("research", "info", format!("report ready: {title} ({} sources)", sources.len()))
         .await;

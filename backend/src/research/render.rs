@@ -203,6 +203,50 @@ border-radius:8px;padding:1rem}
 footer{color:var(--muted);font-size:.75rem;margin-top:3rem}
 "#;
 
+/// Plain-markdown rendering of a report for the documents-RAG corpus: the
+/// substance (title, intro, sections, tables, chart values) without the HTML
+/// boilerplate, data-URI images, or numbered source anchors that would
+/// pollute chunk embeddings.
+pub fn render_markdown(doc: &ReportDoc, sources: &[Source]) -> String {
+    let mut out = String::new();
+    let title = if doc.title.trim().is_empty() { "Research report" } else { doc.title.trim() };
+    out.push_str(&format!("# {title}\n"));
+    if !doc.intro.trim().is_empty() {
+        out.push_str(&format!("\n{}\n", doc.intro.trim()));
+    }
+    for section in &doc.sections {
+        out.push_str(&format!("\n## {}\n", section.heading.trim()));
+        for p in &section.paragraphs {
+            out.push_str(&format!("\n{}\n", p.text.trim()));
+        }
+    }
+    for table in &doc.tables {
+        out.push_str(&format!("\n### {}\n\n", table.title.trim()));
+        out.push_str(&format!("| {} |\n", table.columns.join(" | ")));
+        out.push_str(&format!("|{}\n", "---|".repeat(table.columns.len().max(1))));
+        for row in &table.rows {
+            out.push_str(&format!("| {} |\n", row.join(" | ")));
+        }
+    }
+    for chart in &doc.charts {
+        let unit = chart.unit.as_deref().unwrap_or("");
+        out.push_str(&format!("\n### {}\n\n", chart.title.trim()));
+        for (label, value) in chart.labels.iter().zip(&chart.values) {
+            out.push_str(&format!("- {label}: {value}{unit}\n"));
+        }
+    }
+    if !sources.is_empty() {
+        out.push_str("\n## Sources\n\n");
+        for s in sources {
+            match &s.url {
+                Some(url) => out.push_str(&format!("- {} ({url})\n", s.label)),
+                None => out.push_str(&format!("- {}\n", s.label)),
+            }
+        }
+    }
+    out
+}
+
 /// Render the complete self-contained report document.
 pub fn render_report(
     doc: &ReportDoc,
@@ -318,6 +362,41 @@ mod tests {
             Source { id: "S1".into(), label: "Example Blog".into(), url: Some("https://a.example/x".into()) },
             Source { id: "doc:contract.pdf".into(), label: "contract.pdf".into(), url: None },
         ]
+    }
+
+    #[test]
+    fn markdown_rendering_carries_the_substance_without_boilerplate() {
+        let doc = ReportDoc {
+            title: "NVR options".into(),
+            intro: "Three contenders.".into(),
+            sections: vec![Section {
+                heading: "Frigate".into(),
+                paragraphs: vec![Paragraph { text: "Runs on Coral.".into(), cites: vec!["S1".into()] }],
+            }],
+            tables: vec![Table {
+                title: "Pricing".into(),
+                columns: vec!["Option".into(), "Cost".into()],
+                rows: vec![vec!["Frigate".into(), "$0".into()]],
+            }],
+            charts: vec![Chart {
+                title: "RAM use".into(),
+                labels: vec!["Frigate".into()],
+                values: vec![1.5],
+                unit: Some(" GB".into()),
+            }],
+            ..Default::default()
+        };
+        let md = render_markdown(&doc, &sources());
+        assert!(md.starts_with("# NVR options"));
+        assert!(md.contains("Three contenders."));
+        assert!(md.contains("## Frigate"));
+        assert!(md.contains("Runs on Coral."));
+        assert!(md.contains("| Frigate | $0 |"));
+        assert!(md.contains("- Frigate: 1.5 GB"));
+        assert!(md.contains("- Example Blog (https://a.example/x)"));
+        assert!(md.contains("- contract.pdf"));
+        // No HTML or citation anchors leak into the corpus text.
+        assert!(!md.contains('<') && !md.contains("[1]"));
     }
 
     #[test]
