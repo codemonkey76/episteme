@@ -261,6 +261,50 @@ async function loadUsage() {
   } catch {
     usageRows.value = []
   }
+  loadPrices()
+}
+
+const usageTotalCost = computed(() =>
+  usageRows.value.reduce((sum, r) => sum + (r.cost ?? 0), 0),
+)
+
+/** "$0.0312" for small sums, "$12.46" once they grow — never "$0.00" for a priced row. */
+function fmtCost(cost: number | null): string {
+  if (cost == null) return '—'
+  return '$' + (cost >= 0.1 ? cost.toFixed(2) : cost.toFixed(4))
+}
+
+// ── Model prices (admin) ──────────────────────────────────────────────────────
+const priceRows = ref<api.ModelPrice[]>([])
+const pricesMsg = ref('')
+let pricesLoaded = false
+
+async function loadPrices() {
+  if (pricesLoaded) return
+  try {
+    priceRows.value = (await api.modelPrices.get()).prices
+    pricesLoaded = true
+  } catch {
+    /* non-admin or transient — the section just stays empty */
+  }
+}
+
+function addPriceRow() {
+  priceRows.value.push({ model: '', prompt_per_mtok: 0, completion_per_mtok: 0 })
+}
+
+async function savePrices() {
+  pricesMsg.value = ''
+  try {
+    priceRows.value = (await api.modelPrices.set(priceRows.value)).prices
+    pricesMsg.value = 'Saved.'
+    pricesLoaded = true
+    // Re-price the visible usage table with the new rates.
+    const res = await api.usageSummary(usageDays.value)
+    usageRows.value = res.usage
+  } catch (e: unknown) {
+    pricesMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
 }
 
 // ── Scheduled agents ──────────────────────────────────────────────────────────
@@ -1518,6 +1562,7 @@ async function logout() {
                   <th class="px-3 py-2 font-semibold text-right">Requests</th>
                   <th class="px-3 py-2 font-semibold text-right">Prompt</th>
                   <th class="px-3 py-2 font-semibold text-right">Completion</th>
+                  <th class="px-3 py-2 font-semibold text-right">Cost</th>
                 </tr>
               </thead>
               <tbody>
@@ -1528,9 +1573,35 @@ async function logout() {
                   <td class="px-3 py-1.5 text-right">{{ r.requests.toLocaleString() }}</td>
                   <td class="px-3 py-1.5 text-right">{{ r.prompt_tokens.toLocaleString() }}</td>
                   <td class="px-3 py-1.5 text-right">{{ r.completion_tokens.toLocaleString() }}</td>
+                  <td class="px-3 py-1.5 text-right" :class="r.cost == null ? 'text-[var(--c-585858)]' : ''">{{ fmtCost(r.cost) }}</td>
+                </tr>
+                <tr v-if="usageTotalCost > 0" class="border-t border-[var(--c-252525)] text-fg font-semibold">
+                  <td class="px-3 py-1.5" colspan="6">Total (priced models)</td>
+                  <td class="px-3 py-1.5 text-right">{{ fmtCost(usageTotalCost) }}</td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="flex flex-col gap-3">
+          <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Model prices</h3>
+          <div class="flex flex-col gap-2 bg-[var(--c-111111)] p-3.5 rounded-lg border border-[var(--c-222222)]">
+            <p class="text-[0.75rem] text-[var(--c-585858)]">US$ per million tokens. A row applies to any model id containing its text (longest match wins) — e.g. "gpt-4o-mini" overrides "gpt-4o". Models with no row (local Ollama) show no cost.</p>
+            <div v-for="(p, i) in priceRows" :key="i" class="flex items-center gap-2">
+              <input class="flex-1 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="p.model" placeholder="model id contains…" />
+              <input class="w-28 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] text-right focus:outline-none focus:border-[var(--c-3a6adf)]" v-model.number="p.prompt_per_mtok" type="number" min="0" step="0.01" title="$ per 1M prompt tokens" />
+              <input class="w-28 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] text-right focus:outline-none focus:border-[var(--c-3a6adf)]" v-model.number="p.completion_per_mtok" type="number" min="0" step="0.01" title="$ per 1M completion tokens" />
+              <button class="bg-none border-none text-[var(--c-585858)] cursor-pointer text-base leading-none hover:text-[var(--c-ff7070)]" title="Remove" @click="priceRows.splice(i, 1)">×</button>
+            </div>
+            <div v-if="priceRows.length" class="flex gap-2 text-[0.65rem] text-[var(--c-484848)] uppercase tracking-[0.05em]">
+              <span class="flex-1">Model match</span><span class="w-28 text-right">$/M prompt</span><span class="w-28 text-right">$/M completion</span><span class="w-4"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="addPriceRow">Add model</button>
+              <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-254880)]" @click="savePrices">Save prices</button>
+              <span v-if="pricesMsg" class="text-[0.775rem]" :class="pricesMsg === 'Saved.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ pricesMsg }}</span>
+            </div>
           </div>
         </section>
       </div>

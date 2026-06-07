@@ -163,6 +163,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/usage/summary", get(settings::usage_summary))
         .route("/api/settings/providers", post(settings::upsert_provider))
         .route("/api/settings/providers/:name", delete(settings::delete_provider))
+        .route("/api/settings/model-prices", get(settings::get_model_prices))
+        .route("/api/settings/model-prices", put(settings::set_model_prices))
         .route("/api/settings/ollama/models", get(settings::list_ollama_models))
         .route("/api/settings/mcp-servers", get(settings::list_mcp_servers))
         .route("/api/settings/mcp-servers", post(settings::upsert_mcp_server))

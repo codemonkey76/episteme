@@ -175,4 +175,8 @@ session uncompacted.
   `integrations::push::notify` → FCM (mobile) + Web Push (browsers); dead
   subscriptions are pruned on send like FCM tokens.
 - **Research reports into RAG** ✅ (shipped): see the Phase 9 follow-up note.
-- **Dollar costs**: per-model price table → $ column in Settings → System.
+- **Dollar costs** ✅ (shipped): admin price table (settings key `model_prices`,
+  edited in Settings → System) of US$/Mtok per model-id substring (longest
+  match wins, case-insensitive); `/api/usage/summary` prices each row via
+  `usage::cost_for` and the System usage table gains a Cost column + total.
+  Unpriced models (local Ollama) show "—", never $0.00.

@@ -11,7 +11,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Streaming chat** — server-sent token streaming over a persistent axum/SSE backend, with keep-alive so slow local models don't drop the connection; assistant replies are persisted and survive a refresh
 - **Images in chat** — paste or drop screenshots into the web composer (or attach from the mobile app) and ask vision-capable models about them; images persist with the conversation
 - **Voice input** — a mic button in the mobile chat records speech and transcribes it on the self-hosted Whisper sidecar (Groq/OpenAI Whisper as fallback when configured), dropping the text into the composer for review
-- **Usage tracking** — every model request's token counts are recorded per user, provider, and purpose (chat, auto-sort, memory, …); admins get a usage table in **Settings → System**
+- **Usage tracking** — every model request's token counts are recorded per user, provider, and purpose (chat, auto-sort, memory, …); admins get a usage table in **Settings → System** with **dollar costs** computed from an editable per-model price table (local models simply show no cost)
 - **Sessions** — conversations persisted to SQLite; resume any past session, and **full-text search** across all of them from the History window (the agent can too, via `search_history`)
 - **Context compaction** — long sessions don't degrade: old tool results are clipped and, past a size budget, older turns are rolled up into a persistent summary the model sees instead of the verbatim history. The full transcript stays untouched in the UI and search — only what's replayed to the model shrinks
 - **Model router** — route to Anthropic, OpenAI, Ollama, Gemini, Groq, DeepSeek, or any OpenAI-compatible endpoint from a single UI; switching is choosing a name from a list
@@ -46,7 +46,6 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 Both roadmap arcs are fully shipped ([docs/Roadmap.md](docs/Roadmap.md)); what remains is the quick-win backlog:
 
-- **Dollar costs** — per-model price table → $ column in Settings → System
 - **Research polish** — chunked distill for long pages, recency/authority signals, single-source claim flagging (see docs/Roadmap.md)
 
 ## Mobile app

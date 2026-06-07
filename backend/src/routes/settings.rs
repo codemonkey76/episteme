@@ -356,6 +356,52 @@ pub async fn usage_summary(
     axum::extract::Query(q): axum::extract::Query<UsageQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
     let days = q.days.unwrap_or(30).clamp(1, 365);
-    let rows = crate::db::usage::summary(&state.db, days).await.map_err(AppError::Internal)?;
+    let mut rows = crate::db::usage::summary(&state.db, days).await.map_err(AppError::Internal)?;
+    // Price the rows from the admin's table; unmatched models stay None.
+    let prices: Vec<crate::db::usage::ModelPrice> =
+        db::settings::get(&state.db, "model_prices").await.ok().flatten().unwrap_or_default();
+    for row in &mut rows {
+        row.cost = crate::db::usage::cost_for(
+            &prices,
+            &row.model_id,
+            row.prompt_tokens,
+            row.completion_tokens,
+        );
+    }
     Ok(Json(serde_json::json!({ "days": days, "usage": rows })))
+}
+
+// GET /api/settings/model-prices — the admin's $-per-Mtok table.
+pub async fn get_model_prices(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let prices: Vec<crate::db::usage::ModelPrice> =
+        db::settings::get(&state.db, "model_prices").await.ok().flatten().unwrap_or_default();
+    Ok(Json(serde_json::json!({ "prices": prices })))
+}
+
+#[derive(Deserialize)]
+pub struct ModelPricesBody {
+    prices: Vec<crate::db::usage::ModelPrice>,
+}
+
+// PUT /api/settings/model-prices — replaces the whole table (the UI edits in place).
+pub async fn set_model_prices(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ModelPricesBody>,
+) -> AppResult<Json<serde_json::Value>> {
+    // Drop blank rows; clamp negative prices to zero.
+    let prices: Vec<_> = body
+        .prices
+        .into_iter()
+        .filter(|p| !p.model.trim().is_empty())
+        .map(|mut p| {
+            p.model = p.model.trim().to_string();
+            p.prompt_per_mtok = p.prompt_per_mtok.max(0.0);
+            p.completion_per_mtok = p.completion_per_mtok.max(0.0);
+            p
+        })
+        .collect();
+    db::settings::set(&state.db, "model_prices", &prices).await.map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "prices": prices })))
 }

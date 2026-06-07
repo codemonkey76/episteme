@@ -562,10 +562,28 @@ export interface UsageRow {
   requests: number
   prompt_tokens: number
   completion_tokens: number
+  /** Dollar cost under the admin price table; null when the model is unpriced. */
+  cost: number | null
 }
 
 export const usageSummary = (days = 30) =>
   json<{ days: number; usage: UsageRow[] }>(`/usage/summary?days=${days}`)
+
+// Model prices (admin): $ per million tokens, substring-matched on model id.
+export interface ModelPrice {
+  model: string
+  prompt_per_mtok: number
+  completion_per_mtok: number
+}
+
+export const modelPrices = {
+  get: () => json<{ prices: ModelPrice[] }>('/settings/model-prices'),
+  set: (prices: ModelPrice[]) =>
+    json<{ prices: ModelPrice[] }>('/settings/model-prices', {
+      method: 'PUT',
+      body: JSON.stringify({ prices }),
+    }),
+}
 
 // Scheduled agents
 export interface ScheduledAgent {
