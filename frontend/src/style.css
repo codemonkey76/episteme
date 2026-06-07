@@ -23,6 +23,34 @@ body {
   overflow: hidden;
 }
 
+/* ── Scrollbars ──────────────────────────────────────────────────────────
+   Themed to the active palette — the OS default light scrollbars are
+   jarring on the dark UI. color-scheme also fixes any native chrome we
+   don't paint (overlay bars, form controls); it's flipped to light for the
+   one light theme. Thumb colours are --c-<hex> vars, so they invert with
+   the theme (light-grey thumb on the near-white daylight background). */
+:root { color-scheme: dark; }
+[data-theme="daylight"] { color-scheme: light; }
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-303030) transparent;
+}
+
+/* WebKit / Blink (Chrome, Edge, Safari) — finer control: thin, rounded,
+   transparent track, inset thumb via a padding-box border. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--c-303030);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--c-484848); }
+::-webkit-scrollbar-corner { background: transparent; }
+
 /* ── Rules that can't be expressed as utilities ──────────────────────────
    Pseudo-elements, keyframes and [open]-state markers. Moved here (from the
    former component <style> blocks) so no SFC carries a <style> tag. Class
