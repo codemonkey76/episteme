@@ -7,6 +7,7 @@ mod categorizer;
 mod compaction;
 mod db;
 mod documents;
+mod email_index;
 mod error;
 mod integrations;
 mod jobs;

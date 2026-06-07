@@ -27,7 +27,7 @@ pub fn schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "email_search",
-            "description": "Search the user's mailbox by keyword (matches sender, subject, and body). Returns message metadata and a short snippet; use email_read with an id for the full body.",
+            "description": "Search the user's mailbox. Combines keyword search (sender, subject, body) with meaning-based matching over indexed mail, so conceptual queries (\"that invoice dispute\") work too. Returns message metadata and a short snippet; use email_read with an id for the full body.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -159,7 +159,34 @@ async fn search(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
     )
     .await?;
     let tz = state.home_tz(user_id).await;
-    Ok(json!({ "messages": summarize_all(&body, tz) }))
+    let mut results = summarize_all(&body, tz);
+
+    // Meaning-based hits from the local index, merged after Graph's keyword
+    // results (skipping ids Graph already found). Best-effort: an embedding
+    // failure (Ollama down, nothing indexed yet) just yields keyword-only.
+    let limit = args["limit"].as_u64().unwrap_or(LIST_DEFAULT).clamp(1, LIST_MAX) as usize;
+    let mailbox = args["mailbox"].as_str().unwrap_or("");
+    match crate::email_index::search(state, user_id, mailbox, &query, limit).await {
+        Ok(hits) => {
+            for hit in hits {
+                if results.iter().any(|r| r["id"].as_str() == Some(hit.message_id.as_str())) {
+                    continue;
+                }
+                let (_, received_display) = localize(&hit.received_at, tz);
+                results.push(json!({
+                    "id": hit.message_id,
+                    "subject": hit.subject,
+                    "from": hit.sender,
+                    "snippet": hit.snippet,
+                    "received": received_display.unwrap_or(hit.received_at),
+                    "matched_by": "meaning",
+                }));
+            }
+        }
+        Err(e) => tracing::debug!("semantic email search unavailable: {e}"),
+    }
+
+    Ok(json!({ "messages": results }))
 }
 
 /// Folders Graph accepts as well-known names directly in the URL.

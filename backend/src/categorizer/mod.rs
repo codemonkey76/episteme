@@ -206,6 +206,16 @@ pub async fn run_mailbox(
 
     let messages = inbox["value"].as_array().cloned().unwrap_or_default();
 
+    // Semantic email index rides along: embed whatever this fetch surfaced
+    // (idempotent per id, detached so sorting never waits on Ollama).
+    tokio::spawn(crate::email_index::index_messages(
+        state.db.clone(),
+        state.http_client.clone(),
+        user_id.to_string(),
+        mailbox.to_string(),
+        messages.clone(),
+    ));
+
     let mut st: PersistState =
         db::settings::get(&state.db, &state_key(user_id, mailbox)).await?.unwrap_or_default();
     let seen: std::collections::HashSet<&str> =
@@ -284,7 +294,7 @@ pub async fn run_mailbox(
                         Ok(()) => {
                             summary.flagged += 1;
                             log_event(state, "info", format!("Flagged: {subject}"));
-                            crate::integrations::fcm::notify(
+                            crate::integrations::push::notify(
                                 state,
                                 user_id,
                                 "Email needs attention",

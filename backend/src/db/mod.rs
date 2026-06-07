@@ -9,6 +9,7 @@ pub mod pending_actions;
 pub mod push_tokens;
 pub mod reports;
 pub mod documents;
+pub mod email_index;
 pub mod logs;
 pub mod memories;
 pub mod tasks;
@@ -74,6 +75,41 @@ mod tests {
         // Idempotence guard data: a decided action keeps its status.
         let decided = pending_actions::get(&pool, &a.id).await.unwrap().unwrap();
         assert_eq!(decided.status, "approved");
+    }
+
+    /// Email index: dedupe lookup, per-mailbox listing, and the size cap.
+    #[tokio::test]
+    async fn email_index_round_trip_and_prune() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1', 'test', 'x', 'admin', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+
+        let blob = crate::integrations::embeddings::to_blob(&[0.1, 0.2]);
+        for (id, mailbox, received) in
+            [("m1", "", "2026-06-01"), ("m2", "", "2026-06-02"), ("m3", "shared@x.com", "2026-06-03")]
+        {
+            email_index::insert(&pool, "u1", id, mailbox, "Subj", "Jo <jo@x.com>", "snip", received, &blob)
+                .await
+                .unwrap();
+        }
+        // Duplicate insert is ignored, not an error.
+        email_index::insert(&pool, "u1", "m1", "", "Other", "x", "y", "2026-06-09", &blob)
+            .await
+            .unwrap();
+
+        let seen = email_index::existing_ids(&pool, "u1", &["m1", "m9"]).await.unwrap();
+        assert_eq!(seen, ["m1"]);
+
+        // Listing is per-mailbox, newest first; other users see nothing.
+        let own = email_index::list_for_mailbox(&pool, "u1", "").await.unwrap();
+        assert_eq!(own.iter().map(|r| r.message_id.as_str()).collect::<Vec<_>>(), ["m2", "m1"]);
+        assert_eq!(own[0].subject, "Subj");
+        assert!(email_index::list_for_mailbox(&pool, "u2", "").await.unwrap().is_empty());
+
+        // Prune keeps the newest rows across mailboxes.
+        email_index::prune(&pool, "u1", 2).await.unwrap();
+        assert!(email_index::list_for_mailbox(&pool, "u1", "").await.unwrap().len() == 1);
+        assert_eq!(email_index::list_for_mailbox(&pool, "u1", "shared@x.com").await.unwrap().len(), 1);
     }
 
     /// Compaction state round-trips and the created_at cursor slices the
