@@ -106,21 +106,18 @@ pub async fn set_status(
     Ok(())
 }
 
-/// Fail every job still marked `running` — called once at startup. A running
-/// job's worker task lives in process memory, so any survivor of a restart is
-/// orphaned: it will never progress and would sit in the UI forever. Returns
-/// how many were swept.
-pub async fn fail_orphaned_running(pool: &SqlitePool) -> Result<u64> {
-    let res = sqlx::query(
-        "UPDATE jobs SET status = 'failed',
-                error = 'interrupted by a server restart',
-                updated_at = ?
-         WHERE status = 'running'",
-    )
-    .bind(Utc::now().to_rfc3339())
-    .execute(pool)
-    .await?;
-    Ok(res.rows_affected())
+/// Jobs still marked `running` at startup — orphans whose worker task died
+/// with the previous process. Returned so the recovery pass can decide each
+/// one's fate by kind (research restarts; the rest fail).
+pub async fn list_orphaned_running(pool: &SqlitePool) -> Result<Vec<Job>> {
+    Ok(sqlx::query_as::<_, Job>(&format!("SELECT {COLS} FROM jobs WHERE status = 'running'"))
+        .fetch_all(pool)
+        .await?)
+}
+
+/// Fail a single orphaned job (the non-restartable kinds).
+pub async fn fail_orphaned(pool: &SqlitePool, id: &str) -> Result<()> {
+    set_status(pool, id, "failed", None, Some("interrupted by a server restart")).await
 }
 
 /// User-initiated cancel: fail a job the user owns that's still in flight

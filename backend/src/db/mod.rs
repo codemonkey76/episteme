@@ -99,15 +99,21 @@ mod tests {
         // A finished job can't be cancelled again.
         assert!(!jobs::cancel(&pool, "u1", &job.id).await.unwrap());
 
-        // Orphan sweep fails only what's still running.
-        let running =
+        // Orphan recovery lists only what's still running; the cancelled job
+        // (now failed) isn't among them.
+        let bg = jobs::insert(&pool, "u1", "s1", "background", "Digest", "", None).await.unwrap();
+        let research =
             jobs::insert(&pool, "u1", "s1", "research", "Another", "", None).await.unwrap();
-        assert_eq!(jobs::fail_orphaned_running(&pool).await.unwrap(), 1);
-        let swept = jobs::get(&pool, &running.id).await.unwrap().unwrap();
+        let orphans = jobs::list_orphaned_running(&pool).await.unwrap();
+        let ids: Vec<&str> = orphans.iter().map(|j| j.id.as_str()).collect();
+        assert!(ids.contains(&bg.id.as_str()) && ids.contains(&research.id.as_str()));
+        assert!(!ids.contains(&job.id.as_str()));
+
+        // The non-restartable kind fails with the restart message.
+        jobs::fail_orphaned(&pool, &bg.id).await.unwrap();
+        let swept = jobs::get(&pool, &bg.id).await.unwrap().unwrap();
         assert_eq!(swept.status, "failed");
         assert!(swept.error.unwrap().contains("restart"));
-        // The already-failed job is untouched (idempotent across restarts).
-        assert_eq!(jobs::fail_orphaned_running(&pool).await.unwrap(), 0);
     }
 
     /// TOTP lifecycle: pending → enabled, replay-proof step claims, and

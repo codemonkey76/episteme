@@ -27,6 +27,44 @@ pub fn spawn_worker(state: Arc<AppState>, mut rx: mpsc::UnboundedReceiver<Job>) 
     });
 }
 
+/// Recover jobs left `running` by a prior process (their worker task died with
+/// it). Research runs are self-contained — topic and depth live on the job and
+/// session — so they're re-enqueued to run again rather than lost. Background
+/// and scheduled runs may have already fired tools with side effects, so
+/// blindly re-running them is unsafe: those are failed. Call once at startup,
+/// after the queue worker is spawned.
+pub async fn recover_orphans(state: &Arc<AppState>) {
+    let orphans = match db::jobs::list_orphaned_running(&state.db).await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("orphan-job recovery query failed: {e}");
+            return;
+        }
+    };
+    let (mut restarted, mut failed) = (0u32, 0u32);
+    for job in orphans {
+        if job.kind == "research" {
+            // Already `running`; just hand it back to the worker. A fresh
+            // pass rebuilds the memo and writes a new report.
+            if state.job_tx.send(job).is_ok() {
+                restarted += 1;
+            }
+        } else {
+            let _ = db::jobs::fail_orphaned(&state.db, &job.id).await;
+            failed += 1;
+        }
+    }
+    if restarted > 0 || failed > 0 {
+        state
+            .log(
+                "jobs",
+                "info",
+                format!("startup recovery: resumed {restarted} research run(s), failed {failed} other orphan(s)"),
+            )
+            .await;
+    }
+}
+
 /// Create the job row (status `running`) for an existing session.
 pub async fn start(
     state: &AppState,
