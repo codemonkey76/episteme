@@ -28,6 +28,19 @@ async function load() {
   }
 }
 
+const cancelling = ref<string | null>(null)
+async function cancelJob(j: api.Job) {
+  cancelling.value = j.id
+  try {
+    await api.jobs.cancel(j.id)
+    await load()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Cancel failed'
+  } finally {
+    cancelling.value = null
+  }
+}
+
 // Approving the last pending action of a session resumes its job server-side;
 // keep polling while open so statuses flip live.
 let poll: ReturnType<typeof setInterval> | null = null
@@ -123,6 +136,13 @@ function fmtTime(iso: string): string {
               <p v-else-if="j.error" class="text-[0.72rem] text-danger leading-[1.4] break-words">{{ j.error }}</p>
               <span class="text-[0.65rem] text-[var(--c-505050)]">{{ fmtTime(j.updated_at) }}</span>
             </div>
+            <button
+              v-if="j.status === 'running' || j.status === 'needs_approval'"
+              class="shrink-0 bg-none border border-[var(--c-4a2525)] rounded text-[var(--c-c06060)] text-[0.7rem] px-2 py-[0.2rem] cursor-pointer font-[inherit] hover:bg-[var(--c-3a1515)] hover:text-[var(--c-df7a7a)] disabled:opacity-50"
+              :disabled="cancelling === j.id"
+              title="Stop this run"
+              @click="cancelJob(j)"
+            >{{ cancelling === j.id ? '…' : 'Cancel' }}</button>
             <button class="shrink-0 bg-none border border-raised rounded text-[var(--c-808080)] text-[0.7rem] px-2 py-[0.2rem] cursor-pointer font-[inherit] hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="openSession(j.session_id)">Open</button>
           </div>
         </div>

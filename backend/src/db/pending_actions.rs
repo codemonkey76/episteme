@@ -128,6 +128,20 @@ pub async fn resolve(pool: &SqlitePool, id: &str, approved: bool) -> Result<()> 
     Ok(())
 }
 
+/// Reject every still-pending action for a session — used when its job is
+/// cancelled, so the global approval queue stops showing orphaned rows.
+pub async fn clear_for_session(pool: &SqlitePool, session_id: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE pending_actions SET status = 'rejected', resolved_at = ?
+         WHERE session_id = ? AND status = 'pending'",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<PendingAction>> {
     Ok(sqlx::query_as::<_, PendingAction>(
         "SELECT id, session_id, tool_name, tool_args, status, created_at, resolved_at, call_id

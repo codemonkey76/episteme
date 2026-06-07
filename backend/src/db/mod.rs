@@ -77,6 +77,39 @@ mod tests {
         assert_eq!(decided.status, "approved");
     }
 
+    /// Job recovery: startup orphan sweep and user-initiated cancel.
+    #[tokio::test]
+    async fn job_cancel_and_orphan_sweep() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1', 'test', 'x', 'admin', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO sessions (id, user_id, title, created_at, updated_at) VALUES ('s1', 'u1', '🔎 topic', '2026-01-01', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+
+        let job = jobs::insert(&pool, "u1", "s1", "research", "Research: topic", "", None)
+            .await
+            .unwrap();
+
+        // Cancel needs ownership and an in-flight status.
+        assert!(!jobs::cancel(&pool, "u2", &job.id).await.unwrap()); // not theirs
+        assert!(jobs::cancel(&pool, "u1", &job.id).await.unwrap());
+        let after = jobs::get(&pool, &job.id).await.unwrap().unwrap();
+        assert_eq!(after.status, "failed");
+        assert_eq!(after.error.as_deref(), Some("cancelled"));
+        // A finished job can't be cancelled again.
+        assert!(!jobs::cancel(&pool, "u1", &job.id).await.unwrap());
+
+        // Orphan sweep fails only what's still running.
+        let running =
+            jobs::insert(&pool, "u1", "s1", "research", "Another", "", None).await.unwrap();
+        assert_eq!(jobs::fail_orphaned_running(&pool).await.unwrap(), 1);
+        let swept = jobs::get(&pool, &running.id).await.unwrap().unwrap();
+        assert_eq!(swept.status, "failed");
+        assert!(swept.error.unwrap().contains("restart"));
+        // The already-failed job is untouched (idempotent across restarts).
+        assert_eq!(jobs::fail_orphaned_running(&pool).await.unwrap(), 0);
+    }
+
     /// TOTP lifecycle: pending → enabled, replay-proof step claims, and
     /// single-use recovery codes.
     #[tokio::test]

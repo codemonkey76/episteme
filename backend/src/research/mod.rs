@@ -989,6 +989,29 @@ async fn prompt(state: &AppState, key: &str, topic: &str) -> String {
     crate::prompts::get(&state.db, key).await.replace("{topic}", topic)
 }
 
+/// Hard ceiling on any single research model call. A synthesis on a slow local
+/// model can legitimately take minutes; hours means the provider has wedged.
+/// Timing out here surfaces as an error so the orchestrator's per-stage
+/// fallbacks run (synthesis → grouped-notes report) instead of the job hanging
+/// in `running` forever. Belt to the model-router read-timeout's braces — this
+/// also bounds the cloud/genai path, which has no per-request timeout.
+const MODEL_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+async fn complete_with_timeout(
+    provider: &ProviderConfig,
+    history: Vec<crate::model_router::ChatMessage>,
+) -> Result<(String, Option<crate::model_router::TokenUsage>)> {
+    match tokio::time::timeout(MODEL_CALL_TIMEOUT, ModelRouter::complete_with_usage(provider, history))
+        .await
+    {
+        Ok(res) => res,
+        Err(_) => Err(anyhow!(
+            "model call timed out after {}s — the provider may be unresponsive",
+            MODEL_CALL_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// One-shot model call returning tolerantly parsed JSON; retries once with a
 /// stern reminder. Usage recorded under purpose "research".
 async fn complete_json(
@@ -1005,14 +1028,13 @@ async fn complete_json(
             ChatMessage { role: "user".into(), content: Value::String(user.to_string()) },
         ]
     };
-    let (raw, used) = ModelRouter::complete_with_usage(provider, history("")).await?;
+    let (raw, used) = complete_with_timeout(provider, history("")).await?;
     db::usage::record(&state.db, user_id, provider, "research", used).await;
     if let Some(v) = json_slice(&raw) {
         return Ok(v);
     }
     let (raw, used) =
-        ModelRouter::complete_with_usage(provider, history("\nReturn ONLY valid JSON, no prose."))
-            .await?;
+        complete_with_timeout(provider, history("\nReturn ONLY valid JSON, no prose.")).await?;
     db::usage::record(&state.db, user_id, provider, "research", used).await;
     json_slice(&raw).ok_or_else(|| anyhow!("model did not return parseable JSON"))
 }

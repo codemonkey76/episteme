@@ -106,6 +106,40 @@ pub async fn set_status(
     Ok(())
 }
 
+/// Fail every job still marked `running` — called once at startup. A running
+/// job's worker task lives in process memory, so any survivor of a restart is
+/// orphaned: it will never progress and would sit in the UI forever. Returns
+/// how many were swept.
+pub async fn fail_orphaned_running(pool: &SqlitePool) -> Result<u64> {
+    let res = sqlx::query(
+        "UPDATE jobs SET status = 'failed',
+                error = 'interrupted by a server restart',
+                updated_at = ?
+         WHERE status = 'running'",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// User-initiated cancel: fail a job the user owns that's still in flight
+/// (running or awaiting approval). Returns false if it wasn't cancellable
+/// (already finished, or not theirs). Pending approvals for the session are
+/// cleared so the global queue doesn't keep showing them.
+pub async fn cancel(pool: &SqlitePool, user_id: &str, id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE jobs SET status = 'failed', error = 'cancelled', updated_at = ?
+         WHERE id = ? AND user_id = ? AND status IN ('running', 'needs_approval')",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}
+
 /// The session's suspended job, if any.
 pub async fn suspended_for_session(pool: &SqlitePool, session_id: &str) -> Result<Option<Job>> {
     Ok(sqlx::query_as::<_, Job>(&format!(

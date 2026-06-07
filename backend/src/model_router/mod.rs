@@ -248,7 +248,16 @@ async fn stream_ollama(
         body["options"] = serde_json::json!({ "num_ctx": num_ctx });
     }
 
-    let client = reqwest::Client::new();
+    // A read (not total) timeout: streaming replies can run for minutes on a
+    // slow local model, but a genuinely wedged Ollama (or a dropped socket
+    // that never errors) stops sending bytes — without this the request, and
+    // any job awaiting it, hangs forever. read_timeout fires only on an idle
+    // gap between bytes, so legitimate slow streams are unaffected.
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| anyhow::anyhow!("Ollama client build error: {e}"))?;
     let response = client
         .post(&url)
         .json(&body)

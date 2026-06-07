@@ -44,6 +44,14 @@ async fn main() -> Result<()> {
 
     let (state, job_rx) = AppState::new(pool);
     let state = Arc::new(state);
+    // Any job still 'running' from before this process started is orphaned —
+    // its worker task died with the previous process. Fail them so they don't
+    // sit in the UI forever (e.g. a job wedged on an unresponsive provider).
+    match db::jobs::fail_orphaned_running(&state.db).await {
+        Ok(n) if n > 0 => tracing::warn!("failed {n} orphaned running job(s) from a prior run"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("orphan-job sweep failed: {e}"),
+    }
     integrations::microsoft::migrate_legacy(&state).await;
     integrations::microsoft::migrate_shared_to_per_user(&state).await;
     categorizer::spawn_worker(state.clone());

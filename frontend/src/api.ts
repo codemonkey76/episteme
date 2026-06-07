@@ -233,7 +233,7 @@ export interface Job {
   id: string
   user_id: string
   session_id: string
-  kind: 'background' | 'scheduled'
+  kind: 'background' | 'scheduled' | 'research'
   name: string
   provider: string
   status: 'running' | 'needs_approval' | 'done' | 'failed'
@@ -256,6 +256,9 @@ export const jobs = {
   list: () => json<{ jobs: Job[] }>('/jobs'),
   pendingAll: () =>
     json<{ pending_actions: PendingActionGlobal[] }>('/approvals/pending'),
+  /** Fail an in-flight job (e.g. one stuck on an unresponsive provider). */
+  cancel: (id: string) =>
+    json<{ cancelled: boolean }>(`/jobs/${id}/cancel`, { method: 'POST' }),
 }
 
 // Email (Microsoft Graph proxy)
