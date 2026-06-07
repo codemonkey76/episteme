@@ -1,4 +1,5 @@
 import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as html_parser;
 
 /// Per-element style overrides that keep HTML email readable on the app's
 /// card, in either presentation mode.
@@ -15,6 +16,78 @@ import 'package:html/dom.dart' as dom;
 ///    survives readably;
 ///  - give links an explicit palette colour.
 /// Colours we can't parse (gradients, images, var()) are left alone.
+/// Rewrite an email's inline colour styling in the markup itself so it reads
+/// on the current card.
+///
+/// This exists because `customStylesBuilder` CANNOT reliably override inline
+/// styles: flutter_widget_from_html_core applies the element's own `style`
+/// attribute AFTER the builder's output (and `!important` is an unimplemented
+/// TODO in the package), so an email's `style="color:#000"` wins over our
+/// re-lit colour and renders black-on-black on the dark card. Mutating the
+/// attributes before the renderer sees them is the only ordering that always
+/// works; the rules are the same ones `emailStyleOverrides` applies.
+String sanitizeEmailHtml(String html, {required bool dark}) {
+  final dom.Document doc;
+  try {
+    doc = html_parser.parse(html);
+  } catch (_) {
+    return html; // unparseable: let the renderer do what it can
+  }
+  final body = doc.body;
+  if (body == null) return html;
+  for (final e in body.querySelectorAll('*')) {
+    _sanitizeElement(e, dark: dark);
+  }
+  return body.innerHtml;
+}
+
+void _sanitizeElement(dom.Element e, {required bool dark}) {
+  var style = e.attributes['style'] ?? '';
+
+  // Backgrounds that clash with the card are removed outright.
+  final bg = _cssValue(style, 'background-color') ??
+      _cssValue(style, 'background') ??
+      e.attributes['bgcolor'];
+  final bgRgb = parseCssColor(bg);
+  if (bgRgb != null) {
+    final bgLum = _luminance(bgRgb);
+    if (dark ? bgLum > 0.45 : bgLum < 0.45) {
+      style = _stripDecl(_stripDecl(style, 'background'), 'background-color');
+      e.attributes.remove('bgcolor');
+    }
+  }
+
+  // Text colours that would vanish are re-lit in place, preserving hue.
+  final color = _cssValue(style, 'color') ?? e.attributes['color'];
+  final adjusted = readableColor(color, dark: dark);
+  if (adjusted != null) {
+    style = '${_stripDecl(style, 'color')};color:$adjusted';
+    e.attributes.remove('color'); // <font color=…>
+  }
+
+  // Links without a usable colour of their own get the palette colour.
+  if (e.localName == 'a' &&
+      parseCssColor(_cssValue(style, 'color') ?? e.attributes['color']) ==
+          null) {
+    style = '$style;color:${dark ? '#7ab0ff' : '#1a5fb4'}';
+  }
+
+  style = style.replaceAll(RegExp(r'^[;\s]+|[;\s]+$'), '');
+  if (style.isEmpty) {
+    e.attributes.remove('style');
+  } else {
+    e.attributes['style'] = style;
+  }
+}
+
+/// Remove every declaration of `prop` from an inline style string.
+/// `background` deliberately doesn't match `background-color:` (no `:` after
+/// the bare word there).
+String _stripDecl(String style, String prop) => style.replaceAll(
+      RegExp('(?:^|;)\\s*$prop\\s*:[^;]*', caseSensitive: false),
+      '',
+    );
+
 Map<String, String>? emailStyleOverrides(dom.Element e, {required bool dark}) {
   final out = <String, String>{};
   final style = e.attributes['style'] ?? '';

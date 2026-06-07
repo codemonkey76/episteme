@@ -92,4 +92,61 @@ void main() {
       expect(emailStyleOverrides(e, dark: true), isNull);
     });
   });
+
+  // The renderer applies an element's own inline style AFTER
+  // customStylesBuilder output, so the builder alone can't fix inline-styled
+  // emails — sanitizeEmailHtml must rewrite the markup itself.
+  group('sanitizeEmailHtml', () {
+    test('re-lights inline black text in dark mode, in the style attribute', () {
+      final out = sanitizeEmailHtml(
+          '<div style="color:#000">hello</div>', dark: true);
+      expect(out, isNot(contains('color:#000')));
+      expect(out, contains('color:#c7c7c7'));
+    });
+
+    test('drops light inline backgrounds (style and bgcolor) in dark mode', () {
+      final out = sanitizeEmailHtml(
+          '<table bgcolor="#ffffff"><tr><td style="background-color:#fff;color:#222">x</td></tr></table>',
+          dark: true);
+      expect(out, isNot(contains('bgcolor')));
+      expect(out, isNot(contains('background-color:#fff')));
+      expect(out, isNot(contains('color:#222')));
+    });
+
+    test('keeps backgrounds that already match the card', () {
+      final dark = sanitizeEmailHtml(
+          '<div style="background-color:#1a1a1a">x</div>', dark: true);
+      expect(dark, contains('background-color:#1a1a1a'));
+      final light = sanitizeEmailHtml(
+          '<div style="background-color:#fafafa">x</div>', dark: false);
+      expect(light, contains('background-color:#fafafa'));
+    });
+
+    test('rewrites font color attributes', () {
+      final out = sanitizeEmailHtml('<font color="black">x</font>', dark: true);
+      expect(out, isNot(contains('color="black"')));
+      expect(out, contains('color:#c7c7c7'));
+    });
+
+    test('background shorthand strip never eats background-color', () {
+      // Light shorthand dropped; the unrelated declaration survives.
+      final out = sanitizeEmailHtml(
+          '<div style="background:#fff;padding:4px">x</div>', dark: true);
+      expect(out, isNot(contains('background:#fff')));
+      expect(out, contains('padding:4px'));
+    });
+
+    test('pins link colours and preserves readable inline ones', () {
+      final bare = sanitizeEmailHtml('<a href="https://x.example">x</a>', dark: true);
+      expect(bare, contains('color:#7ab0ff'));
+      final styled = sanitizeEmailHtml(
+          '<a href="https://x.example" style="color:#9ecbff">x</a>', dark: true);
+      expect(styled, contains('color:#9ecbff'));
+    });
+
+    test('plain text and empty input pass through unharmed', () {
+      expect(sanitizeEmailHtml('just words', dark: true), contains('just words'));
+      expect(sanitizeEmailHtml('', dark: true), '');
+    });
+  });
 }

@@ -34,6 +34,23 @@ class _MessageScreenState extends State<MessageScreen> {
   // colours that would vanish against the card are sanitized either way.
   bool _darkEmail = true;
 
+  // sanitizeEmailHtml parses/serializes the whole body — cache per source +
+  // mode so rebuilds (streaming summary, selection) don't re-run it.
+  String? _sanitized;
+  String? _sanitizedSource;
+  bool? _sanitizedDark;
+
+  String _sanitizedBody(String source) {
+    if (_sanitized == null ||
+        _sanitizedSource != source ||
+        _sanitizedDark != _darkEmail) {
+      _sanitized = sanitizeEmailHtml(source, dark: _darkEmail);
+      _sanitizedSource = source;
+      _sanitizedDark = _darkEmail;
+    }
+    return _sanitized!;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -486,11 +503,12 @@ class _MessageScreenState extends State<MessageScreen> {
                       },
                       // HTML email renders on a card: dark with light text by
                       // default (matching the app), or light "paper" via the
-                      // toggle. Either way emailStyleOverrides sanitizes inline
-                      // colours that would vanish against the card — the HTML
-                      // renderer ignores <style> blocks, so emails styled via
-                      // classes otherwise end up with default-coloured text on
-                      // their own inline backgrounds (black on black).
+                      // toggle. The body's inline colours are rewritten in the
+                      // markup itself (sanitizeEmailHtml) — the renderer applies
+                      // an element's own inline style over customStylesBuilder
+                      // output, so builder-only overrides lose to inline-styled
+                      // emails (black text on the dark card). The builder still
+                      // runs for attribute-styled elements as belt-and-braces.
                       child: d.bodyIsHtml
                           ? Container(
                               width: double.infinity,
@@ -502,7 +520,7 @@ class _MessageScreenState extends State<MessageScreen> {
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: HtmlWidget(
-                                renderedHtml ?? d.body,
+                                _sanitizedBody(renderedHtml ?? d.body),
                                 textStyle: TextStyle(
                                     color: _darkEmail
                                         ? const Color(0xFFDEDEDE)
