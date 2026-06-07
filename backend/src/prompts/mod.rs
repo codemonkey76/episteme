@@ -194,6 +194,26 @@ deadlines, or actions the user needs to respond to. If the email quotes earlier 
 messages, focus on the most recent one. Output only the summary — no preamble.",
     },
     PromptDef {
+        key: "session_compact",
+        name: "Session compaction",
+        description: "Summarizes the older part of a long chat session into a compact \
+preamble the model sees instead of the verbatim turns; recent turns stay as-is and the \
+full transcript is still shown in the UI. Runs in the background once a session \
+outgrows the context budget. The previous summary and the transcript are appended \
+after this text.",
+        variables: &[],
+        default: "You are compacting the early part of a long conversation between a user \
+and an AI assistant into a dense context summary. The summary replaces those messages in \
+the model's context, so EVERYTHING still needed later must survive: facts established, \
+decisions made, user preferences and constraints stated, questions asked and their \
+answers, tool actions taken and their outcomes (what was created, changed, or deleted, \
+with names/ids), and anything left open or promised. Prefer concrete details (names, \
+dates, ids, numbers) over narration; drop pleasantries, retries, and dead ends. If a \
+previous summary is provided, fold it in — don't lose anything it records. Write terse \
+third-person prose or bullets, no headers. Stay under about 500 words. Output only the \
+summary.",
+    },
+    PromptDef {
         key: "research_plan",
         name: "Research: plan",
         description: "First stage of a deep-research run: breaks the topic into \

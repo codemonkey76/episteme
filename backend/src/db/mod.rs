@@ -76,6 +76,40 @@ mod tests {
         assert_eq!(decided.status, "approved");
     }
 
+    /// Compaction state round-trips and the created_at cursor slices the
+    /// model-facing history while the full transcript stays listable.
+    #[tokio::test]
+    async fn compaction_cursor_slices_model_history() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1', 'test', 'x', 'admin', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO sessions (id, user_id, title, created_at, updated_at) VALUES ('s1', 'u1', 'long chat', '2026-01-01', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+
+        let m1 = messages::insert(&pool, "s1", "user", "\"old\"", None, None).await.unwrap();
+        let m2 = messages::insert(&pool, "s1", "assistant", "\"older reply\"", None, None).await.unwrap();
+        let m3 = messages::insert(&pool, "s1", "user", "\"new\"", None, None).await.unwrap();
+        assert!(m1.created_at <= m2.created_at && m2.created_at <= m3.created_at);
+
+        // Fresh session: no summary, cursor None, everything is live.
+        assert_eq!(sessions::compaction(&pool, "s1").await.unwrap(), (None, None));
+        assert_eq!(messages::list_for_session_after(&pool, "s1", None).await.unwrap().len(), 3);
+
+        // Compact through m2: only m3 remains model-facing.
+        sessions::set_compaction(&pool, "s1", "user and assistant exchanged olds", &m2.created_at)
+            .await
+            .unwrap();
+        let (summary, until) = sessions::compaction(&pool, "s1").await.unwrap();
+        assert_eq!(summary.as_deref(), Some("user and assistant exchanged olds"));
+        let live =
+            messages::list_for_session_after(&pool, "s1", until.as_deref()).await.unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, m3.id);
+
+        // The display transcript is untouched.
+        assert_eq!(messages::list_for_session(&pool, "s1").await.unwrap().len(), 3);
+    }
+
     /// End-to-end check that the migrations run on the bundled SQLite (FTS5
     /// included) and the message_fts triggers index/search/cleanup correctly.
     #[tokio::test]

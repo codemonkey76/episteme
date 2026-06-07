@@ -74,8 +74,8 @@ token registered after login.
 
 ---
 
-Phases 1–7 shipped (June 2026). The second arc below makes the agent able to
-act and research on its own, safely.
+Phases 1–7 shipped (June 2026). The second arc below — also fully shipped —
+made the agent able to act and research on its own, safely.
 
 ## Phase 8 — Background agent runs + approval queue ✅ (shipped)
 
@@ -118,19 +118,23 @@ no-JS WebView viewer (HTML fetched over the authed client, rendered via
 loadHtmlString — no cookies in the WebView). Remaining follow-up: ingest
 reports into documents-RAG.
 
-## Phase 10 — Context compaction
+## Phase 10 — Context compaction ✅ (shipped)
 
-Every turn replays the session's entire history, including fat tool results
-(8k-char email bodies, 12k-char pages). Long sessions degrade quietly.
-
-- Past a size threshold, old turns are summarized (one `complete_with_usage`
-  call, purpose `compaction`) into a compact preamble; the recent window stays
-  verbatim. Tool results older than N turns are aggressively truncated first
-  (cheap, no model call) before summarization kicks in.
-- Persisted alongside the session so compaction happens once, not per turn;
-  the full transcript remains in `messages` for display/search — only the
-  model-facing history shrinks.
-- Generalizes the scratchpad lessons from Phase 9.
+Two layers in the new `compaction` module, both shrinking only the
+model-facing history `run_turn` builds — the full transcript stays in
+`messages` for display/FTS. (1) Cheap, every turn: tool results outside the
+most recent 12 messages are clipped to 1,500 chars. (2) Rolling summarization:
+after a completed turn (attended chat and unattended jobs alike), a detached
+task measures the live history; past 48k chars it summarizes everything but
+the recent window — boundary snapped to a user message so a kept tool result
+is never orphaned from its tool_call — into `sessions.summary` (migration
+019), advancing a `sessions.summary_until` created_at cursor. The next turn
+loads only rows past the cursor and injects the summary as a system message
+(after the tool preamble and memories); each compaction folds the previous
+summary in, so it rolls forever. Multimodal messages count and render only
+their text part — base64 never reaches the summarizer. Editable prompt
+`session_compact`; usage purpose `compaction`; failures log and leave the
+session uncompacted.
 
 ## Backlog (quick wins, any time)
 

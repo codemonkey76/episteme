@@ -40,7 +40,14 @@ pub async fn run_turn(
     // auto-approved — and the turn suspends.
     unattended: bool,
 ) -> Result<TurnOutcome> {
-    let raw_messages = db::messages::list_for_session(&state.db, &session_id).await?;
+    // Compaction state: once a session outgrows the context budget, messages
+    // at or before the cursor are represented by the stored summary instead of
+    // being replayed verbatim. The full transcript stays in `messages`.
+    let (session_summary, summary_until) =
+        db::sessions::compaction(&state.db, &session_id).await?;
+    let raw_messages =
+        db::messages::list_for_session_after(&state.db, &session_id, summary_until.as_deref())
+            .await?;
     let mut history: Vec<ChatMessage> = raw_messages
         .into_iter()
         .map(|m| {
@@ -76,6 +83,14 @@ pub async fn run_turn(
         })
         .unwrap_or_default();
 
+    // Cheap context dieting: clip fat tool results outside the recent window
+    // (model-facing only — the stored transcript keeps the full results).
+    crate::compaction::truncate_old_tool_results(&mut history);
+
+    // Compacted-away turns ride in as a single system summary at the front.
+    if let Some(summary) = &session_summary {
+        history.insert(0, crate::compaction::summary_message(summary));
+    }
     // Prepend stored memories so the model has cross-session context —
     // relevance-selected against the latest user message once the store is big.
     crate::memory::inject(&mut history, &state, &user_id, &user_text).await;
@@ -189,6 +204,15 @@ pub async fn run_turn(
                     crate::memory::extract(&st, &uid, prov, user_text, assistant_text, Some(sess))
                         .await;
                 });
+                // Likewise detached: summarize the session's older turns once
+                // it outgrows the context budget, so the next turn replays a
+                // compact history instead of the whole transcript.
+                tokio::spawn(crate::compaction::maybe_compact(
+                    Arc::clone(&state),
+                    user_id.clone(),
+                    session_id.clone(),
+                    provider.clone(),
+                ));
                 db::usage::record(&state.db, &user_id, &provider, "chat", Some(turn_usage)).await;
                 return Ok(TurnOutcome::Completed);
             }

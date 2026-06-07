@@ -71,6 +71,28 @@ pub async fn delete(pool: &SqlitePool, user_id: &str, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Compaction state: (summary, summary_until) — the rolling summary of the
+/// session's older messages and the created_at cursor of the last message it
+/// covers. (None, None) until the session first outgrows the context budget.
+pub async fn compaction(pool: &SqlitePool, id: &str) -> Result<(Option<String>, Option<String>)> {
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT summary, summary_until FROM sessions WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.unwrap_or((None, None)))
+}
+
+pub async fn set_compaction(pool: &SqlitePool, id: &str, summary: &str, until: &str) -> Result<()> {
+    sqlx::query("UPDATE sessions SET summary = ?, summary_until = ? WHERE id = ?")
+        .bind(summary)
+        .bind(until)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn touch(pool: &SqlitePool, id: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")

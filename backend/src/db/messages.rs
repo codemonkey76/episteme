@@ -61,6 +61,27 @@ pub async fn list_for_session(pool: &SqlitePool, session_id: &str) -> Result<Vec
     Ok(rows)
 }
 
+/// Messages newer than the compaction cutoff (all of them when None) — the
+/// model-facing slice of the transcript. Timestamps are RFC3339 from a single
+/// writer, so the string comparison is chronological.
+pub async fn list_for_session_after(
+    pool: &SqlitePool,
+    session_id: &str,
+    after: Option<&str>,
+) -> Result<Vec<Message>> {
+    let rows = sqlx::query_as::<_, Message>(
+        "SELECT id, session_id, role, content, tool_calls, tool_call_id, created_at
+         FROM messages WHERE session_id = ? AND (? IS NULL OR created_at > ?)
+         ORDER BY created_at ASC",
+    )
+    .bind(session_id)
+    .bind(after)
+    .bind(after)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// One full-text search hit, with enough context to jump to the session.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SearchHit {

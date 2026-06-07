@@ -13,6 +13,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 - **Voice input** — a mic button in the mobile chat records speech and transcribes it on the self-hosted Whisper sidecar (Groq/OpenAI Whisper as fallback when configured), dropping the text into the composer for review
 - **Usage tracking** — every model request's token counts are recorded per user, provider, and purpose (chat, auto-sort, memory, …); admins get a usage table in **Settings → System**
 - **Sessions** — conversations persisted to SQLite; resume any past session, and **full-text search** across all of them from the History window (the agent can too, via `search_history`)
+- **Context compaction** — long sessions don't degrade: old tool results are clipped and, past a size budget, older turns are rolled up into a persistent summary the model sees instead of the verbatim history. The full transcript stays untouched in the UI and search — only what's replayed to the model shrinks
 - **Model router** — route to Anthropic, OpenAI, Ollama, Gemini, Groq, DeepSeek, or any OpenAI-compatible endpoint from a single UI; switching is choosing a name from a list
 - **Agent loop with native tools** — the model can call built-in tools (e.g. calendar management), inspect the result, and loop until it reaches a final answer; tool activity is surfaced live in the chat. Works with Ollama function-calling too
 - **MCP host** — connect third-party MCP tool servers (stdio or streamable HTTP) from Settings; their tools are offered to the model alongside native ones, namespaced per server (`server__tool`). Connection status and tool counts show live in Settings, and connect/error events land in the Logs window. The Docker image ships Node (`npx`) and uv (`uvx`), so common stdio servers work out of the box — package caches persist to the data volume
@@ -41,9 +42,12 @@ Your conversations and credentials stay on your machine. The only data that leav
 
 ## What's next
 
-The original roadmap is fully shipped; the second arc is planned in [docs/Roadmap.md](docs/Roadmap.md):
+Both roadmap arcs are fully shipped ([docs/Roadmap.md](docs/Roadmap.md)); what remains is the quick-win backlog:
 
-- **Context compaction** — long sessions stop degrading; old turns summarize, recent ones stay verbatim
+- **Research reports into RAG** — ingest finished deep-research reports into the documents store so later chats can retrieve them
+- **Dollar costs** — per-model price table → $ column in Settings → System
+- **Semantic email** — embed incoming mail so email search works by meaning, not just Graph `$search`
+- **Web push** — browser notifications for commitment cards and job/agent output (currently mobile-only via FCM)
 
 ## Mobile app
 
