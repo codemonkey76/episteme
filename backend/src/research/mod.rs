@@ -31,6 +31,7 @@ fn budgets(depth: &str) -> (usize, usize) {
 }
 
 const MAX_PLAN_QUERIES: usize = 6;
+const MAX_SUBQUESTIONS: usize = 8;
 const URLS_PER_QUERY: usize = 3;
 /// Memo char budget — once full, no further web notes are accepted.
 const MEMO_MAX_CHARS: usize = 24_000;
@@ -133,27 +134,25 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     let mut fetched_urls: HashSet<String> = HashSet::new();
     let mut all_queries: Vec<String> = Vec::new();
     let mut fetches_left = fetch_budget;
+    // Failed fetches (404s, paywalls, timeouts) refund their budget slot;
+    // this attempt cap bounds the total HTTP work so refunds can't run away.
+    let mut attempts_left = fetch_budget * 2;
 
     // ── PLAN ────────────────────────────────────────────────────────────────
     progress(state, &job.session_id, "Planning the investigation…").await;
     let plan_system = prompt(state, "research_plan", &topic).await;
-    let mut queries: Vec<String> = match complete_json(state, &job.user_id, &provider, &plan_system, &topic).await
-    {
-        Ok(v) => v["queries"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|q| q.as_str().map(String::from))
-            .take(MAX_PLAN_QUERIES)
-            .collect(),
-        Err(e) => {
-            tracing::warn!("research plan failed ({e}); degrading to the topic as one query");
-            Vec::new()
-        }
-    };
+    let (mut queries, subquestions) =
+        match complete_json(state, &job.user_id, &provider, &plan_system, &topic).await {
+            Ok(v) => parse_plan(&v),
+            Err(e) => {
+                tracing::warn!("research plan failed ({e}); degrading to the topic as one query");
+                (Vec::new(), Vec::new())
+            }
+        };
     if queries.is_empty() {
         queries.push(topic.clone());
     }
+    let focus = focus_block(&subquestions);
 
     // ── GATHER (web) + REFLECT rounds ──────────────────────────────────────
     let distill_system = prompt(state, "research_distill", &topic).await;
@@ -165,8 +164,10 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
             job,
             &provider,
             &distill_system,
+            &focus,
             &queries,
             &mut fetches_left,
+            &mut attempts_left,
             &mut fetched_urls,
             &mut memo,
             &mut memo_chars,
@@ -175,7 +176,11 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         )
         .await;
 
-        if round >= reflect_rounds || fetches_left == 0 || memo_chars >= MEMO_MAX_CHARS {
+        if round >= reflect_rounds
+            || fetches_left == 0
+            || attempts_left == 0
+            || memo_chars >= MEMO_MAX_CHARS
+        {
             break;
         }
         round += 1;
@@ -183,8 +188,9 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         let reflect_system = prompt(state, "research_reflect", &topic).await;
         let memo_text = memo_as_text(&memo);
         let user = format!(
-            "Earlier queries: {}\n\nCollected notes:\n{}",
+            "Earlier queries: {}{}\n\nCollected notes:\n{}",
             all_queries.join("; "),
+            focus,
             memo_text
         );
         match complete_json(state, &job.user_id, &provider, &reflect_system, &user).await {
@@ -209,8 +215,19 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
 
     // ── INTERNAL corpus ────────────────────────────────────────────────────
     progress(state, &job.session_id, "Checking your documents, email, memories, and chats…").await;
-    gather_internal(state, job, &provider, &distill_system, &topic, &mut memo, &mut memo_chars, &mut sources)
-        .await;
+    gather_internal(
+        state,
+        job,
+        &provider,
+        &distill_system,
+        &focus,
+        &topic,
+        &all_queries,
+        &mut memo,
+        &mut memo_chars,
+        &mut sources,
+    )
+    .await;
 
     if memo.is_empty() {
         return Err(anyhow!(
@@ -222,7 +239,9 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     progress(state, &job.session_id, "Writing the report…").await;
     let synth_system = prompt(state, "research_synthesize", &topic).await;
     let synth_user = format!(
-        "Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
+        "{}Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
+        // The report should answer what the plan set out to answer.
+        if focus.is_empty() { String::new() } else { format!("{}\n\n", focus.trim_start()) },
         memo_as_text(&memo),
         sources
             .iter()
@@ -279,8 +298,10 @@ async fn gather_web(
     job: &Job,
     provider: &ProviderConfig,
     distill_system: &str,
+    focus: &str,
     queries: &[String],
     fetches_left: &mut usize,
+    attempts_left: &mut usize,
     fetched_urls: &mut HashSet<String>,
     memo: &mut Vec<Note>,
     memo_chars: &mut usize,
@@ -288,7 +309,7 @@ async fn gather_web(
     image_candidates: &mut Vec<ImageCandidate>,
 ) {
     for query in queries {
-        if *fetches_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
+        if *fetches_left == 0 || *attempts_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
             return;
         }
         let results = match search(state, query).await {
@@ -310,19 +331,22 @@ async fn gather_web(
             .take(URLS_PER_QUERY)
             .collect();
         for url in urls {
-            if *fetches_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
+            if *fetches_left == 0 || *attempts_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
                 return;
             }
-            *fetches_left -= 1;
+            *attempts_left -= 1;
             fetched_urls.insert(url.clone());
 
             let page = match fetch_readable(&state.http_client, &url).await {
                 Ok(p) => p,
                 Err(e) => {
+                    // Dead page: the budget slot is refunded (only the attempt
+                    // cap was consumed), so a flaky web doesn't shrink the run.
                     tracing::info!("research fetch {url} failed: {e}");
                     continue;
                 }
             };
+            *fetches_left -= 1;
             let label = page.title.clone().unwrap_or_else(|| url.clone());
             let source_id = format!("S{}", sources.len() + 1);
 
@@ -335,7 +359,7 @@ async fn gather_web(
                 .join("\n");
             let text: String = page.text.chars().take(DISTILL_TEXT_MAX).collect();
             let user = format!(
-                "Source: {label} ({url})\n\nImage candidates:\n{}\n\nPage text:\n{text}",
+                "Source: {label} ({url}){focus}\n\nImage candidates:\n{}\n\nPage text:\n{text}",
                 if candidates_text.is_empty() { "(none)" } else { &candidates_text },
             );
             let Ok(v) = complete_json(state, &job.user_id, provider, distill_system, &user).await else {
@@ -402,13 +426,25 @@ async fn gather_internal(
     job: &Job,
     provider: &ProviderConfig,
     distill_system: &str,
+    focus: &str,
     topic: &str,
+    queries: &[String],
     memo: &mut Vec<Note>,
     memo_chars: &mut usize,
     sources: &mut Vec<Source>,
 ) {
     let user_id = &job.user_id;
     let mut batches: Vec<(String, String, String)> = Vec::new(); // (id, label, text)
+
+    // Keyword legs (chat FTS, email $search) AND every term together, so the
+    // whole multi-word topic almost never matches — probe with the plan's
+    // focused queries first, the topic as a last try.
+    let keyword_probes: Vec<&str> = queries
+        .iter()
+        .map(String::as_str)
+        .take(3)
+        .chain(std::iter::once(topic))
+        .collect();
 
     // Documents: cosine top chunks (skip silently when embeddings unavailable).
     if let Ok(qvec) = embeddings::embed(&state.db, &state.http_client, topic).await {
@@ -450,62 +486,91 @@ async fn gather_internal(
         }
     }
 
-    // Chat history (FTS).
-    if let Ok(hits) = db::messages::search(&state.db, user_id, topic, 5).await {
-        for h in hits {
-            batches.push((
-                format!("chat:{}", h.session_title),
-                format!("chat: {}", h.session_title),
-                h.snippet,
-            ));
+    // Chat history (FTS), merged across probes.
+    let mut chat_seen: HashSet<String> = HashSet::new();
+    for probe in &keyword_probes {
+        if chat_seen.len() >= 5 {
+            break;
+        }
+        if let Ok(hits) = db::messages::search(&state.db, user_id, probe, 3).await {
+            for h in hits {
+                if chat_seen.len() < 5 && chat_seen.insert(h.message_id) {
+                    batches.push((
+                        format!("chat:{}", h.session_title),
+                        format!("chat: {}", h.session_title),
+                        h.snippet,
+                    ));
+                }
+            }
         }
     }
 
-    // Email ($search; read the top 2 bodies). Soft-fail when M365 unconnected.
-    if let Ok(body) = graph_get(
-        state,
-        user_id,
-        &format!("{GRAPH}/me/messages"),
-        &[
-            ("$search", &format!("\"{}\"", topic.replace('"', "")) as &str),
-            ("$select", "id,subject,from,bodyPreview"),
-            ("$top", "5"),
-        ],
-    )
-    .await
-    {
-        let messages: Vec<&Value> = body["value"].as_array().into_iter().flatten().collect();
-        for (i, m) in messages.iter().enumerate() {
-            let subject = m["subject"].as_str().unwrap_or("(no subject)").to_string();
-            let text = if i < 2 {
-                // Full body for the top hits.
-                if let Some(id) = m["id"].as_str() {
-                    match graph_get(
-                        state,
-                        user_id,
-                        &format!("{GRAPH}/me/messages/{id}"),
-                        &[("$select", "body")],
-                    )
-                    .await
-                    {
-                        Ok(full) => {
-                            let raw = full["body"]["content"].as_str().unwrap_or("");
-                            if full["body"]["contentType"].as_str() == Some("html") {
-                                html_to_text(raw)
-                            } else {
-                                raw.to_string()
-                            }
-                        }
-                        Err(_) => m["bodyPreview"].as_str().unwrap_or("").to_string(),
-                    }
-                } else {
-                    continue;
-                }
-            } else {
-                m["bodyPreview"].as_str().unwrap_or("").to_string()
-            };
-            batches.push((format!("email:{subject}"), format!("email: {subject}"), text));
+    // Email: keyword $search per probe plus the semantic index (meaning
+    // matches keyword search can't make). Soft-fail when M365 unconnected.
+    let mut email_hits: Vec<(String, String, String)> = Vec::new(); // (id, subject, preview)
+    let mut email_seen: HashSet<String> = HashSet::new();
+    for probe in &keyword_probes {
+        if email_hits.len() >= 6 {
+            break;
         }
+        let Ok(body) = graph_get(
+            state,
+            user_id,
+            &format!("{GRAPH}/me/messages"),
+            &[
+                ("$search", &format!("\"{}\"", probe.replace('"', "")) as &str),
+                ("$select", "id,subject,from,bodyPreview"),
+                ("$top", "3"),
+            ],
+        )
+        .await
+        else {
+            break; // unconnected/unauthorized: further probes won't fare better
+        };
+        for m in body["value"].as_array().into_iter().flatten() {
+            let Some(id) = m["id"].as_str() else { continue };
+            if email_seen.insert(id.to_string()) {
+                email_hits.push((
+                    id.to_string(),
+                    m["subject"].as_str().unwrap_or("(no subject)").to_string(),
+                    m["bodyPreview"].as_str().unwrap_or("").to_string(),
+                ));
+            }
+        }
+    }
+    if let Ok(hits) = crate::email_index::search(state, user_id, "", topic, 5).await {
+        for h in hits {
+            if email_seen.insert(h.message_id.clone()) {
+                email_hits.push((h.message_id, h.subject, h.snippet));
+            }
+        }
+    }
+    email_hits.truncate(6);
+    for (i, (id, subject, preview)) in email_hits.iter().enumerate() {
+        // Full body for the top hits; the stored preview/snippet for the rest.
+        let text = if i < 2 {
+            match graph_get(
+                state,
+                user_id,
+                &format!("{GRAPH}/me/messages/{id}"),
+                &[("$select", "body")],
+            )
+            .await
+            {
+                Ok(full) => {
+                    let raw = full["body"]["content"].as_str().unwrap_or("");
+                    if full["body"]["contentType"].as_str() == Some("html") {
+                        html_to_text(raw)
+                    } else {
+                        raw.to_string()
+                    }
+                }
+                Err(_) => preview.clone(),
+            }
+        } else {
+            preview.clone()
+        };
+        batches.push((format!("email:{subject}"), format!("email: {subject}"), text));
     }
 
     // Distill each internal batch like a web page.
@@ -517,7 +582,8 @@ async fn gather_internal(
             continue;
         }
         let clipped: String = text.chars().take(DISTILL_TEXT_MAX).collect();
-        let user = format!("Source: {label}\n\nImage candidates:\n(none)\n\nPage text:\n{clipped}");
+        let user =
+            format!("Source: {label}{focus}\n\nImage candidates:\n(none)\n\nPage text:\n{clipped}");
         let Ok(v) = complete_json(state, &job.user_id, provider, distill_system, &user).await else { continue };
         if !v["relevant"].as_bool().unwrap_or(false) {
             continue;
@@ -650,6 +716,34 @@ fn fallback_report(topic: &str, memo: &[Note], sources: &[Source]) -> ReportDoc 
     }
 }
 
+/// Split a plan response into (queries, subquestions), both capped.
+fn parse_plan(v: &Value) -> (Vec<String>, Vec<String>) {
+    let strings = |key: &str, cap: usize| -> Vec<String> {
+        v[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|q| q.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+            .take(cap)
+            .collect()
+    };
+    (strings("queries", MAX_PLAN_QUERIES), strings("subquestions", MAX_SUBQUESTIONS))
+}
+
+/// The sub-question block appended to distill/reflect/synthesize inputs so
+/// every stage knows what the investigation is trying to answer — without it,
+/// reflect can't judge coverage and distill extracts unfocused trivia.
+/// Empty when the plan produced none.
+fn focus_block(subquestions: &[String]) -> String {
+    if subquestions.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nSub-questions guiding this investigation:\n{}",
+        subquestions.iter().map(|q| format!("- {q}")).collect::<Vec<_>>().join("\n")
+    )
+}
+
 // ── Plumbing ────────────────────────────────────────────────────────────────
 
 async fn search(state: &AppState, query: &str) -> Result<Vec<Value>> {
@@ -760,6 +854,29 @@ mod tests {
         // Outermost braces win even with nested objects.
         let nested = "x {\"a\": {\"b\": 1}} y";
         assert_eq!(json_slice(nested).unwrap()["a"]["b"], 1);
+    }
+
+    #[test]
+    fn parse_plan_caps_and_cleans_both_lists() {
+        let v = serde_json::json!({
+            "queries": ["a", " ", "b", "c", "d", "e", "f", "g"],
+            "subquestions": ["q1", "q2"],
+        });
+        let (queries, subs) = parse_plan(&v);
+        assert_eq!(queries.len(), MAX_PLAN_QUERIES); // blank dropped, capped
+        assert!(!queries.contains(&" ".to_string()));
+        assert_eq!(subs, ["q1", "q2"]);
+        // Missing keys yield empties, not errors.
+        assert_eq!(parse_plan(&serde_json::json!({})), (vec![], vec![]));
+    }
+
+    #[test]
+    fn focus_block_lists_subquestions_or_vanishes() {
+        assert_eq!(focus_block(&[]), "");
+        let block = focus_block(&["How much does it cost?".to_string(), "Is it safe?".to_string()]);
+        assert!(block.starts_with("\n\nSub-questions"));
+        assert!(block.contains("- How much does it cost?"));
+        assert!(block.contains("- Is it safe?"));
     }
 
     #[test]

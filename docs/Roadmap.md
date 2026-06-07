@@ -118,6 +118,17 @@ no-JS WebView viewer (HTML fetched over the authed client, rendered via
 loadHtmlString — no cookies in the WebView). Remaining follow-up: ingest
 reports into documents-RAG.
 
+Quality pass (June 2026): the plan's sub-questions — previously generated and
+discarded — now thread through every stage (distill extracts against them,
+reflect judges coverage by them, synthesize answers them); the internal
+corpus legs probe chat FTS and email `$search` with the plan's short queries
+instead of the whole AND-everything topic string, and the email leg also
+queries the semantic email index; failed page fetches refund their budget
+slot (bounded by a 2× attempt cap) so flaky sources no longer shrink a run.
+Still open from the review: SERP triage before fetching, memo compaction
+instead of a hard 24k cap, chunked distill for long pages, recency/authority
+signals, single-source claim flagging, a separate cheap distill model.
+
 ## Phase 10 — Context compaction ✅ (shipped)
 
 Two layers in the new `compaction` module, both shrinking only the
