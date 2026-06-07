@@ -113,36 +113,58 @@ pub async fn transcribe(
     // Sidecar first, hosted Whisper as fallback; remember why each leg failed.
     let mut failures: Vec<String> = Vec::new();
     for target in transcription_targets(&providers) {
-        let part = reqwest::multipart::Part::bytes(bytes.clone())
-            .file_name(format!("voice.{ext}"))
-            .mime_str(&mime)
-            .map_err(|e| AppError::BadRequest(format!("invalid mime type: {e}")))?;
-        let form = reqwest::multipart::Form::new()
-            .part("file", part)
-            .text("model", target.model.clone())
-            .text("response_format", "json");
+        // One install-and-retry per target: the sidecar doesn't pull models on
+        // demand, so a fresh volume answers "not installed" until we ask it to.
+        let mut installed = false;
+        loop {
+            let part = reqwest::multipart::Part::bytes(bytes.clone())
+                .file_name(format!("voice.{ext}"))
+                .mime_str(&mime)
+                .map_err(|e| AppError::BadRequest(format!("invalid mime type: {e}")))?;
+            let form = reqwest::multipart::Form::new()
+                .part("file", part)
+                .text("model", target.model.clone())
+                .text("response_format", "json");
 
-        let mut request = state.http_client.post(&target.url).multipart(form);
-        if let Some(key) = &target.key {
-            request = request.bearer_auth(key);
-        }
-        let response = match request.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                failures.push(format!("{}: {e}", target.url));
-                continue;
+            let mut request = state.http_client.post(&target.url).multipart(form);
+            if let Some(key) = &target.key {
+                request = request.bearer_auth(key);
             }
-        };
+            let response = match request.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    failures.push(format!("{}: {e}", target.url));
+                    break;
+                }
+            };
 
-        let status = response.status();
-        let parsed: Value = response.json().await.unwrap_or(Value::Null);
-        if !status.is_success() {
-            let msg = parsed["error"]["message"].as_str().unwrap_or("unknown error");
+            let status = response.status();
+            let parsed: Value = response.json().await.unwrap_or(Value::Null);
+            if status.is_success() {
+                let text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
+                return Ok(Json(serde_json::json!({ "text": text })));
+            }
+            // Hosted endpoints put errors in error.message; speaches in detail.
+            let msg = parsed["error"]["message"]
+                .as_str()
+                .or_else(|| parsed["detail"].as_str())
+                .unwrap_or("unknown error");
+            if target.key.is_none() && !installed && msg.contains("not installed") {
+                installed = true;
+                if let Some(base) = target.url.strip_suffix("/audio/transcriptions") {
+                    let pull = state
+                        .http_client
+                        .post(format!("{base}/models/{}", target.model))
+                        .send()
+                        .await;
+                    if pull.is_ok_and(|r| r.status().is_success()) {
+                        continue;
+                    }
+                }
+            }
             failures.push(format!("{}: {status} {msg}", target.url));
-            continue;
+            break;
         }
-        let text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
-        return Ok(Json(serde_json::json!({ "text": text })));
     }
 
     Err(AppError::Internal(anyhow::anyhow!(
