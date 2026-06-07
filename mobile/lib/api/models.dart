@@ -258,11 +258,20 @@ class Job {
 }
 
 class Report {
-  Report({required this.id, required this.title, required this.createdAt});
+  Report({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    this.shareToken,
+  });
 
   final String id;
   final String title;
   final DateTime? createdAt;
+
+  /// Public share token; non-null = anyone with the link can view it.
+  /// Mutable so share/revoke updates the in-place list without a refetch.
+  String? shareToken;
 
   factory Report.fromJson(Map<String, dynamic> j) => Report(
         id: j['id'] as String,
@@ -270,6 +279,7 @@ class Report {
         createdAt: j['created_at'] != null
             ? DateTime.tryParse(j['created_at'] as String)?.toLocal()
             : null,
+        shareToken: j['share_token'] as String?,
       );
 }
 

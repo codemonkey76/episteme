@@ -93,6 +93,21 @@ class ActivityStore extends ChangeNotifier {
 
   Future<String> reportHtml(Report r) => _api.getText('/reports/${r.id}/html');
 
+  /// Mint (or reuse) a public link and return its absolute URL. Idempotent
+  /// server-side, so a handed-out link stays valid.
+  Future<String> shareReport(Report r) async {
+    final res = await _api.postJson('/reports/${r.id}/share', null);
+    r.shareToken = res['token'] as String?;
+    notifyListeners();
+    return '${_api.baseUrl}${res['path']}';
+  }
+
+  Future<void> unshareReport(Report r) async {
+    await _api.delete('/reports/${r.id}/share');
+    r.shareToken = null;
+    notifyListeners();
+  }
+
   Future<void> deleteReport(Report r) async {
     await _api.delete('/reports/${r.id}');
     reports.removeWhere((x) => x.id == r.id);
