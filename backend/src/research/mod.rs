@@ -270,34 +270,18 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     // ── SYNTHESIZE ─────────────────────────────────────────────────────────
     progress(state, &job.session_id, "Writing the report…").await;
     let synth_system = prompt(state, "research_synthesize", &topic).await;
-    let synth_user = format!(
-        "{}Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
-        // The report should answer what the plan set out to answer.
-        if focus.is_empty() { String::new() } else { format!("{}\n\n", focus.trim_start()) },
-        memo_as_text(&memo),
-        sources
-            .iter()
-            .map(|s| format!("{} = {}", s.id, s.label))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        if image_candidates.is_empty() {
-            "(none)".to_string()
-        } else {
-            image_candidates
-                .iter()
-                .map(|i| format!("{} — {} ({})", i.id, i.caption, i.url))
-                .collect::<Vec<_>>()
-                .join("\n")
-        },
-    );
-    let doc: ReportDoc = match complete_json(state, &job.user_id, &provider, &synth_system, &synth_user).await {
-        Ok(v) => serde_json::from_value(v).unwrap_or_default(),
-        Err(e) => {
-            tracing::warn!("research synthesis failed ({e}); using fallback report");
-            ReportDoc::default()
-        }
-    };
-    let doc = if doc.sections.is_empty() { fallback_report(&topic, &memo, &sources) } else { doc };
+    let doc = synthesize(
+        state,
+        job,
+        &provider,
+        &topic,
+        &focus,
+        &synth_system,
+        &memo,
+        &sources,
+        &image_candidates,
+    )
+    .await;
 
     // ── IMAGES ─────────────────────────────────────────────────────────────
     let images = embed_images(state, &doc, &image_candidates).await;
@@ -777,6 +761,120 @@ async fn embed_images(
     out
 }
 
+/// Memo char budget for the trimmed synthesis retry — small enough that a
+/// model which stalled on the full prompt can finish.
+const SYNTH_RETRY_MEMO_CHARS: usize = 8_000;
+
+/// Write the report, degrading gracefully so a late stall never wastes the
+/// gathering that already finished. Ladder: (1) synthesize from everything;
+/// (2) on failure/timeout — almost always an over-large prompt for the model —
+/// retry once with a hard-trimmed memo and no image catalogue; (3) only then
+/// the grouped-notes fallback, which is still a complete, cited report.
+#[allow(clippy::too_many_arguments)]
+async fn synthesize(
+    state: &Arc<AppState>,
+    job: &Job,
+    provider: &ProviderConfig,
+    topic: &str,
+    focus: &str,
+    synth_system: &str,
+    memo: &[Note],
+    sources: &[Source],
+    image_candidates: &[ImageCandidate],
+) -> ReportDoc {
+    if let Some(doc) =
+        try_synthesize(state, job, provider, synth_system, focus, memo, sources, image_candidates)
+            .await
+    {
+        return doc;
+    }
+    progress(
+        state,
+        &job.session_id,
+        "The report is taking a while — condensing the notes and trying once more…",
+    )
+    .await;
+    let trimmed = trim_memo(memo, SYNTH_RETRY_MEMO_CHARS);
+    if let Some(doc) =
+        try_synthesize(state, job, provider, synth_system, focus, &trimmed, sources, &[]).await
+    {
+        return doc;
+    }
+    progress(state, &job.session_id, "Couldn't synthesize — assembling a notes-only report.").await;
+    fallback_report(topic, memo, sources)
+}
+
+/// One synthesis attempt. None when the call failed/timed out or the model
+/// produced nothing usable (no sections) — the caller then degrades.
+#[allow(clippy::too_many_arguments)]
+async fn try_synthesize(
+    state: &Arc<AppState>,
+    job: &Job,
+    provider: &ProviderConfig,
+    synth_system: &str,
+    focus: &str,
+    memo: &[Note],
+    sources: &[Source],
+    image_candidates: &[ImageCandidate],
+) -> Option<ReportDoc> {
+    let user = synth_user_prompt(focus, memo, sources, image_candidates);
+    match complete_json(state, &job.user_id, provider, synth_system, &user).await {
+        Ok(v) => {
+            let doc: ReportDoc = serde_json::from_value(v).unwrap_or_default();
+            (!doc.sections.is_empty()).then_some(doc)
+        }
+        Err(e) => {
+            tracing::warn!("research synthesis attempt failed: {e}");
+            None
+        }
+    }
+}
+
+/// The synthesis user prompt: focus block, cited notes, the source key, and
+/// the candidate-image catalogue.
+fn synth_user_prompt(
+    focus: &str,
+    memo: &[Note],
+    sources: &[Source],
+    image_candidates: &[ImageCandidate],
+) -> String {
+    format!(
+        "{}Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
+        if focus.is_empty() { String::new() } else { format!("{}\n\n", focus.trim_start()) },
+        memo_as_text(memo),
+        sources.iter().map(|s| format!("{} = {}", s.id, s.label)).collect::<Vec<_>>().join("\n"),
+        if image_candidates.is_empty() {
+            "(none)".to_string()
+        } else {
+            image_candidates
+                .iter()
+                .map(|i| format!("{} — {} ({})", i.id, i.caption, i.url))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+    )
+}
+
+/// Keep notes from the front (web/higher-ranked first) until `max_chars`,
+/// preserving at least one note so the retry is never empty.
+fn trim_memo(memo: &[Note], max_chars: usize) -> Vec<Note> {
+    let mut out: Vec<Note> = Vec::new();
+    let mut used = 0usize;
+    for n in memo {
+        let cost = n.finding.len() + n.quote.as_deref().map_or(0, str::len);
+        if !out.is_empty() && used + cost > max_chars {
+            break;
+        }
+        used += cost;
+        out.push(Note {
+            source_id: n.source_id.clone(),
+            finding: n.finding.clone(),
+            quote: n.quote.clone(),
+        });
+    }
+    out
+}
+
 /// When synthesis fails entirely: a plain but complete report from the memo.
 fn fallback_report(topic: &str, memo: &[Note], sources: &[Source]) -> ReportDoc {
     use render::{Paragraph, Section};
@@ -1153,6 +1251,19 @@ mod tests {
         assert_eq!(budgets("standard"), (12, 1));
         assert_eq!(budgets("deep"), (20, 2));
         assert_eq!(budgets("nonsense"), (12, 1));
+    }
+
+    #[test]
+    fn trim_memo_bounds_chars_but_keeps_at_least_one() {
+        let memo: Vec<Note> = (0..10)
+            .map(|i| Note { source_id: format!("S{i}"), finding: "x".repeat(100), quote: None })
+            .collect();
+        // ~250-char budget keeps 2 notes (100 each; the third would exceed).
+        let trimmed = trim_memo(&memo, 250);
+        assert_eq!(trimmed.len(), 2);
+        // A budget smaller than one note still keeps exactly one (never empty).
+        assert_eq!(trim_memo(&memo, 1).len(), 1);
+        assert!(trim_memo(&[], 9_000).is_empty());
     }
 
     #[test]
