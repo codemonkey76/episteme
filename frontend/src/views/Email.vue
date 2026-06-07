@@ -495,8 +495,9 @@ async function createTaskFromSelection() {
   if (!m || !text || selectionTaskState.value === 'saving') return
   selectionTaskState.value = 'saving'
   const title = text.length > 140 ? `${text.slice(0, 140)}…` : text
-  const from = m.from.emailAddress
-  let notes = `From email — ${from.name} <${from.address}>: ${m.subject ?? '(no subject)'}`
+  const from = m.from?.emailAddress
+  const sender = from ? `${from.name} <${from.address}>` : 'unknown sender'
+  let notes = `From email — ${sender}: ${m.subject ?? '(no subject)'}`
   if (text.length > 140) notes += `\n\n"${text}"`
   try {
     await api.tasks.create({ title, notes })
@@ -642,7 +643,9 @@ function dedupAddrs(addrs: string[]): string {
 }
 // Reply-all: sender + original To go to To; original Cc goes to Cc.
 function replyAllTo(m: api.MessageDetail): string {
-  return dedupAddrs([m.from.emailAddress.address, ...m.toRecipients.map(r => r.emailAddress.address)])
+  const sender = m.from?.emailAddress.address
+  const addrs = [...(sender ? [sender] : []), ...m.toRecipients.map(r => r.emailAddress.address)]
+  return dedupAddrs(addrs)
 }
 function replyAllCc(m: api.MessageDetail): string {
   return dedupAddrs(m.ccRecipients.map(r => r.emailAddress.address))
@@ -728,7 +731,9 @@ async function aiReply() {
     await api.streamAiDraft(
       {
         provider: aiProvider.value,
-        from: `${m.from.emailAddress.name} <${m.from.emailAddress.address}>`,
+        from: m.from?.emailAddress
+          ? `${m.from.emailAddress.name} <${m.from.emailAddress.address}>`
+          : '',
         subject: m.subject ?? '',
         body: bodyText,
       },
@@ -983,7 +988,7 @@ function startReply(mode: ReplyMode) {
     if (cc) showCcBcc.value = true // reveal Cc so the prefilled recipients are visible
   } else {
     composeForm.value = {
-      to: m.from.emailAddress.address, cc: '', bcc: '',
+      to: m.from?.emailAddress.address ?? '', cc: '', bcc: '',
       subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
       body,
     }
@@ -1188,6 +1193,15 @@ function displayName(ea: api.GraphEmailAddress): string {
   return ea.name || ea.address
 }
 
+/// List-row sender label that tolerates a missing `from` (drafts and other
+/// senderless items live in Deleted Items). Falls back to the recipient, then
+/// a placeholder — never throws, which would blank the whole tab.
+function senderLabel(m: api.MessageSummary): string {
+  if (m.from?.emailAddress) return displayName(m.from.emailAddress)
+  const to = m.toRecipients?.[0]?.emailAddress
+  return to ? `To: ${displayName(to)}` : '(no sender)'
+}
+
 function isFlagged(m: api.MessageSummary): boolean {
   return m.flag?.flagStatus === 'flagged'
 }
@@ -1371,7 +1385,7 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
           @click="onRowClick(m, $event)"
         >
           <div class="flex justify-between items-baseline gap-2">
-            <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[var(--c-a0a0a0)]']">{{ displayName(m.from.emailAddress) }}</span>
+            <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[var(--c-a0a0a0)]']">{{ senderLabel(m) }}</span>
             <span class="flex items-center gap-1 flex-shrink-0">
               <!-- replied / forwarded -->
               <svg v-if="replyState(m) === 'reply'" class="text-[var(--c-5a9ad0)]" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" title="Replied">
@@ -1465,7 +1479,7 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
           <div class="pt-4 px-5 pb-3 border-b border-[var(--c-1e1e1e)] flex-shrink-0">
             <h2 class="text-[0.9375rem] font-semibold text-fg mb-[0.625rem] leading-[1.35]">{{ selectedMessage.subject || '(no subject)' }}</h2>
             <div class="flex flex-col gap-1">
-              <div class="flex gap-[0.625rem] text-[0.775rem]">
+              <div v-if="selectedMessage.from" class="flex gap-[0.625rem] text-[0.775rem]">
                 <span class="text-[var(--c-505050)] min-w-[3rem] flex-shrink-0">From</span>
                 <span class="text-[var(--c-a0a0a0)]">
                   {{ selectedMessage.from.emailAddress.name }}

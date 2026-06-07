@@ -280,7 +280,8 @@ export interface GraphEmailAddress {
 export interface MessageSummary {
   id: string
   subject: string | null
-  from: { emailAddress: GraphEmailAddress }
+  // Null for drafts / items with no sender (common in Deleted Items).
+  from: { emailAddress: GraphEmailAddress } | null
   toRecipients: { emailAddress: GraphEmailAddress }[]
   bodyPreview: string
   receivedDateTime: string
