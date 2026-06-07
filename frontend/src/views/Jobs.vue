@@ -41,6 +41,19 @@ async function cancelJob(j: api.Job) {
   }
 }
 
+const retrying = ref<string | null>(null)
+async function retryJob(j: api.Job) {
+  retrying.value = j.id
+  try {
+    await api.jobs.retry(j.id)
+    await load()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Retry failed'
+  } finally {
+    retrying.value = null
+  }
+}
+
 // Approving the last pending action of a session resumes its job server-side;
 // keep polling while open so statuses flip live.
 let poll: ReturnType<typeof setInterval> | null = null
@@ -143,6 +156,13 @@ function fmtTime(iso: string): string {
               title="Stop this run"
               @click="cancelJob(j)"
             >{{ cancelling === j.id ? '…' : 'Cancel' }}</button>
+            <button
+              v-if="j.status === 'failed' && j.kind === 'research'"
+              class="shrink-0 bg-none border border-[var(--c-2a4a8a)] rounded text-[var(--c-7ab0ff)] text-[0.7rem] px-2 py-[0.2rem] cursor-pointer font-[inherit] hover:bg-[var(--c-1e3a6e)] disabled:opacity-50"
+              :disabled="retrying === j.id"
+              title="Run this research again"
+              @click="retryJob(j)"
+            >{{ retrying === j.id ? '…' : 'Retry' }}</button>
             <button class="shrink-0 bg-none border border-raised rounded text-[var(--c-808080)] text-[0.7rem] px-2 py-[0.2rem] cursor-pointer font-[inherit] hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="openSession(j.session_id)">Open</button>
           </div>
         </div>

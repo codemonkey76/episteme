@@ -42,3 +42,35 @@ pub async fn cancel(
     }
     Ok(Json(serde_json::json!({ "cancelled": cancelled })))
 }
+
+// POST /api/jobs/:id/retry — re-run a failed research job. Research is self-
+// contained (topic + depth live on the job's meta), so a retry is a fresh run,
+// not a resume — it gets its own session and report. Only research jobs retry;
+// background/scheduled runs may have partial side effects.
+pub async fn retry(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let job = db::jobs::get(&state.db, &id)
+        .await
+        .map_err(AppError::Internal)?
+        .filter(|j| j.user_id == user.id)
+        .ok_or(AppError::NotFound)?;
+    if job.kind != "research" {
+        return Err(AppError::BadRequest("only research runs can be retried".into()));
+    }
+    let meta: serde_json::Value =
+        job.meta.as_deref().and_then(|m| serde_json::from_str(m).ok()).unwrap_or_default();
+    let topic = meta["topic"].as_str().unwrap_or("").trim();
+    if topic.is_empty() {
+        return Err(AppError::BadRequest("this run has no recorded topic to retry".into()));
+    }
+    let depth = meta["depth"].as_str().unwrap_or("standard");
+
+    let (job_id, session_id) =
+        crate::research::launch(&state, &user.id, topic, depth, &job.provider)
+            .await
+            .map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "job_id": job_id, "session_id": session_id })))
+}

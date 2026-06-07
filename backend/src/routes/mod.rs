@@ -80,6 +80,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/approvals/pending", get(approvals::list_all_pending))
         .route("/api/jobs", get(jobs::list))
         .route("/api/jobs/:id/cancel", post(jobs::cancel))
+        .route("/api/jobs/:id/retry", post(jobs::retry))
         .route("/api/research", post(reports::start_research))
         .route("/api/reports", get(reports::list))
         .route("/api/reports/:id/html", get(reports::html))

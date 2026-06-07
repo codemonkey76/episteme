@@ -259,6 +259,9 @@ export const jobs = {
   /** Fail an in-flight job (e.g. one stuck on an unresponsive provider). */
   cancel: (id: string) =>
     json<{ cancelled: boolean }>(`/jobs/${id}/cancel`, { method: 'POST' }),
+  /** Re-run a failed research job as a fresh run (new session + report). */
+  retry: (id: string) =>
+    json<{ job_id: string; session_id: string }>(`/jobs/${id}/retry`, { method: 'POST' }),
 }
 
 // Email (Microsoft Graph proxy)
