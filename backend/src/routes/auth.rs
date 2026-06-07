@@ -440,8 +440,11 @@ pub async fn totp_enable(
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("no enrollment in progress — start setup first".into()))?;
     let now = unix_now();
+    // 400, not 401: a wrong guess at an enrollment code is a bad value, not a
+    // bad session — the frontend treats any 401 as "logged out" and would
+    // bounce the user to the login screen mid-setup.
     if !build_totp(pending, &user.username)?.check(body.code.trim(), now) {
-        return Err(AppError::Unauthorized(
+        return Err(AppError::BadRequest(
             "that code didn't match — try the next one from your app".into(),
         ));
     }
@@ -478,8 +481,9 @@ pub async fn totp_disable(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<TotpDisable>,
 ) -> AppResult<Json<Value>> {
+    // 400, not 401 — see totp_enable: don't bounce a logged-in user over a typo.
     if !verify_password(&user.password_hash, &body.password) {
-        return Err(AppError::Unauthorized("password is incorrect".into()));
+        return Err(AppError::BadRequest("password is incorrect".into()));
     }
     db::auth::disable_totp(&state.db, &user.id).await?;
     state
@@ -592,8 +596,10 @@ pub async fn change_password(
     jar: CookieJar,
     Json(body): Json<ChangePassword>,
 ) -> AppResult<(CookieJar, Json<Value>)> {
+    // 400, not 401 — same latent bug as totp_enable: a typo in the current
+    // password used to log the user out instead of showing the message.
     if !verify_password(&user.password_hash, &body.current) {
-        return Err(AppError::Unauthorized("current password is incorrect".into()));
+        return Err(AppError::BadRequest("current password is incorrect".into()));
     }
     if body.next.len() < MIN_PASSWORD_LEN {
         return Err(AppError::BadRequest(format!(

@@ -112,7 +112,9 @@ mod tests {
 
         auth::disable_totp(&pool, "u1").await.unwrap();
         let user = auth::get_user(&pool, "u1").await.unwrap().unwrap();
-        assert!(user.totp_secret.is_none() && user.totp_last_step.is_none());
+        assert!(user.totp_secret.is_none() && user.totp_pending.is_none());
+        // Disable also reset the step guard: an old step claims again.
+        assert!(auth::claim_totp_step(&pool, "u1", 1).await.unwrap());
         assert_eq!(auth::recovery_codes_left(&pool, "u1").await.unwrap(), 0);
     }
 

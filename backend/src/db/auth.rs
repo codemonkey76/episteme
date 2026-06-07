@@ -13,8 +13,6 @@ pub struct User {
     pub totp_secret: Option<String>,
     /// Secret awaiting first-code verification during enrollment.
     pub totp_pending: Option<String>,
-    /// Last accepted 30s timestep — rejects replay of a still-valid code.
-    pub totp_last_step: Option<i64>,
 }
 
 impl User {
@@ -57,7 +55,7 @@ pub async fn create_user(
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT id, username, password_hash, created_at, role, status,
-                totp_secret, totp_pending, totp_last_step
+                totp_secret, totp_pending
          FROM auth_users ORDER BY created_at ASC",
     )
     .fetch_all(pool)
@@ -67,7 +65,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
 pub async fn get_user(pool: &SqlitePool, id: &str) -> Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT id, username, password_hash, created_at, role, status,
-                totp_secret, totp_pending, totp_last_step
+                totp_secret, totp_pending
          FROM auth_users WHERE id = ?",
     )
     .bind(id)
@@ -106,7 +104,7 @@ pub async fn delete_user(pool: &SqlitePool, id: &str) -> Result<()> {
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT id, username, password_hash, created_at, role, status,
-                totp_secret, totp_pending, totp_last_step
+                totp_secret, totp_pending
          FROM auth_users WHERE username = ?",
     )
     .bind(username)
@@ -265,7 +263,7 @@ pub async fn create_session_as(
 pub async fn session_impersonator(pool: &SqlitePool, token: &str) -> Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT u.id, u.username, u.password_hash, u.created_at, u.role, u.status,
-                u.totp_secret, u.totp_pending, u.totp_last_step
+                u.totp_secret, u.totp_pending
          FROM auth_sessions s
          JOIN auth_users u ON u.id = s.impersonator_id
          WHERE s.token = ?",
@@ -279,7 +277,7 @@ pub async fn session_impersonator(pool: &SqlitePool, token: &str) -> Result<Opti
 pub async fn session_user(pool: &SqlitePool, token: &str, now: &str) -> Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT u.id, u.username, u.password_hash, u.created_at, u.role, u.status,
-                u.totp_secret, u.totp_pending, u.totp_last_step
+                u.totp_secret, u.totp_pending
          FROM auth_sessions s
          JOIN auth_users u ON u.id = s.user_id
          WHERE s.token = ? AND s.expires_at > ? AND u.status = 'active'",

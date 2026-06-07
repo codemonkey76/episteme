@@ -785,10 +785,24 @@ function b64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
 
 async function enablePush() {
   pushMsg.value = ''
+  // Diagnose the common silent failures before asking — in these states the
+  // permission prompt never appears and requestPermission resolves "denied".
+  if (!window.isSecureContext) {
+    pushMsg.value = 'Notifications need HTTPS — open the app via its https:// address.'
+    return
+  }
+  if (Notification.permission === 'denied') {
+    pushMsg.value =
+      'Notifications are blocked for this site in the browser. Allow them via the padlock/site-settings menu, then try again. (Brave also needs "Use Google services for push messaging" enabled in brave://settings/privacy.)'
+    return
+  }
   try {
     const perm = await Notification.requestPermission()
     if (perm !== 'granted') {
-      pushMsg.value = 'Notification permission was denied.'
+      pushMsg.value =
+        perm === 'denied'
+          ? 'The browser blocked the permission prompt — check the site-settings (padlock) menu. On Brave, also enable "Use Google services for push messaging" in brave://settings/privacy.'
+          : 'Permission prompt dismissed — click Enable again to retry.'
       return
     }
     const reg = await navigator.serviceWorker.register('/sw.js')
