@@ -953,10 +953,10 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
-  login: (username: string, password: string) =>
-    json<{ ok: true; username: string }>('/auth/login', {
+  login: (username: string, password: string, code?: string) =>
+    json<{ ok: boolean; username?: string; totp_required?: boolean }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, code }),
     }),
   logout: () =>
     fetch(BASE + '/auth/logout', { method: 'POST' }).then(() => undefined),
@@ -965,9 +965,26 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ current, next }),
     }),
-  // Two-factor auth is not implemented yet (the UI toggle is a placeholder).
-  toggleTwoFactor: (_enable: boolean) =>
-    Promise.reject(new Error('Two-factor authentication is not available yet.')),
+  // Two-factor (TOTP) enrollment.
+  twoFactor: {
+    status: () => json<{ enabled: boolean; recovery_codes_left: number }>('/auth/2fa'),
+    /** Begin enrollment: pending secret + otpauth URL + QR (inline SVG). */
+    setup: () =>
+      json<{ secret: string; otpauth_url: string; qr_svg: string }>('/auth/2fa/setup', {
+        method: 'POST',
+      }),
+    /** Verify the first code; returns the recovery codes — shown exactly once. */
+    enable: (code: string) =>
+      json<{ ok: true; recovery_codes: string[] }>('/auth/2fa/enable', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
+    disable: (password: string) =>
+      json<{ ok: true }>('/auth/2fa/disable', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
+  },
 }
 
 // Logs

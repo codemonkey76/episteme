@@ -688,13 +688,72 @@ async function changePassword() {
   }
 }
 
-async function toggleTwoFactor() {
+// ── Two-factor (TOTP) ──
+const twoFactorRecoveryLeft = ref(0)
+// Enrollment in progress: QR + secret shown, waiting for the first code.
+const totpSetup = ref<{ secret: string; qr_svg: string } | null>(null)
+const totpEnrollCode = ref('')
+// Shown exactly once after enabling; dismissed by the user.
+const recoveryCodes = ref<string[] | null>(null)
+const totpDisablePassword = ref('')
+const totpDisabling = ref(false)
+
+onMounted(async () => {
   try {
-    await api.auth.toggleTwoFactor(!twoFactorEnabled.value)
-    twoFactorEnabled.value = !twoFactorEnabled.value
-    accountMsg.value = twoFactorEnabled.value ? '2FA enabled.' : '2FA disabled.'
+    const s = await api.auth.twoFactor.status()
+    twoFactorEnabled.value = s.enabled
+    twoFactorRecoveryLeft.value = s.recovery_codes_left
+  } catch {
+    /* transient — section just shows "Not configured" */
+  }
+})
+
+async function startTwoFactorSetup() {
+  accountMsg.value = ''
+  try {
+    const s = await api.auth.twoFactor.setup()
+    totpSetup.value = { secret: s.secret, qr_svg: s.qr_svg }
+    totpEnrollCode.value = ''
   } catch (e: unknown) {
     accountMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
+}
+
+async function confirmTwoFactor() {
+  accountMsg.value = ''
+  try {
+    const r = await api.auth.twoFactor.enable(totpEnrollCode.value.trim())
+    recoveryCodes.value = r.recovery_codes
+    twoFactorEnabled.value = true
+    twoFactorRecoveryLeft.value = r.recovery_codes.length
+    totpSetup.value = null
+    totpEnrollCode.value = ''
+  } catch (e: unknown) {
+    accountMsg.value = e instanceof Error ? e.message : 'Failed.'
+  }
+}
+
+async function disableTwoFactor() {
+  accountMsg.value = ''
+  totpDisabling.value = true
+  try {
+    await api.auth.twoFactor.disable(totpDisablePassword.value)
+    twoFactorEnabled.value = false
+    twoFactorRecoveryLeft.value = 0
+    totpDisablePassword.value = ''
+    recoveryCodes.value = null
+    accountMsg.value = 'Two-factor authentication disabled.'
+  } catch (e: unknown) {
+    accountMsg.value = e instanceof Error ? e.message : 'Failed.'
+  } finally {
+    totpDisabling.value = false
+  }
+}
+
+function copyRecoveryCodes() {
+  if (recoveryCodes.value) {
+    void navigator.clipboard.writeText(recoveryCodes.value.join('\n'))
+    accountMsg.value = 'Recovery codes copied.'
   }
 }
 
@@ -849,14 +908,55 @@ async function logout() {
 
         <section class="flex flex-col gap-3">
           <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em]">Two-factor authentication</h3>
-          <div class="flex items-center justify-between bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg px-3.5 py-3 gap-4">
-            <div>
-              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)]">Authenticator app</div>
-              <div class="text-[0.75rem] text-[var(--c-585858)] mt-[0.1rem]">{{ twoFactorEnabled ? 'Active' : 'Not configured' }}</div>
+          <div class="flex flex-col gap-3 bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg px-3.5 py-3">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)]">Authenticator app (TOTP)</div>
+                <div class="text-[0.75rem] text-[var(--c-585858)] mt-[0.1rem]">
+                  {{ twoFactorEnabled ? `Active — ${twoFactorRecoveryLeft} recovery code${twoFactorRecoveryLeft === 1 ? '' : 's'} left` : 'Not configured' }}
+                </div>
+              </div>
+              <button v-if="!twoFactorEnabled && !totpSetup" class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="startTwoFactorSetup">
+                Enable
+              </button>
             </div>
-            <button class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:bg-[var(--c-282828)]" @click="toggleTwoFactor">
-              {{ twoFactorEnabled ? 'Disable' : 'Enable' }}
-            </button>
+
+            <!-- Enrollment: scan, then confirm with the first code. -->
+            <div v-if="totpSetup" class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] pt-3">
+              <p class="text-[0.775rem] text-[var(--c-888888)]">Scan with your authenticator app (Google Authenticator, Aegis, 1Password…), then enter the 6-digit code it shows.</p>
+              <!-- Backend-generated QR SVG of the otpauth URL — our own markup, not email content. -->
+              <div class="self-start rounded bg-white p-2" v-html="totpSetup.qr_svg"></div>
+              <p class="text-[0.7rem] text-[var(--c-585858)]">Can't scan? Enter this key manually: <code class="text-[var(--c-c0c0c0)] select-all">{{ totpSetup.secret }}</code></p>
+              <div class="flex items-center gap-2">
+                <input v-model="totpEnrollCode" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" maxlength="6"
+                  class="w-28 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.85rem] font-[inherit] tracking-[0.2em] focus:outline-none focus:border-[var(--c-3a6adf)]"
+                  @keyup.enter="confirmTwoFactor" />
+                <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-254880)]" @click="confirmTwoFactor">Turn on</button>
+                <button class="bg-none border-none text-[var(--c-585858)] cursor-pointer text-[0.8rem] font-[inherit] hover:text-[var(--c-c0c0c0)]" @click="totpSetup = null">Cancel</button>
+              </div>
+            </div>
+
+            <!-- Recovery codes: shown exactly once after enabling. -->
+            <div v-if="recoveryCodes" class="flex flex-col gap-2 border-t border-[var(--c-1e1e1e)] pt-3">
+              <p class="text-[0.775rem] text-[var(--c-e0b060)]">Save these recovery codes somewhere safe — they are shown only once. Each one signs you in a single time if you lose your authenticator.</p>
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1 self-start font-mono text-[0.8rem] text-[var(--c-c0c0c0)] bg-surface border border-raised rounded px-3 py-2 select-all">
+                <span v-for="c in recoveryCodes" :key="c">{{ c }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="bg-[var(--c-1e1e1e)] text-[var(--c-c0c0c0)] border border-[var(--c-303030)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-282828)]" @click="copyRecoveryCodes">Copy all</button>
+                <button class="bg-none border-none text-[var(--c-585858)] cursor-pointer text-[0.8rem] font-[inherit] hover:text-[var(--c-c0c0c0)]" @click="recoveryCodes = null">I've saved them</button>
+              </div>
+            </div>
+
+            <!-- Disable: password-gated (also the lost-authenticator path,
+                 after signing in with a recovery code). -->
+            <div v-if="twoFactorEnabled" class="flex items-center gap-2 border-t border-[var(--c-1e1e1e)] pt-3">
+              <input v-model="totpDisablePassword" type="password" autocomplete="current-password" placeholder="Password"
+                class="w-44 bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              <button :disabled="totpDisabling || !totpDisablePassword" class="bg-[var(--c-2a1010)] text-[var(--c-ff7070)] border border-[var(--c-4a1a1a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-3a1515)] disabled:opacity-50 disabled:cursor-default" @click="disableTwoFactor">
+                {{ totpDisabling ? 'Disabling…' : 'Disable 2FA' }}
+              </button>
+            </div>
           </div>
           <p v-if="accountMsg" class="text-[0.775rem] text-[var(--c-888888)]">{{ accountMsg }}</p>
         </section>

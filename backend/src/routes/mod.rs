@@ -52,6 +52,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     // Everything else requires a valid session cookie.
     let protected = Router::new()
         .route("/api/auth/change-password", post(auth::change_password))
+        .route("/api/auth/2fa", get(auth::totp_status))
+        .route("/api/auth/2fa/setup", post(auth::totp_setup))
+        .route("/api/auth/2fa/enable", post(auth::totp_enable))
+        .route("/api/auth/2fa/disable", post(auth::totp_disable))
         .route("/api/auth/stop-impersonating", post(auth::stop_impersonating))
         .route(
             "/api/sessions/:id/chat",

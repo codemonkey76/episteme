@@ -77,6 +77,45 @@ mod tests {
         assert_eq!(decided.status, "approved");
     }
 
+    /// TOTP lifecycle: pending → enabled, replay-proof step claims, and
+    /// single-use recovery codes.
+    #[tokio::test]
+    async fn totp_lifecycle_and_replay_protection() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1', 'test', 'x', 'admin', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+
+        // Enable without an enrollment in progress is refused.
+        assert!(!auth::enable_totp(&pool, "u1").await.unwrap());
+
+        // Stage → promote: secret moves, pending clears.
+        auth::set_totp_pending(&pool, "u1", "JBSWY3DPEHPK3PXP").await.unwrap();
+        assert!(auth::enable_totp(&pool, "u1").await.unwrap());
+        let user = auth::get_user(&pool, "u1").await.unwrap().unwrap();
+        assert_eq!(user.totp_secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+        assert!(user.totp_pending.is_none());
+
+        // A timestep can be claimed exactly once; later steps still work,
+        // earlier ones (replays) never.
+        assert!(auth::claim_totp_step(&pool, "u1", 100).await.unwrap());
+        assert!(!auth::claim_totp_step(&pool, "u1", 100).await.unwrap());
+        assert!(!auth::claim_totp_step(&pool, "u1", 99).await.unwrap());
+        assert!(auth::claim_totp_step(&pool, "u1", 101).await.unwrap());
+
+        // Recovery codes: single-use, counted, gone on disable.
+        auth::replace_recovery_codes(&pool, "u1", &["h1".into(), "h2".into()]).await.unwrap();
+        assert_eq!(auth::recovery_codes_left(&pool, "u1").await.unwrap(), 2);
+        assert!(auth::use_recovery_code(&pool, "u1", "h1").await.unwrap());
+        assert!(!auth::use_recovery_code(&pool, "u1", "h1").await.unwrap());
+        assert!(!auth::use_recovery_code(&pool, "u1", "nope").await.unwrap());
+        assert_eq!(auth::recovery_codes_left(&pool, "u1").await.unwrap(), 1);
+
+        auth::disable_totp(&pool, "u1").await.unwrap();
+        let user = auth::get_user(&pool, "u1").await.unwrap().unwrap();
+        assert!(user.totp_secret.is_none() && user.totp_last_step.is_none());
+        assert_eq!(auth::recovery_codes_left(&pool, "u1").await.unwrap(), 0);
+    }
+
     /// Email index: dedupe lookup, per-mailbox listing, and the size cap.
     #[tokio::test]
     async fn email_index_round_trip_and_prune() {

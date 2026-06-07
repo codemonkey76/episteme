@@ -32,11 +32,22 @@ class AuthStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> login(String server, String username, String password) async {
+  /// Password was accepted but the account wants a TOTP/recovery code too —
+  /// the login screen shows the code field and resubmits.
+  bool totpRequired = false;
+
+  Future<bool> login(String server, String username, String password,
+      {String? code}) async {
     error = null;
     try {
       await _api.setServer(server);
-      await _api.login(username, password);
+      final result = await _api.login(username, password, code: code);
+      if (result == LoginResult.totpRequired) {
+        totpRequired = true;
+        notifyListeners();
+        return false;
+      }
+      totpRequired = false;
       state = AuthState.loggedIn;
       Push.register(); // fire-and-forget; no-op without Firebase config
       notifyListeners();

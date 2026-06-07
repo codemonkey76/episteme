@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Thin client over the episteme REST+SSE API. Auth is the backend's session
 /// cookie, captured at login and attached to every request.
+enum LoginResult { ok, totpRequired }
+
 class ApiClient {
   ApiClient._();
   static final ApiClient instance = ApiClient._();
@@ -50,15 +52,26 @@ class ApiClient {
         'Cookie': ?_cookie,
       };
 
-  /// POST /auth/login; captures the session cookie on success.
-  Future<void> login(String username, String password) async {
+  /// POST /auth/login; captures the session cookie on success. Returns
+  /// [LoginResult.totpRequired] when the password was right but the account
+  /// has two-factor enabled — call again with the authenticator `code`.
+  Future<LoginResult> login(String username, String password,
+      {String? code}) async {
     final res = await http.post(
       _uri('/auth/login'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'password': password}),
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+        if (code != null && code.isNotEmpty) 'code': code,
+      }),
     );
     if (res.statusCode != 200) {
       throw ApiException(_errorMessage(res), res.statusCode);
+    }
+    final body = jsonDecode(res.body);
+    if (body is Map && body['totp_required'] == true) {
+      return LoginResult.totpRequired;
     }
     final setCookie = res.headers['set-cookie'];
     if (setCookie == null) {
@@ -71,6 +84,7 @@ class ApiClient {
     } catch (_) {
       // See restore(): missing keyring only costs session persistence.
     }
+    return LoginResult.ok;
   }
 
   Future<void> logout() async {

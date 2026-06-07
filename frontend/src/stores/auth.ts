@@ -39,12 +39,16 @@ export const useAuthStore = defineStore('auth', {
       // Theme follows the account (covers login, new devices, impersonation).
       if (this.authenticated) void syncThemeFromServer()
     },
-    async login(username: string, password: string) {
-      const r = await api.auth.login(username, password)
+    /** 'totp_required' = password accepted but the account has 2FA — call
+     *  again with the code from the authenticator app (or a recovery code). */
+    async login(username: string, password: string, code?: string): Promise<'ok' | 'totp_required'> {
+      const r = await api.auth.login(username, password, code)
+      if (r.totp_required) return 'totp_required'
       this.authenticated = true
-      this.username = r.username
+      this.username = r.username ?? null
       this.setupRequired = false
       await this.refresh() // pick up the role
+      return 'ok'
     },
     async setup(username: string, password: string) {
       const r = await api.auth.setup(username, password)

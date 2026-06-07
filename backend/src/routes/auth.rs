@@ -21,6 +21,7 @@ use crate::state::AppState;
 const COOKIE_NAME: &str = "episteme_session";
 const SESSION_DAYS: i64 = 30;
 const MIN_PASSWORD_LEN: usize = 8;
+const RECOVERY_CODES: usize = 8;
 
 /// The authenticated user, injected into request extensions by `require_auth`.
 #[derive(Clone)]
@@ -49,6 +50,74 @@ fn verify_password(hash: &str, password: &str) -> bool {
 /// 256 bits of opaque session entropy (two v4 UUIDs, hex).
 fn gen_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+// ── TOTP helpers ────────────────────────────────────────────────────────────
+
+fn build_totp(secret_b32: &str, account: &str) -> AppResult<totp_rs::TOTP> {
+    let bytes = totp_rs::Secret::Encoded(secret_b32.to_string())
+        .to_bytes()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bad TOTP secret: {e:?}")))?;
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1, // what authenticator apps actually implement
+        6,
+        1, // ±1 step of clock skew
+        30,
+        bytes,
+        Some("Episteme".to_string()),
+        account.to_string(),
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("TOTP init failed: {e}")))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn sha256_hex(s: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// "xxxxx-xxxxx" lowercase hex — 40 bits, plenty against online guessing.
+fn gen_recovery_code() -> AppResult<String> {
+    let mut bytes = [0u8; 5];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("rng failure: {e}")))?;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("{}-{}", &hex[..5], &hex[5..]))
+}
+
+/// Check a second factor: a 6-digit TOTP code (timestep claimed atomically so
+/// a still-valid code can't be replayed) or a single-use recovery code.
+async fn verify_second_factor(
+    state: &AppState,
+    user: &db::auth::User,
+    code: &str,
+) -> AppResult<bool> {
+    let Some(secret) = user.totp_secret.as_deref() else {
+        return Ok(false);
+    };
+    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.len() == 6 && compact.chars().all(|c| c.is_ascii_digit()) {
+        let now = unix_now();
+        let ok = build_totp(secret, &user.username)?
+            .check(&compact, now);
+        if !ok {
+            return Ok(false);
+        }
+        return Ok(db::auth::claim_totp_step(&state.db, &user.id, (now / 30) as i64).await?);
+    }
+    // Recovery code: hyphen/case-insensitive.
+    let norm: String =
+        compact.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_lowercase();
+    if norm.is_empty() {
+        return Ok(false);
+    }
+    Ok(db::auth::use_recovery_code(&state.db, &user.id, &sha256_hex(&norm)).await?)
 }
 
 /// Build the session cookie. `Secure` is on by default; set AUTH_COOKIE_INSECURE
@@ -181,6 +250,10 @@ pub async fn status(
 pub struct Credentials {
     username: String,
     password: String,
+    /// Second factor — a TOTP or recovery code. Only consulted at login, and
+    /// only when the account has 2FA enabled.
+    #[serde(default)]
+    code: Option<String>,
 }
 
 /// Public, but only valid while no account exists: creates the admin and logs in.
@@ -301,8 +374,134 @@ pub async fn login(
         return Err(AppError::Unauthorized("this account is disabled".into()));
     }
 
+    // Second factor. The password alone never starts a session on a 2FA
+    // account: without a code the client is told to ask for one (200, not
+    // 401 — the credentials were right); with a wrong code it's a plain 401.
+    if user.totp_secret.is_some() {
+        let code = body.code.as_deref().map(str::trim).unwrap_or("");
+        if code.is_empty() {
+            return Ok((jar, Json(json!({ "ok": false, "totp_required": true }))));
+        }
+        if !verify_second_factor(&state, &user, code).await? {
+            state
+                .log("auth", "warn", format!("2FA failed for {}", user.username))
+                .await;
+            return Err(AppError::Unauthorized("invalid two-factor code".into()));
+        }
+    }
+
     let cookie = start_session(&state, &user.id).await?;
     Ok((jar.add(cookie), Json(json!({ "ok": true, "username": user.username }))))
+}
+
+// ── Two-factor enrollment (all behind require_auth) ─────────────────────────
+
+/// Protected: start TOTP enrollment. The secret stays pending — and the
+/// account stays 2FA-off — until the first code verifies via totp_enable.
+pub async fn totp_setup(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<Value>> {
+    if user.totp_secret.is_some() {
+        return Err(AppError::Conflict("two-factor authentication is already enabled".into()));
+    }
+    let secret = totp_rs::Secret::generate_secret();
+    let b32 = secret.to_encoded().to_string();
+    db::auth::set_totp_pending(&state.db, &user.id, &b32).await?;
+
+    let url = build_totp(&b32, &user.username)?.get_url();
+    // QR as inline SVG: nothing to host, nothing rasterized, themable by CSS.
+    let qr_svg = qrcode::QrCode::new(url.as_bytes())
+        .map(|qr| {
+            qr.render::<qrcode::render::svg::Color>()
+                .min_dimensions(180, 180)
+                .dark_color(qrcode::render::svg::Color("#000000"))
+                .light_color(qrcode::render::svg::Color("#ffffff"))
+                .build()
+        })
+        .unwrap_or_default();
+    Ok(Json(json!({ "secret": b32, "otpauth_url": url, "qr_svg": qr_svg })))
+}
+
+#[derive(Deserialize)]
+pub struct TotpEnable {
+    code: String,
+}
+
+/// Protected: verify the first code against the pending secret, switch 2FA
+/// on, and hand back the recovery codes — shown exactly once.
+pub async fn totp_enable(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<TotpEnable>,
+) -> AppResult<Json<Value>> {
+    let pending = user
+        .totp_pending
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("no enrollment in progress — start setup first".into()))?;
+    let now = unix_now();
+    if !build_totp(pending, &user.username)?.check(body.code.trim(), now) {
+        return Err(AppError::Unauthorized(
+            "that code didn't match — try the next one from your app".into(),
+        ));
+    }
+    if !db::auth::enable_totp(&state.db, &user.id).await? {
+        return Err(AppError::BadRequest("no enrollment in progress — start setup first".into()));
+    }
+    // The enrollment code is spent too: claim its timestep.
+    let _ = db::auth::claim_totp_step(&state.db, &user.id, (now / 30) as i64).await;
+
+    let mut codes = Vec::with_capacity(RECOVERY_CODES);
+    for _ in 0..RECOVERY_CODES {
+        codes.push(gen_recovery_code()?);
+    }
+    let hashes: Vec<String> =
+        codes.iter().map(|c| sha256_hex(&c.replace('-', ""))).collect();
+    db::auth::replace_recovery_codes(&state.db, &user.id, &hashes).await?;
+
+    state
+        .log("auth", "info", format!("2FA enabled for {}", user.username))
+        .await;
+    Ok(Json(json!({ "ok": true, "recovery_codes": codes })))
+}
+
+#[derive(Deserialize)]
+pub struct TotpDisable {
+    password: String,
+}
+
+/// Protected: switch 2FA off. Requires the password, not a TOTP code — this
+/// is also the recovery path for a lost authenticator (used with a recovery-
+/// code login).
+pub async fn totp_disable(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<TotpDisable>,
+) -> AppResult<Json<Value>> {
+    if !verify_password(&user.password_hash, &body.password) {
+        return Err(AppError::Unauthorized("password is incorrect".into()));
+    }
+    db::auth::disable_totp(&state.db, &user.id).await?;
+    state
+        .log("auth", "info", format!("2FA disabled for {}", user.username))
+        .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Protected: 2FA state for the Settings panel.
+pub async fn totp_status(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<Value>> {
+    let recovery_left = if user.totp_secret.is_some() {
+        db::auth::recovery_codes_left(&state.db, &user.id).await?
+    } else {
+        0
+    };
+    Ok(Json(json!({
+        "enabled": user.totp_secret.is_some(),
+        "recovery_codes_left": recovery_left,
+    })))
 }
 
 /// Protected: end an impersonated session and return to the admin account.
@@ -341,6 +540,48 @@ pub async fn logout(
 pub struct ChangePassword {
     current: String,
     next: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn totp_round_trip_with_skew() {
+        let secret = totp_rs::Secret::generate_secret();
+        let b32 = secret.to_encoded().to_string();
+        let totp = build_totp(&b32, "shane").unwrap();
+
+        let now = unix_now();
+        let code = totp.generate(now);
+        assert!(totp.check(&code, now));
+        // ±1 step of clock skew is tolerated; ±2 is not.
+        assert!(totp.check(&code, now + 30));
+        assert!(!totp.check(&code, now + 90));
+        assert!(!totp.check("000000", now) || code == "000000");
+
+        // The otpauth URL carries issuer + account for the authenticator app.
+        let url = totp.get_url();
+        assert!(url.starts_with("otpauth://totp/"));
+        assert!(url.contains("Episteme") && url.contains("shane"));
+    }
+
+    #[test]
+    fn recovery_codes_are_well_formed_and_hash_stably() {
+        let code = gen_recovery_code().unwrap();
+        assert_eq!(code.len(), 11);
+        assert_eq!(code.chars().filter(|c| *c == '-').count(), 1);
+        assert!(code.replace('-', "").chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Login normalizes case/hyphens before hashing — these must agree.
+        let norm: String = code
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_lowercase();
+        assert_eq!(sha256_hex(&norm), sha256_hex(&code.replace('-', "")));
+        assert_eq!(sha256_hex("abc").len(), 64);
+    }
 }
 
 /// Protected: verify the current password and set a new one, invalidating all

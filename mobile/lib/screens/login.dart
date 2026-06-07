@@ -16,6 +16,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _server = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _code = TextEditingController();
   bool _busy = false;
 
   @override
@@ -34,6 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _server.text.trim(),
       _username.text.trim(),
       _password.text,
+      code: _code.text.trim(),
     );
     if (mounted) setState(() => _busy = false);
   }
@@ -89,6 +91,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   onSubmitted: (_) => _submit(),
                   decoration: const InputDecoration(labelText: 'Password'),
                 ),
+                // 2FA: the password was right — ask for the second factor.
+                if (auth.totpRequired) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _code,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    autofillHints: const [AutofillHints.oneTimeCode],
+                    onSubmitted: (_) => _submit(),
+                    decoration: const InputDecoration(
+                      labelText: 'Two-factor code',
+                      hintText: '6-digit or recovery code',
+                    ),
+                  ),
+                ],
                 if (auth.error != null) ...[
                   const SizedBox(height: 12),
                   Text(

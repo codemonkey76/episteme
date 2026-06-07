@@ -11,6 +11,10 @@ const confirm = ref('')
 const error = ref('')
 const busy = ref(false)
 
+// 2FA: the password was right but the account wants a code too.
+const totpRequired = ref(false)
+const totpCode = ref('')
+
 // Invite link: https://<domain>/?invite=<code> → registration mode.
 const inviteCode = ref(new URLSearchParams(window.location.search).get('invite') ?? '')
 const inviteState = ref<'none' | 'checking' | 'valid' | 'invalid'>(
@@ -67,7 +71,19 @@ async function submit() {
       // Drop the invite param so a refresh lands on the app, not the form.
       window.history.replaceState({}, '', '/')
     } else {
-      await auth.login(username.value.trim(), password.value)
+      const result = await auth.login(
+        username.value.trim(),
+        password.value,
+        totpCode.value.trim() || undefined,
+      )
+      if (result === 'totp_required') {
+        // Keep the password; just ask for the code on the next submit.
+        totpRequired.value = true
+        busy.value = false
+        return
+      }
+      totpRequired.value = false
+      totpCode.value = ''
     }
     password.value = ''
     confirm.value = ''
@@ -127,6 +143,21 @@ async function submit() {
           required
           class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[var(--c-3a6adf)] focus:outline-none"
         />
+      </label>
+
+      <label v-if="totpRequired && mode === 'login'" class="flex flex-col gap-1 text-[0.775rem] text-muted">
+        Two-factor code
+        <input
+          v-model="totpCode"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="6-digit code or recovery code"
+          autofocus
+          required
+          class="rounded border border-raised bg-surface px-2.5 py-2 text-[0.85rem] text-fg focus:border-[var(--c-3a6adf)] focus:outline-none"
+        />
+        <span class="text-[0.7rem] text-[var(--c-585858)]">From your authenticator app — or one of your recovery codes.</span>
       </label>
 
       <label v-if="mode === 'setup' || mode === 'register'" class="flex flex-col gap-1 text-[0.775rem] text-muted">
