@@ -47,7 +47,7 @@ Your conversations and credentials stay on your machine. The only data that leav
 Both roadmap arcs are fully shipped ([docs/Roadmap.md](docs/Roadmap.md)); what remains is the quick-win backlog:
 
 - **Dollar costs** — per-model price table → $ column in Settings → System
-- **Research second pass** — SERP triage before fetching, memo compaction, chunked distill for long pages, recency signals (see docs/Roadmap.md)
+- **Research polish** — chunked distill for long pages, recency/authority signals, single-source claim flagging (see docs/Roadmap.md)
 
 ## Mobile app
 

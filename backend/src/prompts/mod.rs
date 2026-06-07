@@ -228,6 +228,39 @@ JSON object, no prose, no code fences: {\"subquestions\": [\"<question>\", ...],
 \"queries\": [\"<search query>\", ...]}. Provide at most 6 queries.",
     },
     PromptDef {
+        key: "research_triage",
+        name: "Research: triage results",
+        description: "Picks which web search results deserve a full read before \
+the fetch budget is spent on them. Must keep instructing the model to answer with \
+ONLY a JSON object of {\"picks\": [<result numbers>]}.",
+        variables: &["{topic}"],
+        default: "You are triaging web search results for a research investigation, \
+choosing which pages are worth reading in full. Prefer authoritative and primary \
+sources (official documentation, vendor pages, standards bodies, reputable \
+publications), recent material, and a diverse set of domains that together cover \
+the open questions. Avoid thin SEO listicles, near-duplicates of the same content, \
+and pages whose title and snippet suggest little substance.\n\nTopic: {topic}\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: \
+{\"picks\": [<result number>, ...]} — best first, at most the number requested.",
+    },
+    PromptDef {
+        key: "research_memo_compact",
+        name: "Research: compact notes",
+        description: "Runs when the research scratchpad hits its size cap: merges \
+duplicate/overlapping notes so gathering can continue. Must keep instructing the \
+model to answer with ONLY a JSON object of {\"notes\": [{\"source\", \"finding\", \
+\"quote\"?}]} using existing source ids.",
+        variables: &["{topic}"],
+        default: "You are compacting a research scratchpad that has hit its size \
+limit. Merge duplicate and overlapping notes, drop trivia that does not serve the \
+topic, and tighten wording — but preserve every distinct fact, figure, date, and \
+named entity, and keep each note attributed to its original source id. Keep a \
+verbatim quote only when its exact wording or figures matter.\n\nTopic: {topic}\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: {\"notes\": [{\"source\": \
+\"<existing source id>\", \"finding\": \"<concise statement>\", \"quote\": \"<short \
+verbatim quote, optional>\"}]}.",
+    },
+    PromptDef {
         key: "research_distill",
         name: "Research: distill page",
         description: "Runs once per fetched source during deep research: extracts only \

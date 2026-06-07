@@ -33,8 +33,13 @@ fn budgets(depth: &str) -> (usize, usize) {
 const MAX_PLAN_QUERIES: usize = 6;
 const MAX_SUBQUESTIONS: usize = 8;
 const URLS_PER_QUERY: usize = 3;
-/// Memo char budget — once full, no further web notes are accepted.
+/// Memo char budget — at the cap, the memo is compacted (duplicates merged)
+/// rather than going deaf; only when compactions run out are notes refused.
 const MEMO_MAX_CHARS: usize = 24_000;
+/// A compaction must shrink the memo below this to be adopted.
+const MEMO_COMPACT_TARGET: usize = 19_000;
+/// Compaction calls per run — bounds the extra model cost.
+const MEMO_COMPACTIONS: usize = 2;
 /// Distill input cap per source.
 const DISTILL_TEXT_MAX: usize = 10_000;
 /// Image embedding caps.
@@ -45,6 +50,15 @@ struct Note {
     source_id: String,
     finding: String,
     quote: Option<String>,
+}
+
+/// One pooled SERP result awaiting triage.
+struct SerpCandidate {
+    /// Which plan query surfaced it — drives the round-robin fallback order.
+    query_idx: usize,
+    title: String,
+    url: String,
+    snippet: String,
 }
 
 struct ImageCandidate {
@@ -156,6 +170,8 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
 
     // ── GATHER (web) + REFLECT rounds ──────────────────────────────────────
     let distill_system = prompt(state, "research_distill", &topic).await;
+    let triage_system = prompt(state, "research_triage", &topic).await;
+    let mut compactions_left = MEMO_COMPACTIONS;
     let mut round = 0usize;
     loop {
         all_queries.extend(queries.iter().cloned());
@@ -164,6 +180,7 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
             job,
             &provider,
             &distill_system,
+            &triage_system,
             &focus,
             &queries,
             &mut fetches_left,
@@ -175,6 +192,15 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
             &mut image_candidates,
         )
         .await;
+
+        // A full memo re-opens via compaction (merge duplicates) at stage
+        // boundaries, so further rounds and the internal pass aren't refused.
+        if memo_chars >= MEMO_MAX_CHARS && compactions_left > 0 {
+            compactions_left -= 1;
+            progress(state, &job.session_id, "Consolidating notes…").await;
+            compact_memo(state, job, &provider, &topic, &mut memo, &mut memo_chars, &sources)
+                .await;
+        }
 
         if round >= reflect_rounds
             || fetches_left == 0
@@ -214,6 +240,12 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     }
 
     // ── INTERNAL corpus ────────────────────────────────────────────────────
+    // Same re-open before the internal pass: the user's own data shouldn't be
+    // the leg that gets refused because the web filled the memo.
+    if memo_chars >= MEMO_MAX_CHARS && compactions_left > 0 {
+        progress(state, &job.session_id, "Consolidating notes…").await;
+        compact_memo(state, job, &provider, &topic, &mut memo, &mut memo_chars, &sources).await;
+    }
     progress(state, &job.session_id, "Checking your documents, email, memories, and chats…").await;
     gather_internal(
         state,
@@ -331,6 +363,7 @@ async fn gather_web(
     job: &Job,
     provider: &ProviderConfig,
     distill_system: &str,
+    triage_system: &str,
     focus: &str,
     queries: &[String],
     fetches_left: &mut usize,
@@ -341,7 +374,12 @@ async fn gather_web(
     sources: &mut Vec<Source>,
     image_candidates: &mut Vec<ImageCandidate>,
 ) {
-    for query in queries {
+    // Pool every query's results, then triage once: one cheap call decides
+    // which pages deserve the fetch budget, instead of blindly reading each
+    // query's top-3 (which spends slots on SEO filler while the substantive
+    // result at #5 is skipped).
+    let mut candidates: Vec<SerpCandidate> = Vec::new();
+    for (qi, query) in queries.iter().enumerate() {
         if *fetches_left == 0 || *attempts_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
             return;
         }
@@ -357,98 +395,112 @@ async fn gather_web(
         progress(state, &job.session_id, &format!("Searched \"{query}\" — {} results", results.len()))
             .await;
 
-        let urls: Vec<String> = results
+        for r in &results {
+            let Some(url) = r["url"].as_str().filter(|u| !u.is_empty()) else { continue };
+            if fetched_urls.contains(url) || candidates.iter().any(|c| c.url == url) {
+                continue;
+            }
+            candidates.push(SerpCandidate {
+                query_idx: qi,
+                title: r["title"].as_str().unwrap_or("").to_string(),
+                url: url.to_string(),
+                snippet: r["snippet"].as_str().unwrap_or("").chars().take(200).collect(),
+            });
+        }
+    }
+    if candidates.is_empty() {
+        return;
+    }
+
+    let want = (*fetches_left).min(queries.len() * URLS_PER_QUERY);
+    let order = triage(state, job, provider, triage_system, focus, &candidates, want).await;
+
+    for idx in order {
+        if *fetches_left == 0 || *attempts_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
+            return;
+        }
+        let url = candidates[idx].url.clone();
+        *attempts_left -= 1;
+        fetched_urls.insert(url.clone());
+
+        let page = match fetch_readable(&state.http_client, &url).await {
+            Ok(p) => p,
+            Err(e) => {
+                // Dead page: the budget slot is refunded (only the attempt
+                // cap was consumed), so a flaky web doesn't shrink the run.
+                tracing::info!("research fetch {url} failed: {e}");
+                continue;
+            }
+        };
+        *fetches_left -= 1;
+        let label = page.title.clone().unwrap_or_else(|| url.clone());
+        let source_id = format!("S{}", sources.len() + 1);
+
+        let candidates_text = page
+            .images
             .iter()
-            .filter_map(|r| r["url"].as_str().map(String::from))
-            .filter(|u| !fetched_urls.contains(u))
-            .take(URLS_PER_QUERY)
-            .collect();
-        for url in urls {
-            if *fetches_left == 0 || *attempts_left == 0 || *memo_chars >= MEMO_MAX_CHARS {
-                return;
-            }
-            *attempts_left -= 1;
-            fetched_urls.insert(url.clone());
+            .enumerate()
+            .map(|(n, i)| format!("{}. {} (alt: {})", n + 1, i.url, i.alt.as_deref().unwrap_or("-")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text: String = page.text.chars().take(DISTILL_TEXT_MAX).collect();
+        let user = format!(
+            "Source: {label} ({url}){focus}\n\nImage candidates:\n{}\n\nPage text:\n{text}",
+            if candidates_text.is_empty() { "(none)" } else { &candidates_text },
+        );
+        let Ok(v) = complete_json(state, &job.user_id, provider, distill_system, &user).await else {
+            continue;
+        };
+        if !v["relevant"].as_bool().unwrap_or(false) {
+            continue;
+        }
 
-            let page = match fetch_readable(&state.http_client, &url).await {
-                Ok(p) => p,
-                Err(e) => {
-                    // Dead page: the budget slot is refunded (only the attempt
-                    // cap was consumed), so a flaky web doesn't shrink the run.
-                    tracing::info!("research fetch {url} failed: {e}");
-                    continue;
-                }
-            };
-            *fetches_left -= 1;
-            let label = page.title.clone().unwrap_or_else(|| url.clone());
-            let source_id = format!("S{}", sources.len() + 1);
-
-            let candidates_text = page
-                .images
-                .iter()
-                .enumerate()
-                .map(|(n, i)| format!("{}. {} (alt: {})", n + 1, i.url, i.alt.as_deref().unwrap_or("-")))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let text: String = page.text.chars().take(DISTILL_TEXT_MAX).collect();
-            let user = format!(
-                "Source: {label} ({url}){focus}\n\nImage candidates:\n{}\n\nPage text:\n{text}",
-                if candidates_text.is_empty() { "(none)" } else { &candidates_text },
-            );
-            let Ok(v) = complete_json(state, &job.user_id, provider, distill_system, &user).await else {
+        let mut used = false;
+        for note in v["notes"].as_array().into_iter().flatten() {
+            let Some(finding) = note["finding"].as_str().filter(|f| !f.trim().is_empty()) else {
                 continue;
             };
-            if !v["relevant"].as_bool().unwrap_or(false) {
-                continue;
+            let entry = Note {
+                source_id: source_id.clone(),
+                finding: finding.to_string(),
+                quote: note["quote"].as_str().filter(|q| !q.trim().is_empty()).map(String::from),
+            };
+            let cost = entry.finding.len() + entry.quote.as_deref().map_or(0, str::len);
+            if *memo_chars + cost > MEMO_MAX_CHARS {
+                break;
             }
-
-            let mut used = false;
-            for note in v["notes"].as_array().into_iter().flatten() {
-                let Some(finding) = note["finding"].as_str().filter(|f| !f.trim().is_empty()) else {
-                    continue;
-                };
-                let entry = Note {
-                    source_id: source_id.clone(),
-                    finding: finding.to_string(),
-                    quote: note["quote"].as_str().filter(|q| !q.trim().is_empty()).map(String::from),
-                };
-                let cost = entry.finding.len() + entry.quote.as_deref().map_or(0, str::len);
-                if *memo_chars + cost > MEMO_MAX_CHARS {
-                    break;
-                }
-                *memo_chars += cost;
-                memo.push(entry);
-                used = true;
-            }
-            for img in v["images"].as_array().into_iter().flatten() {
-                // Accept the candidate number (preferred — no URL retyping) or
-                // an exact URL; either way only images actually on the page.
-                let picked = img["n"]
-                    .as_u64()
-                    .filter(|n| *n >= 1)
-                    .and_then(|n| page.images.get(n as usize - 1))
-                    .or_else(|| {
-                        img["url"].as_str().and_then(|u| page.images.iter().find(|p| p.url == u))
+            *memo_chars += cost;
+            memo.push(entry);
+            used = true;
+        }
+        for img in v["images"].as_array().into_iter().flatten() {
+            // Accept the candidate number (preferred — no URL retyping) or
+            // an exact URL; either way only images actually on the page.
+            let picked = img["n"]
+                .as_u64()
+                .filter(|n| *n >= 1)
+                .and_then(|n| page.images.get(n as usize - 1))
+                .or_else(|| {
+                    img["url"].as_str().and_then(|u| page.images.iter().find(|p| p.url == u))
+                });
+            if let Some(p) = picked {
+                if !image_candidates.iter().any(|c| c.url == p.url) {
+                    image_candidates.push(ImageCandidate {
+                        id: format!("I{}", image_candidates.len() + 1),
+                        url: p.url.clone(),
+                        page_url: page.url.clone(),
+                        caption: img["caption"]
+                            .as_str()
+                            .filter(|c| !c.trim().is_empty())
+                            .or(p.alt.as_deref())
+                            .unwrap_or("")
+                            .to_string(),
                     });
-                if let Some(p) = picked {
-                    if !image_candidates.iter().any(|c| c.url == p.url) {
-                        image_candidates.push(ImageCandidate {
-                            id: format!("I{}", image_candidates.len() + 1),
-                            url: p.url.clone(),
-                            page_url: page.url.clone(),
-                            caption: img["caption"]
-                                .as_str()
-                                .filter(|c| !c.trim().is_empty())
-                                .or(p.alt.as_deref())
-                                .unwrap_or("")
-                                .to_string(),
-                        });
-                    }
                 }
             }
-            if used {
-                sources.push(Source { id: source_id, label, url: Some(page.url) });
-            }
+        }
+        if used {
+            sources.push(Source { id: source_id, label, url: Some(page.url) });
         }
     }
 }
@@ -749,6 +801,144 @@ fn fallback_report(topic: &str, memo: &[Note], sources: &[Source]) -> ReportDoc 
     }
 }
 
+/// Merge duplicate/overlapping notes once the memo hits its cap, so gathering
+/// re-opens instead of dropping every later (often reflect-targeted) finding.
+/// Adopt-only-if-better: the rewrite must keep attribution to existing source
+/// ids, retain a sane share of the notes, and actually shrink — otherwise the
+/// original memo stands and the run degrades exactly as before.
+async fn compact_memo(
+    state: &Arc<AppState>,
+    job: &Job,
+    provider: &ProviderConfig,
+    topic: &str,
+    memo: &mut Vec<Note>,
+    memo_chars: &mut usize,
+    sources: &[Source],
+) {
+    let system = prompt(state, "research_memo_compact", topic).await;
+    let user = format!(
+        "Compact these notes to well under {MEMO_COMPACT_TARGET} characters.\n\nNotes:\n{}",
+        memo_as_text(memo)
+    );
+    let Ok(v) = complete_json(state, &job.user_id, provider, &system, &user).await else {
+        tracing::warn!("memo compaction call failed; keeping the full memo");
+        return;
+    };
+
+    let valid: HashSet<&str> = sources.iter().map(|s| s.id.as_str()).collect();
+    let mut new_memo: Vec<Note> = Vec::new();
+    let mut new_chars = 0usize;
+    for note in v["notes"].as_array().into_iter().flatten() {
+        let (Some(source), Some(finding)) = (note["source"].as_str(), note["finding"].as_str())
+        else {
+            continue;
+        };
+        // Invented source ids would break citations — drop those notes.
+        if !valid.contains(source) || finding.trim().is_empty() {
+            continue;
+        }
+        let quote =
+            note["quote"].as_str().filter(|q| !q.trim().is_empty()).map(String::from);
+        new_chars += finding.len() + quote.as_deref().map_or(0, str::len);
+        new_memo.push(Note { source_id: source.to_string(), finding: finding.to_string(), quote });
+    }
+
+    let shrunk = new_chars < *memo_chars && new_chars <= MEMO_COMPACT_TARGET;
+    let preserved = new_memo.len() * 3 >= memo.len(); // lost no more than ⅔ of the notes
+    if shrunk && preserved {
+        tracing::info!(
+            "memo compacted: {} notes/{} chars → {} notes/{} chars",
+            memo.len(),
+            *memo_chars,
+            new_memo.len(),
+            new_chars
+        );
+        *memo = new_memo;
+        *memo_chars = new_chars;
+    } else {
+        tracing::warn!(
+            "memo compaction rejected (shrunk: {shrunk}, preserved: {preserved}); keeping the full memo"
+        );
+    }
+}
+
+/// Pick which pooled SERP candidates to fetch, best first. One cheap model
+/// call; any failure (or a trivial pool) degrades to the round-robin order
+/// that matches the old top-N-per-query behavior.
+async fn triage(
+    state: &Arc<AppState>,
+    job: &Job,
+    provider: &ProviderConfig,
+    triage_system: &str,
+    focus: &str,
+    candidates: &[SerpCandidate],
+    want: usize,
+) -> Vec<usize> {
+    let query_of: Vec<usize> = candidates.iter().map(|c| c.query_idx).collect();
+    if candidates.len() <= want {
+        // Nothing to choose between — read them all, still query-interleaved.
+        return fallback_order(&query_of, candidates.len());
+    }
+    let listing = candidates
+        .iter()
+        .enumerate()
+        .map(|(n, c)| format!("{}. {} — {}\n   {}", n + 1, c.title, c.url, c.snippet))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let user = format!("Pick up to {want} results to read.{focus}\n\nSearch results:\n{listing}");
+    match complete_json(state, &job.user_id, provider, triage_system, &user).await {
+        Ok(v) => {
+            let picks = parse_picks(&v, candidates.len(), want);
+            if picks.is_empty() {
+                fallback_order(&query_of, want)
+            } else {
+                picks
+            }
+        }
+        Err(e) => {
+            tracing::warn!("research triage failed ({e}); using rank order");
+            fallback_order(&query_of, want)
+        }
+    }
+}
+
+/// Validate a triage response: 1-based result numbers → unique in-range
+/// indices, capped at `want`.
+fn parse_picks(v: &Value, len: usize, want: usize) -> Vec<usize> {
+    let mut seen = HashSet::new();
+    v["picks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .filter(|n| (1..=len as u64).contains(n))
+        .map(|n| n as usize - 1)
+        .filter(|i| seen.insert(*i))
+        .take(want)
+        .collect()
+}
+
+/// Triage-less order: round-robin across queries (everyone's first result,
+/// then everyone's second…) up to URLS_PER_QUERY each — the pre-triage
+/// behavior, preserving cross-query spread.
+fn fallback_order(query_of: &[usize], want: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let queries = query_of.iter().copied().max().map_or(0, |m| m + 1);
+    for round in 0..URLS_PER_QUERY {
+        for q in 0..queries {
+            if out.len() >= want {
+                return out;
+            }
+            if let Some(idx) =
+                query_of.iter().enumerate().filter(|(_, qq)| **qq == q).nth(round).map(|(i, _)| i)
+            {
+                out.push(idx);
+            }
+        }
+    }
+    out
+}
+
 /// Split a plan response into (queries, subquestions), both capped.
 fn parse_plan(v: &Value) -> (Vec<String>, Vec<String>) {
     let strings = |key: &str, cap: usize| -> Vec<String> {
@@ -887,6 +1077,29 @@ mod tests {
         // Outermost braces win even with nested objects.
         let nested = "x {\"a\": {\"b\": 1}} y";
         assert_eq!(json_slice(nested).unwrap()["a"]["b"], 1);
+    }
+
+    #[test]
+    fn parse_picks_validates_dedupes_and_caps() {
+        let v = serde_json::json!({ "picks": [3, 1, 3, 99, 0, 2, 4] });
+        // 8 candidates, want 3: 3→idx2, 1→idx0, dup 3 skipped, 99/0 out of
+        // range, 2→idx1; capped before 4.
+        assert_eq!(parse_picks(&v, 8, 3), vec![2, 0, 1]);
+        assert!(parse_picks(&serde_json::json!({}), 8, 3).is_empty());
+        assert!(parse_picks(&serde_json::json!({ "picks": ["a", null] }), 8, 3).is_empty());
+    }
+
+    #[test]
+    fn fallback_order_round_robins_across_queries() {
+        // Candidates pooled in query order: q0 has 3, q1 has 2.
+        let query_of = [0, 0, 0, 1, 1];
+        // Everyone's first result, then everyone's second…
+        assert_eq!(fallback_order(&query_of, 4), vec![0, 3, 1, 4]);
+        assert_eq!(fallback_order(&query_of, 2), vec![0, 3]);
+        // URLS_PER_QUERY caps each query's share even when want is larger.
+        let many = [0, 0, 0, 0, 0];
+        assert_eq!(fallback_order(&many, 5), vec![0, 1, 2]);
+        assert!(fallback_order(&[], 3).is_empty());
     }
 
     #[test]

@@ -129,9 +129,17 @@ corpus legs probe chat FTS and email `$search` with the plan's short queries
 instead of the whole AND-everything topic string, and the email leg also
 queries the semantic email index; failed page fetches refund their budget
 slot (bounded by a 2× attempt cap) so flaky sources no longer shrink a run.
-Still open from the review: SERP triage before fetching, memo compaction
-instead of a hard 24k cap, chunked distill for long pages, recency/authority
-signals, single-source claim flagging, a separate cheap distill model.
+
+Second pass (June 2026): **SERP triage** — each round pools every query's
+results and one model call (`research_triage` prompt) picks which pages
+deserve the fetch budget (authority/recency/domain-diversity), falling back
+to the old round-robin rank order on any failure; **memo compaction** — at
+the 24k cap the memo is merged (`research_memo_compact` prompt, ≤2 calls per
+run) at stage boundaries instead of refusing new notes, adopt-only-if-better
+(must shrink below 19k, keep ≥⅓ of the notes, and cite only existing source
+ids). Still open: chunked distill for long pages, recency/authority signals
+passed to synthesis, single-source claim flagging, a separate cheap distill
+model.
 
 ## Phase 10 — Context compaction ✅ (shipped)
 
