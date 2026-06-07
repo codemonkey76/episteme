@@ -47,7 +47,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/invite/:code", get(auth::check_invite))
-        .route("/api/auth/register", post(auth::register));
+        .route("/api/auth/register", post(auth::register))
+        // Public report share links — the token IS the capability, no session.
+        .route("/shared/:token", get(reports::shared));
 
     // Everything else requires a valid session cookie.
     let protected = Router::new()
@@ -84,6 +86,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/research", post(reports::start_research))
         .route("/api/reports", get(reports::list))
         .route("/api/reports/:id/html", get(reports::html))
+        .route("/api/reports/:id/share", post(reports::share))
+        .route("/api/reports/:id/share", delete(reports::unshare))
         .route("/api/reports/:id", delete(reports::delete))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))

@@ -620,6 +620,8 @@ export interface Report {
   job_id: string | null
   title: string
   created_at: string
+  /** Public share token; non-null = anyone with the link can view it. */
+  share_token: string | null
 }
 
 export const reports = {
@@ -631,6 +633,10 @@ export const reports = {
       method: 'POST',
       body: JSON.stringify({ topic, depth }),
     }),
+  /** Mint (or return the existing) public link; `path` is origin-relative. */
+  share: (id: string) =>
+    json<{ token: string; path: string }>(`/reports/${id}/share`, { method: 'POST' }),
+  unshare: (id: string) => fetch(BASE + `/reports/${id}/share`, { method: 'DELETE' }),
 }
 
 // Conversation search

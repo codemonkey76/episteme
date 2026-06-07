@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import * as api from '../api'
 
 const reports = ref<api.Report[]>([])
@@ -53,6 +53,72 @@ async function remove(r: api.Report) {
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+// ── Public share link ────────────────────────────────────────────────────────
+const shareOpen = ref(false)
+const shareBusy = ref(false)
+const shareMsg = ref('')
+
+// Close the panel when switching reports — it shows the selected one's link.
+watch(selected, () => {
+  shareOpen.value = false
+  shareMsg.value = ''
+})
+
+function shareUrl(token: string): string {
+  return `${window.location.origin}/shared/${token}`
+}
+
+/** Set a report's share token on both the selected object and its list row. */
+function setShareToken(id: string, token: string | null) {
+  if (selected.value?.id === id) selected.value.share_token = token
+  const row = reports.value.find(r => r.id === id)
+  if (row) row.share_token = token
+}
+
+async function toggleSharePanel() {
+  shareMsg.value = ''
+  shareOpen.value = !shareOpen.value
+  // Mint on first open so the link is ready to copy.
+  if (shareOpen.value && selected.value && !selected.value.share_token) {
+    shareBusy.value = true
+    try {
+      const { token } = await api.reports.share(selected.value.id)
+      setShareToken(selected.value.id, token)
+    } catch (e: unknown) {
+      error.value = e instanceof Error ? e.message : 'Failed to create share link'
+      shareOpen.value = false
+    } finally {
+      shareBusy.value = false
+    }
+  }
+}
+
+async function copyShare() {
+  if (!selected.value?.share_token) return
+  try {
+    await navigator.clipboard.writeText(shareUrl(selected.value.share_token))
+    shareMsg.value = 'Link copied'
+    setTimeout(() => (shareMsg.value = ''), 2500)
+  } catch {
+    shareMsg.value = 'Copy failed — select and copy manually'
+  }
+}
+
+async function revokeShare() {
+  if (!selected.value || shareBusy.value) return
+  shareBusy.value = true
+  try {
+    await api.reports.unshare(selected.value.id)
+    setShareToken(selected.value.id, null)
+    shareOpen.value = false
+    shareMsg.value = ''
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to revoke link'
+  } finally {
+    shareBusy.value = false
+  }
 }
 
 // ── New research launcher ────────────────────────────────────────────────────
@@ -117,7 +183,9 @@ async function startResearch() {
           @click="selected = r"
         >
           <p :class="['text-[0.8125rem] leading-[1.35] break-words', selected?.id === r.id ? 'text-fg' : 'text-[var(--c-c0c0c0)]']">{{ r.title }}</p>
-          <span class="text-[0.68rem] text-[var(--c-505050)]">{{ fmtDate(r.created_at) }}</span>
+          <span class="text-[0.68rem] text-[var(--c-505050)]">
+            {{ fmtDate(r.created_at) }}<span v-if="r.share_token" class="text-[var(--c-6a8ac0)]"> · 🔗 shared</span>
+          </span>
         </button>
       </div>
       <div class="px-3 py-[0.25rem] border-t border-surface text-[var(--c-505050)] text-[0.68rem] shrink-0">
@@ -131,9 +199,33 @@ async function startResearch() {
         <div class="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--c-1e1e1e)] shrink-0">
           <span class="text-[0.78rem] text-[var(--c-a0a0a0)] truncate">{{ selected.title }}</span>
           <div class="flex items-center gap-1.5 ml-auto shrink-0">
+            <button
+              :class="['border rounded px-2 py-[0.2rem] text-[0.7rem] font-[inherit] cursor-pointer transition-colors duration-100', selected.share_token ? 'bg-[var(--c-16202e)] text-[var(--c-7ab0ff)] border-[var(--c-2a4a8a)]' : 'bg-surface text-[var(--c-808080)] border-raised hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]']"
+              :title="selected.share_token ? 'This report has a public link' : 'Create a public link anyone can open'"
+              @click="toggleSharePanel"
+            >{{ selected.share_token ? '🔗 Shared' : 'Share' }}</button>
             <button class="bg-surface text-[var(--c-808080)] border border-raised rounded px-2 py-[0.2rem] text-[0.7rem] font-[inherit] cursor-pointer hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="openInTab(selected)">Open in tab</button>
             <button class="bg-surface text-[var(--c-808080)] border border-raised rounded px-2 py-[0.2rem] text-[0.7rem] font-[inherit] cursor-pointer hover:text-[var(--c-d08080)]" @click="remove(selected)">Delete</button>
           </div>
+        </div>
+
+        <!-- Share bar: the public link with copy/revoke. -->
+        <div v-if="shareOpen" class="flex flex-col gap-1.5 px-3 py-2 border-b border-[var(--c-1e1e1e)] bg-[var(--c-101010)] shrink-0">
+          <div v-if="shareBusy && !selected.share_token" class="text-[0.72rem] text-[var(--c-808080)]">Creating link…</div>
+          <template v-else-if="selected.share_token">
+            <div class="flex items-center gap-1.5">
+              <input
+                readonly
+                :value="shareUrl(selected.share_token)"
+                class="flex-1 bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-[0.72rem] font-mono outline-none min-w-0 select-all"
+                @focus="($event.target as HTMLInputElement).select()"
+              />
+              <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-2.5 py-1 text-[0.7rem] font-[inherit] cursor-pointer hover:bg-[var(--c-254880)] shrink-0" @click="copyShare">Copy</button>
+              <button class="bg-surface text-[var(--c-c06060)] border border-[var(--c-4a2525)] rounded px-2.5 py-1 text-[0.7rem] font-[inherit] cursor-pointer hover:bg-[var(--c-3a1515)] shrink-0" :disabled="shareBusy" @click="revokeShare">Revoke</button>
+            </div>
+            <p class="text-[0.68rem] text-[var(--c-585858)]">Anyone with this link can view the report — no account needed. Revoke to disable it.</p>
+            <p v-if="shareMsg" class="text-[0.68rem] text-[var(--c-6ecf8e)]">{{ shareMsg }}</p>
+          </template>
         </div>
         <!-- Same-origin /api iframe: session cookie flows automatically. -->
         <iframe

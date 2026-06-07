@@ -51,6 +51,83 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// 256 bits of URL-safe token — unguessable, so the link itself is the
+/// capability (same model as the session cookie).
+fn gen_share_token() -> String {
+    use uuid::Uuid;
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+// POST /api/reports/:id/share — mint (or return the existing) public link.
+// The recipient needs no account. Idempotent: re-sharing keeps the same token,
+// so a link already handed out stays valid.
+pub async fn share(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let existing =
+        db::reports::share_token(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
+    // Outer None → not their report (or doesn't exist).
+    let current = existing.ok_or(AppError::NotFound)?;
+    let token = match current {
+        Some(t) => t,
+        None => {
+            let t = gen_share_token();
+            db::reports::set_share_token(&state.db, &user.id, &id, Some(&t))
+                .await
+                .map_err(AppError::Internal)?;
+            state.log("reports", "info", format!("report shared: {id}")).await;
+            t
+        }
+    };
+    // A relative path — the frontend prepends its own origin (robust behind a
+    // reverse proxy, which the server can't reliably infer).
+    Ok(Json(serde_json::json!({ "token": token, "path": format!("/shared/{token}") })))
+}
+
+// DELETE /api/reports/:id/share — revoke the link (existing recipients lose
+// access immediately).
+pub async fn unshare(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    let ok = db::reports::set_share_token(&state.db, &user.id, &id, None)
+        .await
+        .map_err(AppError::Internal)?;
+    if !ok {
+        return Err(AppError::NotFound);
+    }
+    state.log("reports", "info", format!("report share revoked: {id}")).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// GET /shared/:token — PUBLIC: the self-contained report, no account required.
+// Reports are static HTML (inline CSS/SVG, data-URI images, no scripts); a
+// strict CSP and nosniff are belt-and-braces against the model-generated body.
+pub async fn shared(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> AppResult<Response> {
+    let (_title, html) =
+        db::reports::get_shared(&state.db, &token).await.map_err(AppError::Internal)?.ok_or(
+            // Wrong/revoked token: a plain 404, never distinguishing "never
+            // existed" from "revoked".
+            AppError::NotFound,
+        )?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:",
+        )
+        .header(header::REFERRER_POLICY, "no-referrer")
+        .body(Body::from(html))
+        .map_err(|e| AppError::Internal(e.into()))
+}
+
 #[derive(serde::Deserialize)]
 pub struct StartResearch {
     topic: String,

@@ -77,6 +77,35 @@ mod tests {
         assert_eq!(decided.status, "approved");
     }
 
+    /// Report share links: mint, public lookup by token, owner scoping, revoke.
+    #[tokio::test]
+    async fn report_share_links() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1', 'a', 'x', 'admin', '2026-01-01'), ('u2', 'b', 'x', 'member', '2026-01-01')")
+            .execute(&pool).await.unwrap();
+        let id = reports::insert(&pool, "u1", None, "NVR options", "<h1>report</h1>").await.unwrap();
+
+        // Fresh report: found but private.
+        assert_eq!(reports::share_token(&pool, "u1", &id).await.unwrap(), Some(None));
+        // Another user can't see or touch it.
+        assert_eq!(reports::share_token(&pool, "u2", &id).await.unwrap(), None);
+        assert!(!reports::set_share_token(&pool, "u2", &id, Some("tok")).await.unwrap());
+
+        // Owner mints a token; the public lookup then resolves to the HTML.
+        assert!(reports::set_share_token(&pool, "u1", &id, Some("tok123")).await.unwrap());
+        assert_eq!(reports::share_token(&pool, "u1", &id).await.unwrap(), Some(Some("tok123".into())));
+        let (title, html) = reports::get_shared(&pool, "tok123").await.unwrap().unwrap();
+        assert_eq!(title, "NVR options");
+        assert!(html.contains("report"));
+
+        // Revoke: the token stops resolving.
+        assert!(reports::set_share_token(&pool, "u1", &id, None).await.unwrap());
+        assert!(reports::get_shared(&pool, "tok123").await.unwrap().is_none());
+        // The share state also shows in the listing.
+        let metas = reports::list_for_user(&pool, "u1", 10).await.unwrap();
+        assert!(metas[0].share_token.is_none());
+    }
+
     /// Job recovery: startup orphan sweep and user-initiated cancel.
     #[tokio::test]
     async fn job_cancel_and_orphan_sweep() {
