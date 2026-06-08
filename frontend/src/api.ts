@@ -316,6 +316,8 @@ export interface TicketDraft {
   subject: string
   description: string
   priority: 'low' | 'medium' | 'high' | 'critical'
+  /** How many image attachments the source email has (preview only). */
+  attachment_count?: number
 }
 
 export interface AttachmentUpload {
@@ -408,11 +410,12 @@ export const email = {
       `/email/messages/${encodeURIComponent(messageId)}/ticket/preview`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
-  // Step 2: create the (possibly edited) ticket.
-  createTicket: (draft: TicketDraft) =>
-    json<{ reference: string; id: number; subject: string; priority: string; client: string }>(
+  // Step 2: create the (possibly edited) ticket. message_id/mailbox let the
+  // backend forward the email's image attachments onto the ticket.
+  createTicket: (draft: TicketDraft, ctx?: { message_id: string; mailbox?: string }) =>
+    json<{ reference: string; id: number; subject: string; priority: string; client: string; attached: number }>(
       '/email/tickets',
-      { method: 'POST', body: JSON.stringify(draft) },
+      { method: 'POST', body: JSON.stringify({ ...draft, ...ctx }) },
     ),
   search: (q: string, nextLink?: string | null, mailbox?: string) => {
     const params = new URLSearchParams({ q })

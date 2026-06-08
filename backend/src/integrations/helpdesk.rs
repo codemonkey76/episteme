@@ -58,6 +58,72 @@ pub async fn login(state: &AppState, base_url: &str, email: &str, password: &str
         .ok_or_else(|| anyhow!("helpdesk login response missing token"))
 }
 
+/// One file to upload as a multipart attachment.
+pub struct UploadFile {
+    pub field: String, // e.g. "attachments[0]"
+    pub filename: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Authenticated multipart POST (text `fields` + file parts) — for endpoints
+/// that take uploads, e.g. creating a ticket with image attachments. Errors are
+/// flattened like `request`.
+pub async fn request_multipart(
+    state: &AppState,
+    user_id: &str,
+    path: &str,
+    fields: Vec<(String, String)>,
+    files: Vec<UploadFile>,
+) -> Result<Value> {
+    let cfg = config(state, user_id).await?;
+    let url = format!("{}/api{}", cfg.base_url.trim_end_matches('/'), path);
+
+    let mut form = reqwest::multipart::Form::new();
+    for (k, v) in fields {
+        form = form.text(k, v);
+    }
+    for f in files {
+        let part = reqwest::multipart::Part::bytes(f.bytes)
+            .file_name(f.filename)
+            .mime_str(&f.content_type)
+            .map_err(|e| anyhow!("bad attachment mime: {e}"))?;
+        form = form.part(f.field, part);
+    }
+
+    let res = state
+        .http_client
+        .post(&url)
+        .bearer_auth(&cfg.token)
+        .header("Accept", "application/json")
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| anyhow!("helpdesk request failed: {e}"))?;
+
+    let status = res.status();
+    let parsed: Value = res.json().await.unwrap_or(Value::Null);
+    if status.as_u16() == 401 {
+        return Err(anyhow!("helpdesk session expired — reconnect in Settings → Integrations"));
+    }
+    if !status.is_success() {
+        let mut msg = parsed["message"].as_str().unwrap_or("helpdesk API error").to_string();
+        if let Some(errors) = parsed["errors"].as_object() {
+            let details: Vec<&str> = errors
+                .values()
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .collect();
+            if !details.is_empty() {
+                msg = format!("{msg} — {}", details.join("; "));
+            }
+        }
+        return Err(anyhow!("helpdesk API {status}: {msg}"));
+    }
+    Ok(parsed)
+}
+
 /// Authenticated helpdesk API call. `path` is relative to /api (e.g.
 /// "/tickets"). Laravel validation errors are flattened into the message so
 /// the model can correct its arguments.

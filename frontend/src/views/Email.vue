@@ -1086,7 +1086,7 @@ async function previewTicket() {
 
 // Step 2: create the reviewed (possibly edited) ticket.
 async function submitTicket() {
-  if (!ticketDraft.value || ticketState.value === 'creating') return
+  if (!ticketDraft.value || !selectedMessage.value || ticketState.value === 'creating') return
   if (!ticketDraft.value.subject.trim()) {
     ticketMsg.value = 'Subject is required.'
     return
@@ -1094,10 +1094,14 @@ async function submitTicket() {
   ticketState.value = 'creating'
   ticketMsg.value = ''
   try {
-    const res = await api.email.createTicket(ticketDraft.value)
+    const res = await api.email.createTicket(ticketDraft.value, {
+      message_id: selectedMessage.value.id,
+      mailbox: mbox.value,
+    })
     ticketState.value = 'done'
     ticketDraft.value = null
-    ticketMsg.value = `${res.reference} created for ${res.client} (${res.priority})`
+    const imgNote = res.attached ? ` with ${res.attached} image${res.attached === 1 ? '' : 's'}` : ''
+    ticketMsg.value = `${res.reference} created for ${res.client} (${res.priority})${imgNote}`
     logs.info('Email', `Helpdesk ticket ${res.reference}: ${res.subject}`)
     setTimeout(() => {
       ticketState.value = 'idle'
@@ -1836,6 +1840,10 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
                 <option value="critical">critical</option>
               </select>
             </label>
+            <p v-if="ticketDraft.attachment_count" class="text-[0.7rem] text-[var(--c-808080)] flex items-center gap-1">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              {{ ticketDraft.attachment_count }} image{{ ticketDraft.attachment_count === 1 ? '' : 's' }} from the email will be attached
+            </p>
             <div class="flex items-center gap-2 pt-0.5">
               <button class="bg-[var(--c-2a2418)] text-[var(--c-e0b060)] border border-[var(--c-3a3010)] rounded-md py-[0.35rem] px-3 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-3a3020)] disabled:opacity-50" :disabled="ticketState === 'creating'" @click="submitTicket">{{ ticketState === 'creating' ? 'Creating…' : 'Create ticket' }}</button>
               <button class="bg-transparent text-[var(--c-585858)] border-none py-[0.35rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] hover:text-muted" @click="cancelTicket">Cancel</button>

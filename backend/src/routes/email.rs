@@ -1361,6 +1361,9 @@ pub async fn ticket_preview(
         _ => "medium",
     };
 
+    // How many image attachments will ride along — shown in the review panel.
+    let attachment_count = image_attachment_count(&state, user_id, &seg, &message_id).await;
+
     // Return the draft for review — creation happens in ticket_create once the
     // user has (optionally) edited it.
     Ok(Json(serde_json::json!({
@@ -1370,7 +1373,75 @@ pub async fn ticket_preview(
         "subject": t_subject,
         "description": t_description,
         "priority": t_priority,
+        "attachment_count": attachment_count,
     })))
+}
+
+/// Count image attachments on a message (cheap — metadata only).
+async fn image_attachment_count(state: &AppState, user_id: &str, seg: &str, message_id: &str) -> usize {
+    let res = graph_get(
+        state,
+        user_id,
+        &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
+        &[("$select", "contentType")],
+    )
+    .await
+    .unwrap_or(Value::Null);
+    res["value"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|a| a["contentType"].as_str().map(|c| c.starts_with("image/")).unwrap_or(false))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Fetch the message's image attachments (file attachments with an `image/*`
+/// content type) as (filename, content_type, bytes) — one Graph call, bytes
+/// included as base64. Capped to keep the helpdesk upload sane.
+async fn fetch_image_attachments(
+    state: &AppState,
+    user_id: &str,
+    seg: &str,
+    message_id: &str,
+) -> Vec<(String, String, Vec<u8>)> {
+    use base64::Engine;
+    const MAX_FILES: usize = 20;
+    const MAX_BYTES: usize = 20 * 1024 * 1024;
+    let res = match graph_get(
+        state,
+        user_id,
+        &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
+        &[],
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("ticket attachments: list failed: {e}");
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for a in res["value"].as_array().into_iter().flatten() {
+        if out.len() >= MAX_FILES {
+            break;
+        }
+        let ct = a["contentType"].as_str().unwrap_or("");
+        let is_file = a["@odata.type"].as_str() == Some("#microsoft.graph.fileAttachment");
+        if !is_file || !ct.starts_with("image/") {
+            continue;
+        }
+        let Some(b64) = a["contentBytes"].as_str() else { continue };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) else { continue };
+        if bytes.is_empty() || bytes.len() > MAX_BYTES {
+            continue;
+        }
+        let name = a["name"].as_str().filter(|s| !s.is_empty()).unwrap_or("image").to_string();
+        out.push((name, ct.to_string(), bytes));
+    }
+    out
 }
 
 // POST /api/email/tickets — create a helpdesk ticket from the reviewed draft.
@@ -1386,6 +1457,11 @@ pub struct CreateTicketBody {
     /// Carried through from the preview for the success message/log only.
     #[serde(default)]
     client: Option<String>,
+    /// The source email — its image attachments are forwarded onto the ticket.
+    #[serde(default)]
+    message_id: Option<String>,
+    #[serde(default)]
+    mailbox: Option<String>,
 }
 
 pub async fn ticket_create(
@@ -1403,27 +1479,48 @@ pub async fn ticket_create(
         _ => "medium",
     };
 
-    let created = crate::integrations::helpdesk::request(
-        &state,
-        user_id,
-        reqwest::Method::POST,
-        "/tickets",
-        Some(&serde_json::json!({
-            "client_id": body.client_id,
-            "user_id": body.requester_id,
-            "subject": subject,
-            "description": body.description,
-            "priority": priority,
-            "source": "api",
-        })),
-    )
-    .await
-    .map_err(AppError::Internal)?;
+    // Forward the email's image attachments onto the ticket (best-effort: a
+    // fetch failure still creates the ticket, just without the images).
+    let images = if let Some(mid) = body.message_id.as_deref().filter(|s| !s.is_empty()) {
+        let seg = mailbox_seg(body.mailbox.as_deref())?;
+        fetch_image_attachments(&state, user_id, &seg, mid).await
+    } else {
+        Vec::new()
+    };
+
+    let fields = vec![
+        ("client_id".to_string(), body.client_id.to_string()),
+        ("user_id".to_string(), body.requester_id.to_string()),
+        ("subject".to_string(), subject.to_string()),
+        ("description".to_string(), body.description.clone()),
+        ("priority".to_string(), priority.to_string()),
+        ("source".to_string(), "api".to_string()),
+    ];
+    let files: Vec<crate::integrations::helpdesk::UploadFile> = images
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, ct, bytes))| crate::integrations::helpdesk::UploadFile {
+            field: format!("attachments[{i}]"),
+            filename: name,
+            content_type: ct,
+            bytes,
+        })
+        .collect();
+    let attached = files.len();
+
+    let created =
+        crate::integrations::helpdesk::request_multipart(&state, user_id, "/tickets", fields, files)
+            .await
+            .map_err(AppError::Internal)?;
 
     let reference = created["data"]["reference"].as_str().unwrap_or("?").to_string();
     let client_name = body.client.as_deref().unwrap_or("?");
     state
-        .log("helpdesk", "info", format!("Ticket {reference} created from email: {subject} ({client_name})"))
+        .log(
+            "helpdesk",
+            "info",
+            format!("Ticket {reference} created from email: {subject} ({client_name}, {attached} image(s))"),
+        )
         .await;
     Ok(Json(serde_json::json!({
         "reference": reference,
@@ -1431,6 +1528,7 @@ pub async fn ticket_create(
         "subject": subject,
         "priority": priority,
         "client": client_name,
+        "attached": attached,
     })))
 }
 
