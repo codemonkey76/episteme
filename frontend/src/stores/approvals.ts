@@ -10,8 +10,8 @@ export const useApprovalsStore = defineStore('approvals', () => {
     pending.value = res.pending_actions
   }
 
-  async function approve(actionId: string) {
-    await api.approvals.approve(actionId)
+  async function approve(actionId: string, editedArgs?: Record<string, unknown>) {
+    await api.approvals.approve(actionId, editedArgs)
     pending.value = pending.value.filter((a) => a.id !== actionId)
   }
 

@@ -27,12 +27,23 @@ pub async fn list_pending(
     Ok(Json(serde_json::json!({ "pending_actions": actions })))
 }
 
+/// Optional approve body: the operator's edited tool args from the approval
+/// card. Absent (no/empty body) means run the model's original draft verbatim.
+#[derive(serde::Deserialize)]
+pub struct ApproveReq {
+    edited_args: Option<serde_json::Value>,
+}
+
 pub async fn approve(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(action_id): Path<String>,
+    // Body extractor must come last. Optional so a plain approve (no edits)
+    // can POST with no body at all.
+    body: Option<Json<ApproveReq>>,
 ) -> AppResult<StatusCode> {
-    decide(&state, &user.id, &action_id, true).await
+    let edited_args = body.and_then(|Json(b)| b.edited_args);
+    decide(&state, &user.id, &action_id, true, edited_args).await
 }
 
 pub async fn reject(
@@ -40,7 +51,7 @@ pub async fn reject(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(action_id): Path<String>,
 ) -> AppResult<StatusCode> {
-    decide(&state, &user.id, &action_id, false).await
+    decide(&state, &user.id, &action_id, false, None).await
 }
 
 async fn decide(
@@ -48,6 +59,7 @@ async fn decide(
     user_id: &str,
     action_id: &str,
     approved: bool,
+    edited_args: Option<serde_json::Value>,
 ) -> AppResult<StatusCode> {
     // Only the owner of the session may decide its tool calls.
     if !db::pending_actions::owned_by(&state.db, action_id, user_id)
@@ -65,12 +77,32 @@ async fn decide(
     if action.status != "pending" {
         return Ok(StatusCode::NO_CONTENT);
     }
+
+    // The args to run with: the operator's edits if they tweaked the card,
+    // else the model's stored draft. `None` overall means denied. Persist
+    // edits before resolving so the row (and the parked path below) reflect
+    // what actually ran.
+    let effective_args: Option<serde_json::Value> = if approved {
+        let args = match &edited_args {
+            Some(edited) => {
+                db::pending_actions::update_args(&state.db, action_id, &edited.to_string())
+                    .await
+                    .map_err(AppError::Internal)?;
+                edited.clone()
+            }
+            None => serde_json::from_str(&action.tool_args).unwrap_or(serde_json::Value::Null),
+        };
+        Some(args)
+    } else {
+        None
+    };
+
     db::pending_actions::resolve(&state.db, action_id, approved)
         .await
         .map_err(AppError::Internal)?;
     // Wake the paused agent turn, if it's still in flight (live chat).
     if let Some(tx) = state.pending_approvals.lock().await.remove(action_id) {
-        let _ = tx.send(approved);
+        let _ = tx.send(effective_args);
         return Ok(StatusCode::NO_CONTENT);
     }
 
@@ -82,9 +114,7 @@ async fn decide(
         return Ok(StatusCode::NO_CONTENT);
     };
 
-    let result_str = if approved {
-        let args: serde_json::Value =
-            serde_json::from_str(&action.tool_args).unwrap_or(serde_json::Value::Null);
+    let result_str = if let Some(args) = effective_args {
         match crate::agent::execute_tool(state, user_id, &action.tool_name, args).await {
             Ok(v) => {
                 state

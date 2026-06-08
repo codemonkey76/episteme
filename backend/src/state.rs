@@ -15,8 +15,11 @@ pub struct AppState {
     pub log_tx: broadcast::Sender<String>,
     /// In-flight tool-approval waits: pending_action id → resume channel.
     /// The agent turn blocks on the receiver; the approve/reject endpoints
-    /// send the decision. Entries die with the process (rows stay "pending").
-    pub pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    /// send the decision — `None` denies, `Some(args)` approves and carries
+    /// the (possibly operator-edited) args to run. Entries die with the
+    /// process (rows stay "pending").
+    pub pending_approvals:
+        Arc<Mutex<HashMap<String, oneshot::Sender<Option<serde_json::Value>>>>>,
     /// Hand-off queue for background jobs: senders enqueue, the worker spawned
     /// in main runs them. A queue (rather than spawning `jobs::run` directly)
     /// breaks the async-recursion cycle when the agent's own

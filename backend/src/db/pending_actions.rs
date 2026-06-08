@@ -114,6 +114,18 @@ pub async fn owned_by(pool: &SqlitePool, id: &str, user_id: &str) -> Result<bool
     Ok(n > 0)
 }
 
+/// Overwrite a pending row's args with the operator's edits from the approval
+/// card. Persisted before resolve so the audit trail (and the parked-execution
+/// path, which reads `tool_args`) reflect what actually ran.
+pub async fn update_args(pool: &SqlitePool, id: &str, tool_args: &str) -> Result<()> {
+    sqlx::query("UPDATE pending_actions SET tool_args = ? WHERE id = ?")
+        .bind(tool_args)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn resolve(pool: &SqlitePool, id: &str, approved: bool) -> Result<()> {
     let status = if approved { "approved" } else { "rejected" };
     let now = Utc::now().to_rfc3339();

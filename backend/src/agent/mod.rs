@@ -254,6 +254,9 @@ pub async fn run_turn(
                 let mut parked = 0usize;
 
                 for call in calls {
+                    // The args we actually run with. Defaults to the model's,
+                    // but an "ask" approval may return operator-edited args.
+                    let mut effective_args = call.fn_arguments.clone();
                     // Per-tool policy: tools marked "ask" in Settings → Tools
                     // (or ask-by-default, e.g. helpdesk writes) pause the turn
                     // here until the user approves or denies.
@@ -286,41 +289,42 @@ pub async fn run_turn(
                             parked += 1;
                             continue;
                         }
-                        let approved =
-                            approval::await_decision(&state, &session_id, &call, &tx).await?;
-                        if !approved {
-                            let declined = "user declined this tool call";
-                            db::messages::insert(
-                                &state.db,
-                                &session_id,
-                                "tool",
-                                &serde_json::to_string(declined).unwrap_or_default(),
-                                None,
-                                Some(&call.call_id),
-                            )
-                            .await?;
-                            history.push(ChatMessage {
-                                role: "tool".to_string(),
-                                content: serde_json::json!({
-                                    "call_id": call.call_id,
-                                    "name": call.fn_name,
-                                    "content": declined,
-                                }),
-                            });
-                            continue;
+                        match approval::await_decision(&state, &session_id, &call, &tx).await? {
+                            Some(args) => effective_args = args,
+                            None => {
+                                let declined = "user declined this tool call";
+                                db::messages::insert(
+                                    &state.db,
+                                    &session_id,
+                                    "tool",
+                                    &serde_json::to_string(declined).unwrap_or_default(),
+                                    None,
+                                    Some(&call.call_id),
+                                )
+                                .await?;
+                                history.push(ChatMessage {
+                                    role: "tool".to_string(),
+                                    content: serde_json::json!({
+                                        "call_id": call.call_id,
+                                        "name": call.fn_name,
+                                        "content": declined,
+                                    }),
+                                });
+                                continue;
+                            }
                         }
                     }
 
                     // Tell the UI a tool is running.
                     let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
 
-                    let result = execute_tool(&state, &user_id, &call.fn_name, call.fn_arguments.clone())
+                    let result = execute_tool(&state, &user_id, &call.fn_name, effective_args.clone())
                         .await;
 
                     let result_str = match result {
                         Ok(v) => {
                             state
-                                .log("tools", "info", format!("{} {}", call.fn_name, call.fn_arguments))
+                                .log("tools", "info", format!("{} {}", call.fn_name, effective_args))
                                 .await;
                             v.to_string()
                         }

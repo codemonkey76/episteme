@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use genai::chat::ToolCall;
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -16,13 +17,15 @@ use crate::state::AppState;
 const DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Create a pending action, notify the UI, and block until decided.
-/// Returns whether the tool may run.
+/// Returns `None` if denied, or `Some(args)` to run with — the operator may
+/// have edited the args in the approval card, so these can differ from the
+/// model's original `call.fn_arguments`.
 pub async fn await_decision(
     state: &Arc<AppState>,
     session_id: &str,
     call: &ToolCall,
     tx: &mpsc::Sender<AgentEvent>,
-) -> Result<bool> {
+) -> Result<Option<Value>> {
     let action = db::pending_actions::insert(
         &state.db,
         session_id,
@@ -31,7 +34,7 @@ pub async fn await_decision(
     )
     .await?;
 
-    let (decide_tx, decide_rx) = tokio::sync::oneshot::channel::<bool>();
+    let (decide_tx, decide_rx) = tokio::sync::oneshot::channel::<Option<Value>>();
     state.pending_approvals.lock().await.insert(action.id.clone(), decide_tx);
 
     state
@@ -46,10 +49,10 @@ pub async fn await_decision(
 
     // The approve/reject endpoints resolve the DB row themselves; we only do
     // so for the paths where no endpoint fired (disconnect / timeout).
-    let (approved, resolve_db) = tokio::select! {
-        decision = decide_rx => (decision.unwrap_or(false), false),
-        _ = tx.closed() => (false, true),
-        _ = tokio::time::sleep(DECISION_TIMEOUT) => (false, true),
+    let (decision, resolve_db): (Option<Value>, bool) = tokio::select! {
+        decision = decide_rx => (decision.unwrap_or(None), false),
+        _ = tx.closed() => (None, true),
+        _ = tokio::time::sleep(DECISION_TIMEOUT) => (None, true),
     };
 
     state.pending_approvals.lock().await.remove(&action.id);
@@ -59,13 +62,13 @@ pub async fn await_decision(
     state
         .log(
             "approvals",
-            if approved { "info" } else { "warn" },
+            if decision.is_some() { "info" } else { "warn" },
             format!(
                 "{} {}",
                 call.fn_name,
-                if approved { "approved" } else { "denied" }
+                if decision.is_some() { "approved" } else { "denied" }
             ),
         )
         .await;
-    Ok(approved)
+    Ok(decision)
 }

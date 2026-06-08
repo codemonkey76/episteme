@@ -4,6 +4,7 @@ import { useSessionsStore } from '../stores/sessions'
 import { useWindowsStore } from '../stores/windows'
 import { useLogsStore } from '../stores/logs'
 import * as api from '../api'
+import ApprovalCard from '../components/ApprovalCard.vue'
 
 const sessions = useSessionsStore()
 const winStore = useWindowsStore()
@@ -65,10 +66,10 @@ onBeforeUnmount(() => {
   if (poll) clearInterval(poll)
 })
 
-async function decide(a: api.PendingActionGlobal, approved: boolean) {
+async function decide(a: api.PendingActionGlobal, approved: boolean, editedArgs?: Record<string, unknown>) {
   pending.value = pending.value.filter(x => x.id !== a.id)
   try {
-    if (approved) await api.approvals.approve(a.id)
+    if (approved) await api.approvals.approve(a.id, editedArgs)
     else await api.approvals.reject(a.id)
     logs.info('Jobs', `${approved ? 'Approved' : 'Denied'}: ${a.tool_name} (${a.session_title})`)
   } catch (e: unknown) {
@@ -80,14 +81,6 @@ async function decide(a: api.PendingActionGlobal, approved: boolean) {
 async function openSession(id: string) {
   await sessions.loadSession(id)
   winStore.openKey('chat', undefined, 'fill')
-}
-
-function prettyArgs(args: string): string {
-  try {
-    return JSON.stringify(JSON.parse(args), null, 2)
-  } catch {
-    return args
-  }
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -114,21 +107,21 @@ function fmtTime(iso: string): string {
         <h3 class="text-[0.7rem] font-semibold text-[var(--c-585858)] uppercase tracking-[0.07em] mb-2">Needs your approval</h3>
         <p v-if="pending.length === 0" class="text-[var(--c-383838)] text-[0.8125rem]">Nothing waiting. Gated tools from background runs appear here.</p>
         <div v-else class="flex flex-col gap-2">
-          <div v-for="a in pending" :key="a.id" class="flex flex-col gap-2 bg-[var(--c-1a1610)] border border-[var(--c-4a3a1a)] rounded-lg p-2.5">
-            <div class="flex items-center gap-2 text-[0.8rem] text-[var(--c-e0b060)]">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              <span class="font-medium">{{ a.tool_name }}</span>
+          <ApprovalCard
+            v-for="a in pending"
+            :key="a.id"
+            :tool-name="a.tool_name"
+            :tool-args="a.tool_args"
+            @approve="(edited) => decide(a, true, edited)"
+            @reject="decide(a, false)"
+          >
+            <template #header-extra>
               <button class="ml-auto bg-none border-none text-[var(--c-8a7a50)] text-[0.7rem] cursor-pointer hover:text-[var(--c-e0b060)] truncate max-w-[12rem]" :title="a.session_title" @click="openSession(a.session_id)">{{ a.session_title }}</button>
-            </div>
-            <pre class="text-[0.72rem] text-[var(--c-a09070)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-36">{{ prettyArgs(a.tool_args) }}</pre>
-            <div class="flex items-center gap-2">
-              <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254a35)]" @click="decide(a, true)">Approve</button>
-              <button class="bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-4a2525)]" @click="decide(a, false)">Deny</button>
+            </template>
+            <template #footer-extra>
               <span class="ml-auto text-[0.68rem] text-[var(--c-585858)]">{{ fmtTime(a.created_at) }}</span>
-            </div>
-          </div>
+            </template>
+          </ApprovalCard>
         </div>
       </section>
 

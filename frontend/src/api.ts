@@ -222,8 +222,18 @@ export const push = {
 export const approvals = {
   listPending: (sessionId: string) =>
     json<{ pending_actions: PendingAction[] }>(`/sessions/${sessionId}/approvals`),
-  approve: (actionId: string) =>
-    fetch(BASE + `/approvals/${actionId}/approve`, { method: 'POST' }),
+  // Pass editedArgs to run the operator's edits instead of the model's draft;
+  // omit it to approve the draft verbatim.
+  approve: (actionId: string, editedArgs?: Record<string, unknown>) =>
+    fetch(BASE + `/approvals/${actionId}/approve`, {
+      method: 'POST',
+      ...(editedArgs
+        ? {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ edited_args: editedArgs }),
+          }
+        : {}),
+    }),
   reject: (actionId: string) =>
     fetch(BASE + `/approvals/${actionId}/reject`, { method: 'POST' }),
 }

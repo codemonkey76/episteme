@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import { useApprovalsStore } from '../stores/approvals'
 import { useSessionsStore } from '../stores/sessions'
+import ApprovalCard from '../components/ApprovalCard.vue'
 
 const store = useApprovalsStore()
 const sessions = useSessionsStore()
@@ -19,13 +20,13 @@ onMounted(async () => {
     <p v-if="!sessions.activeSession" class="text-[var(--c-606060)] text-sm">No active session.</p>
     <p v-else-if="store.pending.length === 0" class="text-[var(--c-606060)] text-sm">No pending actions.</p>
     <ul v-else class="list-none flex flex-col gap-4">
-      <li v-for="action in store.pending" :key="action.id" class="bg-surface border border-raised rounded-lg p-4">
-        <div class="font-semibold mb-2">{{ action.tool_name }}</div>
-        <pre class="text-[0.8rem] bg-[var(--c-111111)] p-2 rounded overflow-x-auto mb-3">{{ JSON.stringify(JSON.parse(action.tool_args), null, 2) }}</pre>
-        <div class="flex gap-2">
-          <button class="border-none rounded-md py-[0.4rem] px-[0.9rem] cursor-pointer text-[0.85rem] bg-[var(--c-2a5a2a)] text-[var(--c-c0e0c0)]" @click="store.approve(action.id)">Approve</button>
-          <button class="border-none rounded-md py-[0.4rem] px-[0.9rem] cursor-pointer text-[0.85rem] bg-[var(--c-5a2a2a)] text-[var(--c-e0c0c0)]" @click="store.reject(action.id)">Reject</button>
-        </div>
+      <li v-for="action in store.pending" :key="action.id">
+        <ApprovalCard
+          :tool-name="action.tool_name"
+          :tool-args="action.tool_args"
+          @approve="(edited) => store.approve(action.id, edited)"
+          @reject="store.reject(action.id)"
+        />
       </li>
     </ul>
   </div>

@@ -8,6 +8,7 @@ import { useTasksStore } from '../stores/tasks'
 import { useNotesStore } from '../stores/notes'
 import * as api from '../api'
 import { renderMarkdown } from '../lib/markdown'
+import ApprovalCard from '../components/ApprovalCard.vue'
 
 const logs = useLogsStore()
 
@@ -267,14 +268,6 @@ const sessionApprovals = computed(() =>
   approvalsStore.pending.filter(a => a.session_id === store.activeSession?.id),
 )
 
-function prettyArgs(args: string): string {
-  try {
-    return JSON.stringify(JSON.parse(args), null, 2)
-  } catch {
-    return args
-  }
-}
-
 // A tool_call message is either a live chip (content = tool name) or a
 // DB-persisted row (JSON-encoded array of call objects). Label both.
 function toolCallLabels(content: string): string[] {
@@ -323,23 +316,16 @@ function toolCallLabels(content: string): string[] {
       </template>
 
       <!-- Inline approval cards: the turn is paused until decided. -->
-      <div
+      <ApprovalCard
         v-for="a in sessionApprovals"
         :key="a.id"
-        class="self-start flex flex-col gap-2 max-w-3xl bg-[var(--c-1a1610)] border border-[var(--c-4a3a1a)] rounded-lg py-2.5 px-3"
-      >
-        <div class="flex items-center gap-2 text-[0.8rem] text-[var(--c-e0b060)]">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          <span class="font-medium">{{ toolLabel(a.tool_name) }} — approval required</span>
-        </div>
-        <pre class="text-[0.72rem] text-[var(--c-a09070)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-40">{{ prettyArgs(a.tool_args) }}</pre>
-        <div class="flex items-center gap-2">
-          <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254a35)]" @click="approvalsStore.approve(a.id)">Approve</button>
-          <button class="bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded px-3 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-4a2525)]" @click="approvalsStore.reject(a.id)">Deny</button>
-        </div>
-      </div>
+        class="self-start max-w-3xl"
+        :tool-name="a.tool_name"
+        :tool-args="a.tool_args"
+        :label="toolLabel(a.tool_name)"
+        @approve="(edited) => approvalsStore.approve(a.id, edited)"
+        @reject="approvalsStore.reject(a.id)"
+      />
     </div>
     <div v-if="error" class="bg-[var(--c-5a2a2a)] text-[var(--c-e0c0c0)] text-[0.8rem] py-[0.4rem] px-4">{{ error }}</div>
     <!-- Messages queued while the model responds -->
