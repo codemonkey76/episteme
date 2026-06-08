@@ -127,11 +127,20 @@ JSON array of {\"id\", \"category\"} objects.",
 list of inbox emails. Classify EACH email into exactly one category:\n\
 - \"promotions\": marketing, newsletters, sales, offers.\n\
 - \"invoices\": bills, receipts, payment confirmations, statements.\n\
-- \"notifications\": automated system notifications, alerts, Sentry/error \
-reports, CI results, monitoring.\n\
+- \"notifications\": automated, informational mail the user acts on (if at \
+all) in another app, not by replying. Includes system/monitoring alerts, error \
+reports (e.g. Sentry), CI results; content-platform and social updates (Patreon, \
+YouTube, Substack, Twitch, social media — new posts, videos, reactions, follows, \
+likes); and ticketing/helpdesk SYSTEM emails (new ticket replies, status \
+changes, assignments) — typically from a no-reply/support/helpdesk-style sender \
+with a ticket id such as [TKT-00016] in the subject. Classify these as \
+notifications EVEN WHEN they relay a person's message or read like a reply.\n\
 - \"deliveries\": shipping and delivery/order tracking updates.\n\
-- \"attention\": anything that needs a human to read or act — personal mail, \
-direct questions, requests, anything ambiguous or important.\n\
+- \"attention\": mail from a real person that needs the user to read or act — \
+personal mail, direct questions, requests, anything ambiguous or important. NOT \
+automated platform/system notifications (see above): a helpdesk or content-\
+platform notification is \"notifications\", never \"attention\", even if it \
+looks like a reply or mentions a ticket.\n\
 - \"none\": equivalent to attention; use when unsure. Never guess a low-priority \
 category for mail that might matter.\n\
 - \"folder\": ONLY when additional instructions for this mailbox direct certain \
