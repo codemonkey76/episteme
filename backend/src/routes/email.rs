@@ -306,7 +306,7 @@ pub async fn search_messages(
         let top = params.top.unwrap_or(30).min(50);
         let seg = mailbox_seg(params.mailbox.as_deref())?;
         format!(
-            "{GRAPH}/{seg}/messages?$search=%22{}%22&$select=id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag&$expand=singleValueExtendedProperties($filter=id%20eq%20'Integer%200x1081')&$top={top}",
+            "{GRAPH}/{seg}/messages?$search=%22{}%22&$select=id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,isDraft,flag&$expand=singleValueExtendedProperties($filter=id%20eq%20'Integer%200x1081')&$top={top}",
             q
         )
     };
@@ -366,7 +366,7 @@ pub async fn list_messages(
         user_id,
         &format!("{GRAPH}/{seg}/mailFolders/{folder_id}/messages"),
         &[
-            ("$select", "id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,flag"),
+            ("$select", "id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,isDraft,flag"),
             // PidTagLastVerbExecuted (0x1081) tells us whether the message was
             // last replied to / forwarded — the signal Outlook uses for its arrow.
             ("$expand", "singleValueExtendedProperties($filter=id eq 'Integer 0x1081')"),
@@ -392,7 +392,7 @@ pub async fn get_message(
         &state,
         user_id,
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
-        &[("$select", "id,subject,from,toRecipients,ccRecipients,body,receivedDateTime,isRead,hasAttachments")],
+        &[("$select", "id,subject,from,toRecipients,ccRecipients,bccRecipients,body,receivedDateTime,isRead,hasAttachments,isDraft")],
     )
     .await?;
     Ok(Json(res))
@@ -672,6 +672,10 @@ pub struct SendBody {
     /// createReply/createForward drafts carry it, and we prepend this above it.
     body: String,
     reply_to_message_id: Option<String>,
+    /// An existing draft being edited: its content/recipients are overwritten
+    /// and the same message is sent, preserving any attachments already on it.
+    #[serde(default)]
+    draft_id: Option<String>,
     /// "reply" | "replyAll" | "forward" — selects the Graph draft endpoint
     /// (createReply / createReplyAll / createForward).
     #[serde(default)]
@@ -852,7 +856,23 @@ pub async fn send_email(
     // keep the quoted history and threading), patch in the user's HTML and
     // recipients, upload attachments, then send. One flow for every case so
     // HTML bodies, inline images and large attachments all work uniformly.
-    let draft = if let Some(reply_id) = &payload.reply_to_message_id {
+    let draft_id: String = if let Some(existing) =
+        payload.draft_id.as_deref().filter(|s| !s.trim().is_empty())
+    {
+        // Editing an existing draft: overwrite its content and recipients in
+        // place and send the SAME message, so attachments already on it survive.
+        let mut patch = serde_json::json!({
+            "body": { "contentType": "html", "content": payload.body },
+            "toRecipients": to,
+            "ccRecipients": cc,
+            "bccRecipients": bcc,
+        });
+        if let Some(s) = payload.subject.as_deref() {
+            patch["subject"] = Value::String(s.to_string());
+        }
+        graph_patch(&state, user_id, &format!("{GRAPH}/{seg}/messages/{existing}"), &patch).await?;
+        existing.to_string()
+    } else if let Some(reply_id) = &payload.reply_to_message_id {
         let verb = match payload.action.as_deref() {
             Some("forward") => "createForward",
             Some("replyAll") => "createReplyAll",
@@ -882,9 +902,9 @@ pub async fn send_email(
             .as_str()
             .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?;
         graph_patch(&state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch).await?;
-        draft
+        draft_id.to_string()
     } else {
-        graph_post(
+        let draft = graph_post(
             &state,
             user_id,
             &format!("{GRAPH}/{seg}/messages"),
@@ -896,12 +916,12 @@ pub async fn send_email(
                 "bccRecipients": bcc,
             }),
         )
-        .await?
+        .await?;
+        draft["id"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?
+            .to_string()
     };
-    let draft_id = draft["id"]
-        .as_str()
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?
-        .to_string();
 
     // Attachments, then send. On failure, delete the draft (best-effort) so
     // half-built messages don't pile up in Drafts.

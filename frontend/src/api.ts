@@ -287,6 +287,8 @@ export interface MessageSummary {
   receivedDateTime: string
   isRead: boolean
   hasAttachments: boolean
+  // True for unsent drafts — opens in the composer for editing, not the reader.
+  isDraft?: boolean
   // "notFlagged" | "flagged" | "complete" (present when `flag` was selected)
   flag?: { flagStatus?: string }
   // PidTagLastVerbExecuted (0x1081): "102"=reply, "103"=reply-all, "104"=forward
@@ -295,6 +297,7 @@ export interface MessageSummary {
 
 export interface MessageDetail extends MessageSummary {
   ccRecipients: { emailAddress: GraphEmailAddress }[]
+  bccRecipients?: { emailAddress: GraphEmailAddress }[]
   // Microsoft Graph returns this lowercase ("html"/"text"); compare case-insensitively.
   body: { contentType: string; content: string }
 }
@@ -323,6 +326,8 @@ export interface SendEmailPayload {
   /// replies/forwards — the backend's createReply/createForward draft keeps it.
   body: string
   reply_to_message_id?: string
+  /// An existing draft being edited — sent in place, keeping its attachments.
+  draft_id?: string
   action?: 'reply' | 'replyAll' | 'forward'
   attachments?: AttachmentUpload[]
   /// Original AI draft, when the send started from "AI reply" — the backend

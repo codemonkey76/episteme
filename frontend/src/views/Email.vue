@@ -111,6 +111,7 @@ async function loadFolders() {
 async function selectFolder(folder: api.MailFolder) {
   selectedFolder.value = folder
   selectedMessage.value = null
+  editingDraftId.value = null
   view.value = 'none'
   searchQuery.value = ''
   searchResults.value = []
@@ -221,7 +222,9 @@ function onRowClick(m: api.MessageSummary, e: MouseEvent) {
   }
   selectedIds.value = new Set([m.id])
   anchorId.value = m.id
-  selectMessage(m)
+  // Drafts open in the composer for editing, not the read-only pane.
+  if (m.isDraft) openDraft(m)
+  else selectMessage(m)
 }
 
 // Move the given messages to Deleted Items and reflect it locally (list rows,
@@ -421,6 +424,7 @@ const isHtmlBody = computed(
 
 async function selectMessage(summary: api.MessageSummary) {
   showReply.value = false
+  editingDraftId.value = null
   view.value = 'message'
   loadingMessage.value = true
   attachments.value = []
@@ -616,14 +620,50 @@ function textToHtml(text: string): string {
     .join('')
 }
 
+// The id of the draft currently being edited in the composer (null = a fresh
+// message). Sent in place on send, so its existing attachments survive.
+const editingDraftId = ref<string | null>(null)
+
 function openCompose() {
   selectedMessage.value = null
   showReply.value = false
+  editingDraftId.value = null
   view.value = 'compose'
   composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: sigBlock() }
   pendingFiles.value = []
   showCcBcc.value = false
   sendMsg.value = ''
+}
+
+/// Open an existing draft in the composer for editing (rather than the read
+/// pane). Prefills recipients/subject/body from the draft; sending overwrites
+/// and sends that same Graph message.
+async function openDraft(summary: api.MessageSummary) {
+  showReply.value = false
+  selectedMessage.value = null
+  view.value = 'compose'
+  editingDraftId.value = summary.id
+  sendMsg.value = ''
+  pendingFiles.value = []
+  // Show something immediately; fill in once the body loads.
+  composeForm.value = { to: '', cc: '', bcc: '', subject: summary.subject ?? '', body: '' }
+  const addrs = (list?: { emailAddress: api.GraphEmailAddress }[]) =>
+    (list ?? []).map(r => r.emailAddress.address).filter(Boolean).join(', ')
+  try {
+    const d = await api.email.getMessage(summary.id, mbox.value)
+    // A racing click on another row wins.
+    if (editingDraftId.value !== summary.id) return
+    composeForm.value = {
+      to: addrs(d.toRecipients),
+      cc: addrs(d.ccRecipients),
+      bcc: addrs(d.bccRecipients),
+      subject: d.subject ?? '',
+      body: d.body?.content ?? '',
+    }
+    showCcBcc.value = !!(composeForm.value.cc || composeForm.value.bcc)
+  } catch (e: unknown) {
+    sendMsg.value = e instanceof Error ? e.message : 'Failed to load draft'
+  }
 }
 
 type ReplyMode = 'reply' | 'replyAll' | 'forward'
@@ -1041,6 +1081,8 @@ async function sendEmail() {
       payload.reply_context = latestMessageText(selectedMessage.value).slice(0, 2000)
     } else {
       payload.subject = composeForm.value.subject
+      // Editing an existing draft: send that same message in place.
+      if (editingDraftId.value) payload.draft_id = editingDraftId.value
     }
     // Provider powers post-send analysis (style learning + commitment
     // detection) — sent with every send, AI-drafted or not.
@@ -1077,6 +1119,13 @@ async function sendEmail() {
         await advanceTo(next)
       }
     }
+    // A sent draft is gone from the Drafts folder — drop it and refresh.
+    if (editingDraftId.value) {
+      const sentId = editingDraftId.value
+      messages.value = messages.value.filter(m => m.id !== sentId)
+      if (selectedFolder.value) loadMessages(selectedFolder.value.id)
+    }
+    editingDraftId.value = null
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
     pendingFiles.value = []
     showCcBcc.value = false
@@ -1429,7 +1478,7 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
 
       <!-- Compose new -->
       <div v-else-if="view === 'compose'" class="flex-1 flex flex-col py-4 px-5">
-        <div class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em] mb-3">New Message</div>
+        <div class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em] mb-3">{{ editingDraftId ? 'Edit Draft' : 'New Message' }}</div>
         <form class="flex flex-col gap-2" @submit.prevent="sendEmail">
           <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
             <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
