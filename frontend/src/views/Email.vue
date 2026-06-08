@@ -335,17 +335,24 @@ function hexToRgba(hex: string, a: number): string {
 const darkEmailStyle = computed(() => {
   const accent = THEMES.find(t => t.key === themeKey.value)?.swatch.accent ?? '#4a8aff'
   return (
-    '<style>html{background:#fff;filter:invert(0.87) hue-rotate(180deg);}' +
+    // contrast(1.18) pushes the email's own low-contrast greys (signatures,
+    // disclaimers — light grey on white, which inverts to dim grey on dark)
+    // apart enough to read, without blowing out body text or images (which are
+    // inverted back below).
+    '<style>html{background:#fff;filter:invert(0.87) hue-rotate(180deg) contrast(1.18);}' +
     'img,video,picture,svg,iframe,[style*="background-image"]{filter:invert(1) hue-rotate(180deg);}' +
     `#__tint{position:fixed;inset:0;pointer-events:none;mix-blend-mode:overlay;background:${hexToRgba(accent, 0.1)};}</style>` +
     '<div id="__tint"></div>'
   )
 })
 
-// Attachments for the open message. Inline ones are embedded in the HTML body,
-// so only non-inline attachments are surfaced as chips.
+// Attachments for the open message. Ones referenced inline by the body (by
+// cid) are embedded, so only the rest are surfaced as chips — keyed off the
+// cid resolution below rather than Graph's unreliable `isInline` flag.
 const attachments = ref<api.Attachment[]>([])
-const visibleAttachments = computed(() => attachments.value.filter(a => !a.isInline))
+const visibleAttachments = computed(() =>
+  attachments.value.filter(a => !a.isInline && !cidResolution.value.inlineIds.has(a.id)),
+)
 
 function openAttachment(att: api.Attachment) {
   const m = selectedMessage.value
@@ -378,14 +385,18 @@ function formatSize(bytes: number): string {
 // cid references with unused inline attachments in document order (Graph can't
 // give us contentId: selecting it 400s on the base attachment collection).
 // Updates reactively once the attachment metadata loads.
-const renderedBody = computed(() => {
+// Resolve the body's `cid:` references to attachments once, shared by the
+// rendered body and the chip list. Returns the cid→proxy-URL map and the ids
+// of attachments consumed inline (so they don't double-show as chips).
+const cidResolution = computed(() => {
   const m = selectedMessage.value
-  if (!m) return ''
-  const html = m.body.content
-  if (!isHtmlBody.value || attachments.value.length === 0) return html
-
+  const urlMap = new Map<string, string>()
+  const inlineIds = new Set<string>()
+  if (!m || !isHtmlBody.value || attachments.value.length === 0) {
+    return { urlMap, inlineIds }
+  }
   const cidRe = /cid:([^"'\s)>]+)/gi
-  const cids = [...new Set([...html.matchAll(cidRe)].map(x => x[1]))]
+  const cids = [...new Set([...m.body.content.matchAll(cidRe)].map(x => x[1]))]
   const used = new Set<string>()
   const assigned = new Map<string, api.Attachment>()
 
@@ -402,20 +413,35 @@ const renderedBody = computed(() => {
       assigned.set(cid, att)
     }
   }
-  // Pass 2: remaining cid refs pair with unclaimed inline attachments in order.
+  // Pass 2: remaining cid refs pair with an unclaimed attachment in document
+  // order — preferring ones flagged inline, then any image (Graph routinely
+  // reports a signature's inline images as isInline:false, so don't require it).
   for (const cid of cids) {
     if (assigned.has(cid)) continue
-    const att = attachments.value.find(a => a.isInline && !used.has(a.id))
+    const att =
+      attachments.value.find(a => a.isInline && !used.has(a.id)) ??
+      attachments.value.find(a => !used.has(a.id) && a.contentType?.startsWith('image/'))
     if (att) {
       used.add(att.id)
       assigned.set(cid, att)
     }
   }
 
-  return html.replace(cidRe, (full, cid: string) => {
-    const att = assigned.get(cid)
-    return att ? api.email.attachmentUrl(m.id, att.id, mbox.value) : full
-  })
+  for (const [cid, att] of assigned) {
+    urlMap.set(cid, api.email.attachmentUrl(m.id, att.id, mbox.value))
+    inlineIds.add(att.id)
+  }
+  return { urlMap, inlineIds }
+})
+
+const renderedBody = computed(() => {
+  const m = selectedMessage.value
+  if (!m) return ''
+  const html = m.body.content
+  if (!isHtmlBody.value) return html
+  const { urlMap } = cidResolution.value
+  if (urlMap.size === 0) return html
+  return html.replace(/cid:([^"'\s)>]+)/gi, (full, cid: string) => urlMap.get(cid) ?? full)
 })
 
 // Final iframe document: the (cid-rewritten) email body, prefixed with the
