@@ -7,6 +7,7 @@ import { useTasksStore } from '../stores/tasks'
 import { useCalendarStore } from '../stores/calendar'
 import AttachmentViewer from '../components/AttachmentViewer.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
+import { sanitizeDraftForDarkEditor } from '../lib/draftColors'
 import { currentTheme, THEMES } from '../theme'
 import { renderMarkdown } from '../lib/markdown'
 
@@ -658,7 +659,11 @@ async function openDraft(summary: api.MessageSummary) {
       cc: addrs(d.ccRecipients),
       bcc: addrs(d.bccRecipients),
       subject: d.subject ?? '',
-      body: d.body?.content ?? '',
+      // Quoted history is authored for a white background (color:#000 …); strip
+      // the clashing inline colours so it reads in the dark editor. Removing
+      // (not recolouring) keeps the sent mail correct — each client falls back
+      // to its own default, exactly as it renders today.
+      body: sanitizeDraftForDarkEditor(d.body?.content ?? ''),
     }
     showCcBcc.value = !!(composeForm.value.cc || composeForm.value.bcc)
   } catch (e: unknown) {
