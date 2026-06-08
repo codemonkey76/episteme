@@ -130,6 +130,10 @@ const PAGE = 30
 
 const messagesError = ref('')
 
+// Ids of drafts just sent: Graph removes them from Drafts with a lag, so a
+// reload can momentarily re-list them. Filter them out until they're gone.
+const sentDraftIds = new Set<string>()
+
 async function loadMessages(folderId: string, skip = 0) {
   loadingMessages.value = true
   messagesError.value = ''
@@ -137,10 +141,13 @@ async function loadMessages(folderId: string, skip = 0) {
   logs.debug('Email', `Loading messages for "${folder?.displayName ?? folderId}" (skip=${skip})`)
   try {
     const res = await api.email.listMessages(folderId, skip, PAGE, mbox.value)
+    const fresh = sentDraftIds.size
+      ? res.value.filter(m => !sentDraftIds.has(m.id))
+      : res.value
     if (skip === 0) {
-      messages.value = res.value
+      messages.value = fresh
     } else {
-      messages.value.push(...res.value)
+      messages.value.push(...fresh)
     }
     messagesSkip.value = skip + res.value.length
     messagesHasMore.value = res.value.length === PAGE
@@ -1124,11 +1131,15 @@ async function sendEmail() {
         await advanceTo(next)
       }
     }
-    // A sent draft is gone from the Drafts folder — drop it and refresh.
+    // A sent draft leaves Drafts — drop it now and keep it filtered out of
+    // reloads until Graph catches up (it removes it with a lag).
     if (editingDraftId.value) {
       const sentId = editingDraftId.value
+      sentDraftIds.add(sentId)
       messages.value = messages.value.filter(m => m.id !== sentId)
       if (selectedFolder.value) loadMessages(selectedFolder.value.id)
+      // Stop filtering once Graph has surely removed it.
+      setTimeout(() => sentDraftIds.delete(sentId), 60_000)
     }
     editingDraftId.value = null
     composeForm.value = { to: '', cc: '', bcc: '', subject: '', body: '' }
@@ -1482,9 +1493,19 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
       </div>
 
       <!-- Compose new -->
-      <div v-else-if="view === 'compose'" class="flex-1 flex flex-col py-4 px-5">
-        <div class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em] mb-3">{{ editingDraftId ? 'Edit Draft' : 'New Message' }}</div>
-        <form class="flex flex-col gap-2" @submit.prevent="sendEmail">
+      <div v-else-if="view === 'compose'" class="flex-1 flex flex-col py-4 px-5 min-h-0">
+        <form class="flex flex-col gap-2 flex-1 min-h-0" @submit.prevent="sendEmail">
+          <!-- Actions at the top so Send/Attach/Cancel are always in reach. -->
+          <div class="flex items-center gap-2 pb-2 border-b border-[var(--c-1e1e1e)]">
+            <span class="text-[0.8125rem] font-semibold text-[var(--c-808080)] uppercase tracking-[0.06em] mr-1">{{ editingDraftId ? 'Edit Draft' : 'New Message' }}</span>
+            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending">{{ sending ? 'Sending…' : 'Send' }}</button>
+            <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              Attach
+            </button>
+            <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
+            <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)] ml-auto truncate">{{ sendMsg }}</span>
+          </div>
           <label class="flex items-center gap-[0.625rem] border-b border-[var(--c-1e1e1e)] pb-[0.4rem]">
             <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">To</span>
             <input v-model="composeForm.to" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="recipient@example.com" required />
@@ -1504,7 +1525,6 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
             <span class="text-[0.775rem] text-[var(--c-585858)] min-w-[3.5rem] flex-shrink-0">Subject</span>
             <input v-model="composeForm.subject" class="flex-1 bg-transparent border-none text-[var(--c-d0d0d0)] text-[0.8125rem] font-[inherit] outline-none placeholder:text-[var(--c-404040)]" placeholder="Subject" />
           </label>
-          <RichTextEditor v-model="composeForm.body" class="flex-1" min-height="180px" placeholder="Write your message…" @files="addFiles" />
           <div v-if="pendingFiles.length" class="flex flex-wrap gap-1.5">
             <span v-for="(f, i) in pendingFiles" :key="`${f.name}-${i}`" class="inline-flex items-center gap-1.5 bg-surface border border-raised rounded px-2 py-[0.2rem] text-[0.75rem] text-[var(--c-a0a0a0)]">
               {{ f.name }}
@@ -1512,15 +1532,7 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
               <button type="button" class="bg-transparent border-none text-[var(--c-585858)] cursor-pointer p-0 leading-none hover:text-[var(--c-c05050)]" title="Remove attachment" @click="pendingFiles.splice(i, 1)">×</button>
             </span>
           </div>
-          <div class="flex items-center gap-2 pt-1">
-            <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md py-[0.375rem] px-[0.875rem] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-[0.12s] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="sending">{{ sending ? 'Sending…' : 'Send' }}</button>
-            <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-              Attach
-            </button>
-            <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
-            <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>
-          </div>
+          <RichTextEditor v-model="composeForm.body" class="flex-1 min-h-0" min-height="180px" placeholder="Write your message…" @files="addFiles" />
           <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePick" />
         </form>
       </div>
