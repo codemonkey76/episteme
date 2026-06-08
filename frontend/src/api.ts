@@ -307,6 +307,17 @@ export interface SearchResult {
   next_link: string | null
 }
 
+/// AI-extracted helpdesk ticket, reviewed/edited before creation. The
+/// client/requester ids come from the preview's sender match.
+export interface TicketDraft {
+  client_id: number
+  requester_id: number
+  client: string
+  subject: string
+  description: string
+  priority: 'low' | 'medium' | 'high' | 'critical'
+}
+
 export interface AttachmentUpload {
   name: string
   content_type: string
@@ -384,11 +395,18 @@ export const email = {
       method: 'POST',
       body: JSON.stringify({ ids, mailbox }),
     }),
-  // Create a helpdesk ticket from the email (sender matched to a helpdesk contact).
-  createTicket: (messageId: string, payload: { provider: string; mailbox?: string }) =>
-    json<{ reference: string; id: number; subject: string; priority: string; client: string }>(
-      `/email/messages/${encodeURIComponent(messageId)}/ticket`,
+  // Step 1: match the sender to a helpdesk contact + AI-extract the ticket
+  // fields, for the user to review/edit before creating.
+  ticketPreview: (messageId: string, payload: { provider: string; mailbox?: string }) =>
+    json<TicketDraft>(
+      `/email/messages/${encodeURIComponent(messageId)}/ticket/preview`,
       { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  // Step 2: create the (possibly edited) ticket.
+  createTicket: (draft: TicketDraft) =>
+    json<{ reference: string; id: number; subject: string; priority: string; client: string }>(
+      '/email/tickets',
+      { method: 'POST', body: JSON.stringify(draft) },
     ),
   search: (q: string, nextLink?: string | null, mailbox?: string) => {
     const params = new URLSearchParams({ q })

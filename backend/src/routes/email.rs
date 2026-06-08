@@ -1177,11 +1177,10 @@ pub async fn summarize(
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }
 
-// POST /api/email/messages/:id/ticket — create a helpdesk ticket from the open
-// email. The sender's address is matched against helpdesk client contacts to
-// pick client/requester; the AI extracts subject/description/priority from the
-// email body. Explicitly user-triggered (the Ticket button), so no approval
-// round-trip.
+// POST /api/email/messages/:id/ticket/preview — match the sender to a helpdesk
+// contact and have the AI extract subject/description/priority, but DON'T
+// create the ticket: the result is returned for the user to review and edit
+// first (ticket_create does the actual creation).
 #[derive(Deserialize)]
 pub struct TicketFromEmailBody {
     provider: String,
@@ -1189,7 +1188,7 @@ pub struct TicketFromEmailBody {
     mailbox: Option<String>,
 }
 
-pub async fn ticket_from_email(
+pub async fn ticket_preview(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(message_id): Path<String>,
@@ -1300,18 +1299,59 @@ pub async fn ticket_from_email(
         _ => "medium",
     };
 
-    // Create the ticket.
+    // Return the draft for review — creation happens in ticket_create once the
+    // user has (optionally) edited it.
+    Ok(Json(serde_json::json!({
+        "client_id": client_id,
+        "requester_id": requester_id,
+        "client": client_name,
+        "subject": t_subject,
+        "description": t_description,
+        "priority": t_priority,
+    })))
+}
+
+// POST /api/email/tickets — create a helpdesk ticket from the reviewed draft.
+// The client/requester ids come from the preview; the helpdesk API validates
+// they belong to the connected instance, so a tampered id can't reach another.
+#[derive(Deserialize)]
+pub struct CreateTicketBody {
+    client_id: i64,
+    requester_id: i64,
+    subject: String,
+    description: String,
+    priority: String,
+    /// Carried through from the preview for the success message/log only.
+    #[serde(default)]
+    client: Option<String>,
+}
+
+pub async fn ticket_create(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<CreateTicketBody>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
+    let subject = body.subject.trim();
+    if subject.is_empty() {
+        return Err(AppError::BadRequest("ticket subject is required".into()));
+    }
+    let priority = match body.priority.as_str() {
+        p @ ("low" | "medium" | "high" | "critical") => p,
+        _ => "medium",
+    };
+
     let created = crate::integrations::helpdesk::request(
         &state,
         user_id,
         reqwest::Method::POST,
         "/tickets",
         Some(&serde_json::json!({
-            "client_id": client_id,
-            "user_id": requester_id,
-            "subject": t_subject,
-            "description": t_description,
-            "priority": t_priority,
+            "client_id": body.client_id,
+            "user_id": body.requester_id,
+            "subject": subject,
+            "description": body.description,
+            "priority": priority,
             "source": "api",
         })),
     )
@@ -1319,14 +1359,15 @@ pub async fn ticket_from_email(
     .map_err(AppError::Internal)?;
 
     let reference = created["data"]["reference"].as_str().unwrap_or("?").to_string();
+    let client_name = body.client.as_deref().unwrap_or("?");
     state
-        .log("helpdesk", "info", format!("Ticket {reference} created from email: {t_subject} ({client_name})"))
+        .log("helpdesk", "info", format!("Ticket {reference} created from email: {subject} ({client_name})"))
         .await;
     Ok(Json(serde_json::json!({
         "reference": reference,
         "id": created["data"]["id"],
-        "subject": t_subject,
-        "priority": t_priority,
+        "subject": subject,
+        "priority": priority,
         "client": client_name,
     })))
 }

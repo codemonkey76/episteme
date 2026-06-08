@@ -972,23 +972,50 @@ async function markDone() {
 }
 
 // ── Create helpdesk ticket from email ───────────────────────────────────────────
-// Matches the sender to a helpdesk contact and lets the AI write up the
-// request as a ticket. Explicitly user-triggered, so it runs immediately.
-const ticketState = ref<'idle' | 'creating' | 'done'>('idle')
+// Two steps: the AI extracts subject/description/priority and matches the
+// sender to a helpdesk contact (preview), then the user reviews/edits before
+// the ticket is actually created.
+const ticketState = ref<'idle' | 'previewing' | 'review' | 'creating' | 'done'>('idle')
 const ticketMsg = ref('')
+const ticketDraft = ref<api.TicketDraft | null>(null)
 
-async function createTicket() {
+// Step 1: extract + match, then open the review form.
+async function previewTicket() {
   const m = selectedMessage.value
-  if (!m || ticketState.value === 'creating') return
+  if (!m || ticketState.value === 'previewing' || ticketState.value === 'creating') return
   if (!aiProvider.value) {
     ticketMsg.value = 'No AI provider configured — add one in Settings.'
+    return
+  }
+  ticketState.value = 'previewing'
+  ticketMsg.value = ''
+  try {
+    ticketDraft.value = await api.email.ticketPreview(m.id, {
+      provider: aiProvider.value,
+      mailbox: mbox.value,
+    })
+    ticketState.value = 'review'
+  } catch (e: unknown) {
+    ticketState.value = 'idle'
+    const msg = e instanceof Error ? e.message : 'Ticket preview failed'
+    ticketMsg.value = msg
+    logs.error('Email', `Ticket preview failed: ${msg}`)
+  }
+}
+
+// Step 2: create the reviewed (possibly edited) ticket.
+async function submitTicket() {
+  if (!ticketDraft.value || ticketState.value === 'creating') return
+  if (!ticketDraft.value.subject.trim()) {
+    ticketMsg.value = 'Subject is required.'
     return
   }
   ticketState.value = 'creating'
   ticketMsg.value = ''
   try {
-    const res = await api.email.createTicket(m.id, { provider: aiProvider.value, mailbox: mbox.value })
+    const res = await api.email.createTicket(ticketDraft.value)
     ticketState.value = 'done'
+    ticketDraft.value = null
     ticketMsg.value = `${res.reference} created for ${res.client} (${res.priority})`
     logs.info('Email', `Helpdesk ticket ${res.reference}: ${res.subject}`)
     setTimeout(() => {
@@ -996,15 +1023,22 @@ async function createTicket() {
       ticketMsg.value = ''
     }, 6000)
   } catch (e: unknown) {
-    ticketState.value = 'idle'
+    ticketState.value = 'review'
     const msg = e instanceof Error ? e.message : 'Ticket creation failed'
     ticketMsg.value = msg
     logs.error('Email', `Ticket creation failed: ${msg}`)
   }
 }
 
+function cancelTicket() {
+  ticketState.value = 'idle'
+  ticketDraft.value = null
+  ticketMsg.value = ''
+}
+
 watch(selectedMessage, () => {
   ticketState.value = 'idle'
+  ticketDraft.value = null
   ticketMsg.value = ''
 })
 
@@ -1608,14 +1642,14 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
             </button>
             <button
               class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-2a2418)] text-[var(--c-e0b060)] border border-[var(--c-3a3010)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-3a3020)] disabled:opacity-50"
-              :disabled="ticketState === 'creating'"
-              title="Create a helpdesk ticket from this email — the sender is matched to a helpdesk contact and the AI writes up the request"
-              @click="createTicket"
+              :disabled="ticketState === 'previewing' || ticketState === 'creating'"
+              title="Draft a helpdesk ticket from this email — you can review and edit it before it's created"
+              @click="previewTicket"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="13" y1="5" x2="13" y2="7"/><line x1="13" y1="11" x2="13" y2="13"/><line x1="13" y1="17" x2="13" y2="19"/>
               </svg>
-              {{ ticketState === 'creating' ? 'Creating…' : ticketState === 'done' ? 'Created ✓' : 'Ticket' }}
+              {{ ticketState === 'previewing' ? 'Drafting…' : ticketState === 'done' ? 'Created ✓' : 'Ticket' }}
             </button>
             <span v-if="ticketMsg" class="text-[0.72rem]" :class="ticketState === 'done' ? 'text-[var(--c-6ecf8e)]' : 'text-danger'">{{ ticketMsg }}</span>
             <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254a35)] disabled:opacity-50" :disabled="markingDone" title="No response needed — complete the flag and file to Processed" @click="markDone">
@@ -1688,6 +1722,38 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
             <div v-if="summaryText" class="md-body text-[0.8rem] leading-[1.5] text-[var(--c-c0c0c0)]" v-html="renderMarkdown(summaryText)" />
             <p v-else-if="summaryError" class="text-[0.775rem] text-danger">{{ summaryError }}</p>
             <p v-else-if="!summarizing" class="text-[0.775rem] text-[var(--c-585858)]">No summary yet.</p>
+          </div>
+
+          <!-- Helpdesk ticket review — edit the AI-drafted ticket before it's
+               created. -->
+          <div v-if="(ticketState === 'review' || ticketState === 'creating') && ticketDraft" class="px-5 py-3 border-b border-[var(--c-3a3010)] border-l-[3px] border-l-[var(--c-e0b060)] bg-[var(--c-e0b060)]/[0.05] flex-shrink-0 flex flex-col gap-2">
+            <div class="flex items-center gap-2 text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-e0b060)]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/></svg>
+              New ticket for {{ ticketDraft.client }}
+              <button class="ml-auto text-[var(--c-585858)] hover:text-muted bg-none border-none cursor-pointer p-0 text-[0.85rem] leading-none normal-case tracking-normal" title="Cancel" @click="cancelTicket">✕</button>
+            </div>
+            <label class="flex items-center gap-2">
+              <span class="text-[0.72rem] text-[var(--c-585858)] min-w-[4.5rem]">Subject</span>
+              <input v-model="ticketDraft.subject" class="flex-1 bg-surface text-[var(--c-d0d0d0)] border border-raised rounded px-2 py-1 text-[0.8rem] font-[inherit] outline-none focus:border-[var(--c-3a6adf)]" />
+            </label>
+            <label class="flex items-start gap-2">
+              <span class="text-[0.72rem] text-[var(--c-585858)] min-w-[4.5rem] pt-1.5">Description</span>
+              <textarea v-model="ticketDraft.description" rows="5" class="flex-1 bg-surface text-[var(--c-d0d0d0)] border border-raised rounded px-2 py-1 text-[0.8rem] font-[inherit] leading-[1.5] outline-none focus:border-[var(--c-3a6adf)] resize-y" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="text-[0.72rem] text-[var(--c-585858)] min-w-[4.5rem]">Priority</span>
+              <select v-model="ticketDraft.priority" class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-[0.8rem] font-[inherit] cursor-pointer outline-none focus:border-[var(--c-3a6adf)]">
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="critical">critical</option>
+              </select>
+            </label>
+            <div class="flex items-center gap-2 pt-0.5">
+              <button class="bg-[var(--c-2a2418)] text-[var(--c-e0b060)] border border-[var(--c-3a3010)] rounded-md py-[0.35rem] px-3 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-3a3020)] disabled:opacity-50" :disabled="ticketState === 'creating'" @click="submitTicket">{{ ticketState === 'creating' ? 'Creating…' : 'Create ticket' }}</button>
+              <button class="bg-transparent text-[var(--c-585858)] border-none py-[0.35rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] hover:text-muted" @click="cancelTicket">Cancel</button>
+              <span v-if="ticketMsg" class="text-[0.72rem] text-danger">{{ ticketMsg }}</span>
+            </div>
           </div>
 
           <!-- Reply / forward composer — above the email body so it's usable
