@@ -658,6 +658,68 @@ pub async fn delete_messages(
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
+// POST /api/email/messages/move — move the given messages into `destination`
+// (a folder id, or a well-known name like "archive"). Same $batch chunking as
+// delete; powers drag-and-drop onto a folder.
+#[derive(Deserialize)]
+pub struct MoveMessagesBody {
+    ids: Vec<String>,
+    destination: String,
+    #[serde(default)]
+    mailbox: Option<String>,
+}
+
+pub async fn move_messages(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(payload): Json<MoveMessagesBody>,
+) -> AppResult<Json<Value>> {
+    let user_id = user.id.as_str();
+    let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    if payload.ids.is_empty() || payload.ids.len() > 500 {
+        return Err(AppError::BadRequest("ids must contain 1–500 message ids".into()));
+    }
+    let dest = payload.destination.trim();
+    if dest.is_empty() {
+        return Err(AppError::BadRequest("destination folder is required".into()));
+    }
+
+    let mut moved = 0usize;
+    for chunk in payload.ids.chunks(20) {
+        let requests: Vec<Value> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                serde_json::json!({
+                    "id": (i + 1).to_string(),
+                    "method": "POST",
+                    "url": format!("/{seg}/messages/{id}/move"),
+                    "headers": { "Content-Type": "application/json" },
+                    "body": { "destinationId": dest },
+                })
+            })
+            .collect();
+        let res = graph_post(
+            &state,
+            user_id,
+            &format!("{GRAPH}/$batch"),
+            &serde_json::json!({ "requests": requests }),
+        )
+        .await?;
+        moved += res["responses"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .filter(|r| r["status"].as_u64().map(|s| (200..300).contains(&s)).unwrap_or(false))
+                    .count()
+            })
+            .unwrap_or(chunk.len());
+    }
+
+    state.log("email", "info", format!("Moved {moved} message(s)")).await;
+    Ok(Json(serde_json::json!({ "moved": moved })))
+}
+
 // POST /api/email/send
 #[derive(Deserialize)]
 pub struct SendBody {

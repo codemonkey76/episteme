@@ -395,6 +395,12 @@ export const email = {
       method: 'POST',
       body: JSON.stringify({ ids, mailbox }),
     }),
+  // Move messages into a folder (by id, or a well-known name) — drag-and-drop.
+  moveMessages: (ids: string[], destination: string, mailbox?: string) =>
+    json<{ moved: number }>('/email/messages/move', {
+      method: 'POST',
+      body: JSON.stringify({ ids, destination, mailbox }),
+    }),
   // Step 1: match the sender to a helpdesk contact + AI-extract the ticket
   // fields, for the user to review/edit before creating.
   ticketPreview: (messageId: string, payload: { provider: string; mailbox?: string }) =>

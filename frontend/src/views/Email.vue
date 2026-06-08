@@ -270,6 +270,61 @@ function deleteSelected() {
   return deleteIds([...selectedIds.value])
 }
 
+// ── Drag a message (or the selection) onto a folder to move it ───────────────
+const draggingIds = ref<string[]>([])
+const dropFolderId = ref<string | null>(null)
+
+function onMessageDragStart(m: api.MessageSummary, e: DragEvent) {
+  // Dragging a row inside the current selection moves the whole selection;
+  // dragging an unselected row moves just it (and selects it).
+  const ids = selectedIds.value.has(m.id) ? [...selectedIds.value] : [m.id]
+  if (!selectedIds.value.has(m.id)) {
+    selectedIds.value = new Set([m.id])
+    anchorId.value = m.id
+  }
+  draggingIds.value = ids
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', ids.join(','))
+  }
+}
+
+function onFolderDrop(f: api.MailFolder) {
+  const ids = draggingIds.value
+  dropFolderId.value = null
+  draggingIds.value = []
+  // No-op dropping onto the folder the mail is already in.
+  if (!ids.length || f.id === selectedFolder.value?.id) return
+  moveIds(ids, f)
+}
+
+// Move messages into a folder and reflect it locally (rows, counts, open pane).
+async function moveIds(ids: string[], dest: api.MailFolder) {
+  if (!ids.length) return
+  try {
+    const res = await api.email.moveMessages(ids, dest.id, mbox.value)
+    logs.info('Email', `Moved ${res.moved} message(s) to ${dest.displayName}`)
+    const gone = new Set(ids)
+    const from = folders.value.find(f => f.id === selectedFolder.value?.id)
+    if (from) {
+      const unreadGone = messages.value.filter(m => gone.has(m.id) && !m.isRead).length
+      from.unreadItemCount = Math.max(0, from.unreadItemCount - unreadGone)
+      from.totalItemCount = Math.max(0, from.totalItemCount - ids.length)
+    }
+    messages.value = messages.value.filter(m => !gone.has(m.id))
+    searchResults.value = searchResults.value.filter(m => !gone.has(m.id))
+    if (selectedMessage.value && gone.has(selectedMessage.value.id)) {
+      selectedMessage.value = null
+      view.value = 'none'
+    }
+    clearSelection()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Move failed'
+    messagesError.value = msg
+    logs.error('Email', `Move failed: ${msg}`)
+  }
+}
+
 // Delete the open message from the reading pane and advance to the next one.
 async function deleteOpenMessage() {
   const m = selectedMessage.value
@@ -1433,8 +1488,11 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
         <button
           v-for="f in folders"
           :key="f.id"
-          :class="['flex items-center justify-between py-[0.4rem] px-[0.625rem] rounded-[0.3rem] bg-transparent border-none text-[0.8125rem] cursor-pointer text-left font-[inherit] transition-colors duration-100 w-full', selectedFolder?.id === f.id ? 'bg-[var(--c-1c2a3a)] text-[var(--c-7ab0ff)]' : 'text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-c0c0c0)]']"
+          :class="['flex items-center justify-between py-[0.4rem] px-[0.625rem] rounded-[0.3rem] border text-[0.8125rem] cursor-pointer text-left font-[inherit] transition-colors duration-100 w-full', dropFolderId === f.id ? 'bg-[var(--c-1e3a2a)] border-[var(--c-2a5a3a)] text-[var(--c-8edfae)]' : selectedFolder?.id === f.id ? 'bg-[var(--c-1c2a3a)] border-transparent text-[var(--c-7ab0ff)]' : 'bg-transparent border-transparent text-[var(--c-808080)] hover:bg-[var(--c-1e1e1e)] hover:text-[var(--c-c0c0c0)]']"
           @click="selectFolder(f)"
+          @dragover.prevent="draggingIds.length && f.id !== selectedFolder?.id ? (dropFolderId = f.id) : null"
+          @dragleave="dropFolderId === f.id ? (dropFolderId = null) : null"
+          @drop.prevent="onFolderDrop(f)"
         >
           <span class="overflow-hidden text-ellipsis whitespace-nowrap">{{ f.displayName }}</span>
           <span v-if="f.unreadItemCount > 0" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] text-[0.65rem] font-semibold py-[0.1rem] px-[0.35rem] rounded-full flex-shrink-0 min-w-[1.2rem] text-center">{{ f.unreadItemCount }}</span>
@@ -1506,8 +1564,11 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
         <button
           v-for="m in displayedMessages"
           :key="m.id"
+          draggable="true"
           :class="['py-[0.625rem] px-[0.875rem] border-b border-[var(--c-181818)] bg-transparent border-l-[3px] cursor-pointer text-left font-[inherit] w-full transition-colors duration-100 flex flex-col gap-[0.2rem] select-none', selectedMessage?.id === m.id ? 'bg-[var(--c-141e2a)] border-l-[var(--c-3a6adf)]' : selectedIds.has(m.id) ? 'bg-[var(--c-141e2a)] border-l-[var(--c-2a4a8a)]' : 'border-l-transparent hover:bg-[var(--c-161616)]']"
           @click="onRowClick(m, $event)"
+          @dragstart="onMessageDragStart(m, $event)"
+          @dragend="draggingIds = []; dropFolderId = null"
         >
           <div class="flex justify-between items-baseline gap-2">
             <span :class="['text-[0.8rem] overflow-hidden text-ellipsis whitespace-nowrap', !m.isRead ? 'text-fg font-semibold' : 'text-[var(--c-a0a0a0)]']">{{ senderLabel(m) }}</span>
