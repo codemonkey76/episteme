@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub mod calendar;
 pub mod documents;
 pub mod email;
+pub mod github;
 pub mod helpdesk;
 pub mod history;
 pub mod jobs;
@@ -35,6 +36,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(jobs::schemas());
     all.extend(research::schemas());
     all.extend(helpdesk::schemas());
+    all.extend(github::schemas());
     all
 }
 
@@ -50,6 +52,7 @@ pub fn is_native(name: &str) -> bool {
         || jobs::handles(name)
         || research::handles(name)
         || helpdesk::handles(name)
+        || github::handles(name)
 }
 
 /// Native tools grouped by integration, for the settings Tools page.
@@ -66,6 +69,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("jobs", jobs::schemas()),
         ("research", research::schemas()),
         ("helpdesk", helpdesk::schemas()),
+        ("github", github::schemas()),
     ]
 }
 
@@ -123,6 +127,9 @@ pub async fn execute(
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;
+    }
+    if github::handles(name) {
+        return github::execute(state, user_id, name, args).await;
     }
     Err(anyhow!("unknown native tool '{name}'"))
 }

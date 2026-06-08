@@ -907,12 +907,28 @@ export const integrations = {
     disconnect: () =>
       fetch(BASE + '/integrations/helpdesk/config', { method: 'DELETE' }),
   },
+  github: {
+    getConfig: () => json<GithubStatus>('/integrations/github/config'),
+    // Verifies the token (GET /user); only the token is stored.
+    connect: (token: string, default_owner: string) =>
+      json<GithubStatus>('/integrations/github/config', {
+        method: 'POST',
+        body: JSON.stringify({ token, default_owner }),
+      }),
+    disconnect: () => fetch(BASE + '/integrations/github/config', { method: 'DELETE' }),
+  },
 }
 
 export interface HelpdeskStatus {
   connected: boolean
   base_url: string
   email: string
+}
+
+export interface GithubStatus {
+  connected: boolean
+  login: string
+  default_owner: string
 }
 
 // Auth

@@ -82,6 +82,7 @@ onMounted(async () => {
   await loadEmailConfig()
   await loadCategorizer()
   await loadHelpdeskConfig()
+  await loadGithubConfig()
   if (emailConfig.value.connected) await loadSignatures()
 })
 
@@ -512,6 +513,43 @@ async function disconnectHelpdesk() {
   hdConfig.value = { connected: false, base_url: '', email: '' }
   hdForm.value.password = ''
   hdMsg.value = ''
+}
+
+// ── GitHub integration ──────────────────────────────────────────────────────────
+const ghConfig = ref<api.GithubStatus>({ connected: false, login: '', default_owner: '' })
+const ghForm = ref({ token: '', default_owner: '' })
+const ghMsg = ref('')
+const ghSaving = ref(false)
+
+async function loadGithubConfig() {
+  try {
+    ghConfig.value = await api.integrations.github.getConfig()
+    if (ghConfig.value.connected) ghForm.value.default_owner = ghConfig.value.default_owner
+  } catch { /* not connected */ }
+}
+
+async function connectGithub() {
+  ghSaving.value = true
+  ghMsg.value = ''
+  try {
+    ghConfig.value = await api.integrations.github.connect(
+      ghForm.value.token.trim(),
+      ghForm.value.default_owner.trim(),
+    )
+    ghForm.value.token = ''
+    ghMsg.value = 'Connected.'
+  } catch (e: unknown) {
+    ghMsg.value = e instanceof Error ? e.message : 'Connection failed.'
+  } finally {
+    ghSaving.value = false
+  }
+}
+
+async function disconnectGithub() {
+  await api.integrations.github.disconnect()
+  ghConfig.value = { connected: false, login: '', default_owner: '' }
+  ghForm.value.token = ''
+  ghMsg.value = ''
 }
 
 // ── Shared mailboxes ────────────────────────────────────────────────────────────
@@ -1511,6 +1549,51 @@ async function logout() {
               </button>
               <button v-if="hdConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectHelpdesk">Disconnect</button>
               <span v-if="hdMsg" class="text-[0.775rem]" :class="hdMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ hdMsg }}</span>
+            </div>
+          </form>
+        </section>
+
+        <!-- GitHub card -->
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('github', !ghConfig.connected)">
+            <div class="flex items-center gap-2.5">
+              <svg class="text-[var(--c-c0c0c0)]" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.11-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/>
+              </svg>
+              <div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">GitHub</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)]">Look at commits, files, and PRs from chat — read-only</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div v-if="ghConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]">
+                Connected — {{ ghConfig.login }}
+              </div>
+              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
+                Not connected
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('github', !ghConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+          </div>
+
+          <form v-if="cardOpen('github', !ghConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectGithub">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Personal access token
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="ghForm.token" type="password" autocomplete="off" :placeholder="ghConfig.connected ? 'Enter to reconnect' : 'github_pat_… or ghp_…'" required />
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Default owner <span class="text-[var(--c-585858)]">(optional)</span>
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="ghForm.default_owner" placeholder="your-org-or-username" />
+            </label>
+            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
+              Use a fine-grained token with read-only <strong>Contents</strong> access to the repos you want the assistant to see — only the token is stored. With a default owner set, you can refer to a repo by its bare name. The assistant can read commits, files, and PRs; it never writes.
+            </p>
+            <div class="flex items-center gap-2">
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="ghSaving">
+                {{ ghSaving ? 'Connecting…' : ghConfig.connected ? 'Reconnect' : 'Connect' }}
+              </button>
+              <button v-if="ghConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectGithub">Disconnect</button>
+              <span v-if="ghMsg" class="text-[0.775rem]" :class="ghMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ ghMsg }}</span>
             </div>
           </form>
         </section>

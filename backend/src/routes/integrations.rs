@@ -429,3 +429,73 @@ pub async fn helpdesk_disconnect(
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// ── GitHub integration ──────────────────────────────────────────────────────
+
+use crate::integrations::github;
+
+#[derive(Serialize)]
+pub struct GithubStatus {
+    connected: bool,
+    login: String,
+    default_owner: String,
+}
+
+// GET /api/integrations/github/config — connection status (token never leaves).
+pub async fn github_status(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<GithubStatus>> {
+    let cfg = db::settings::get::<github::GithubConfig>(&state.db, &github::config_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(match cfg {
+        Some(c) => GithubStatus {
+            connected: true,
+            login: c.login,
+            default_owner: c.default_owner.unwrap_or_default(),
+        },
+        None => GithubStatus { connected: false, login: String::new(), default_owner: String::new() },
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct GithubConnectBody {
+    token: String,
+    #[serde(default)]
+    default_owner: Option<String>,
+}
+
+// POST /api/integrations/github/config — verify the token (GET /user) and store
+// it with the resolved login.
+pub async fn github_connect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<GithubConnectBody>,
+) -> AppResult<Json<GithubStatus>> {
+    let token = body.token.trim().to_string();
+    if token.is_empty() {
+        return Err(AppError::BadRequest("a personal access token is required".into()));
+    }
+    let login = github::verify(&state, &token).await.map_err(AppError::Internal)?;
+    let default_owner = body
+        .default_owner
+        .map(|o| o.trim().to_string())
+        .filter(|o| !o.is_empty());
+    let cfg = github::GithubConfig { token, login: login.clone(), default_owner: default_owner.clone() };
+    db::settings::set(&state.db, &github::config_key(&user.id), &cfg)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(GithubStatus { connected: true, login, default_owner: default_owner.unwrap_or_default() }))
+}
+
+// DELETE /api/integrations/github/config — disconnect (forget the token).
+pub async fn github_disconnect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<StatusCode> {
+    db::settings::delete(&state.db, &github::config_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}

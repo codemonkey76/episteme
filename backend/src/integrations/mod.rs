@@ -1,5 +1,6 @@
 pub mod embeddings;
 pub mod fcm;
+pub mod github;
 pub mod graph;
 pub mod helpdesk;
 pub mod microsoft;
