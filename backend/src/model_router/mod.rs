@@ -2,8 +2,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart,
-    MessageContent, Tool,
+    ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ContentPart, MessageContent, Tool,
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
@@ -62,50 +61,32 @@ impl ModelRouter {
             return stream_ollama(provider, history, tools, think, tx).await;
         }
 
+        // Non-Ollama providers use genai's NON-streaming exec_chat. genai 0.1.23's
+        // streaming (exec_chat_stream) silently drops tool calls — captured_content
+        // is only ever text — and its reqwest-eventsource can't clone Anthropic
+        // requests. So the whole response (text and/or tool calls) is delivered at
+        // once: one text chunk, then a done chunk carrying the tool calls. Cloud
+        // replies therefore aren't token-streamed, but the agent's tools work.
         let client = build_client(provider);
-
-        let genai_messages = history_to_genai(history);
         let genai_tools = schemas_to_tools(tools);
-
-        let mut chat_req = ChatRequest::new(genai_messages);
+        let mut chat_req = ChatRequest::new(history_to_genai(history));
         if !genai_tools.is_empty() {
             chat_req = chat_req.with_tools(genai_tools);
         }
+        let options = ChatOptions::default().with_capture_usage(true);
+        let res = client.exec_chat(&provider.model_id, chat_req, Some(&options)).await?;
 
-        let options = ChatOptions::default().with_capture_content(true).with_capture_usage(true);
+        let usage = Some(TokenUsage {
+            prompt: res.usage.prompt_tokens.unwrap_or(0) as i64,
+            completion: res.usage.completion_tokens.unwrap_or(0) as i64,
+        });
+        let text = res.content_text_as_str().map(str::to_string);
+        let tool_calls = res.into_tool_calls();
 
-        let mut stream = client
-            .exec_chat_stream(&provider.model_id, chat_req, Some(&options))
-            .await?
-            .stream;
-
-        while let Some(event) = stream.next().await {
-            match event? {
-                ChatStreamEvent::Start | ChatStreamEvent::ReasoningChunk(_) => {}
-                ChatStreamEvent::Chunk(chunk) => {
-                    tx.send(StreamChunk {
-                        text: chunk.content,
-                        done: false,
-                        tool_calls: None,
-                        usage: None,
-                    })
-                    .await?;
-                }
-                ChatStreamEvent::End(end) => {
-                    let usage = end.captured_usage.map(|u| TokenUsage {
-                        prompt: u.prompt_tokens.unwrap_or(0) as i64,
-                        completion: u.completion_tokens.unwrap_or(0) as i64,
-                    });
-                    let tool_calls = end.captured_content.and_then(|c| match c {
-                        genai::chat::MessageContent::ToolCalls(calls) => Some(calls),
-                        _ => None,
-                    });
-                    tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage })
-                        .await?;
-                }
-            }
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            tx.send(StreamChunk { text, done: false, tool_calls: None, usage: None }).await?;
         }
-
+        tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage }).await?;
         Ok(())
     }
 
