@@ -133,6 +133,7 @@ async fn handle_socket(
 
     session.kill();
     state.terminal_sessions.lock().await.remove(&session_id);
+    state.terminal_agent_history.lock().await.remove(&session_id);
     send_task.abort();
 }
 
@@ -227,9 +228,10 @@ pub async fn agent(
     {
         let state = Arc::clone(&state);
         let user_id = user.id.clone();
+        let session_id = body.session_id.clone();
         let message = body.message.clone();
         tokio::spawn(async move {
-            run_agent(state, user_id, provider, session, message, tx).await;
+            run_agent(state, user_id, provider, session, session_id, message, tx).await;
         });
     }
 
@@ -291,6 +293,7 @@ async fn run_agent(
     user_id: String,
     provider: ProviderConfig,
     session: Arc<TermSession>,
+    session_id: String,
     message: String,
     ev: mpsc::Sender<AgentEvent>,
 ) {
@@ -301,10 +304,28 @@ async fn run_agent(
     let system = crate::prompts::get(&state.db, "terminal_agent")
         .await
         .replace("{shell}", shell_name);
-    let mut history = vec![
-        ChatMessage { role: "system".to_string(), content: serde_json::Value::String(system) },
-        ChatMessage { role: "user".to_string(), content: serde_json::Value::String(message) },
-    ];
+
+    // Load prior turns for this session (excludes the system message, which is
+    // always rebuilt fresh so edits to the prompt take effect immediately).
+    let prior: Vec<ChatMessage> = state
+        .terminal_agent_history
+        .lock()
+        .await
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut history: Vec<ChatMessage> = std::iter::once(ChatMessage {
+        role: "system".to_string(),
+        content: serde_json::Value::String(system),
+    })
+    .chain(prior)
+    .chain(std::iter::once(ChatMessage {
+        role: "user".to_string(),
+        content: serde_json::Value::String(message),
+    }))
+    .collect();
+
     let tools = vec![run_command_schema()];
 
     for _ in 0..MAX_STEPS {
@@ -363,6 +384,10 @@ async fn run_agent(
             }
         }
     }
+
+    // Persist all turns except the system message for the next call.
+    let to_save: Vec<ChatMessage> = history.into_iter().skip(1).collect();
+    state.terminal_agent_history.lock().await.insert(session_id, to_save);
 
     let _ = ev.send(AgentEvent::Done).await;
 }

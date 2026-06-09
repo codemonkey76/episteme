@@ -28,6 +28,12 @@ pub struct AppState {
     /// `None` denies, `Some(cmd)` approves and carries the (possibly edited)
     /// command to run in the shared shell.
     pub pending_terminal_cmds: Arc<Mutex<HashMap<String, oneshot::Sender<Option<String>>>>>,
+    /// Persistent conversation history for the Terminal AI, keyed by session id.
+    /// The system message is excluded; it is prepended fresh on each turn so
+    /// prompt changes take effect immediately. Each new user message is appended,
+    /// giving the model full context across multiple `ask()` calls.
+    pub terminal_agent_history:
+        Arc<Mutex<HashMap<String, Vec<crate::model_router::ChatMessage>>>>,
     /// Hand-off queue for background jobs: senders enqueue, the worker spawned
     /// in main runs them. A queue (rather than spawning `jobs::run` directly)
     /// breaks the async-recursion cycle when the agent's own
@@ -56,6 +62,7 @@ impl AppState {
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             terminal_sessions: Arc::new(Mutex::new(HashMap::new())),
             pending_terminal_cmds: Arc::new(Mutex::new(HashMap::new())),
+            terminal_agent_history: Arc::new(Mutex::new(HashMap::new())),
             job_tx,
         };
         (state, job_rx)
