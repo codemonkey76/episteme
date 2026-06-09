@@ -46,6 +46,7 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'subject', label: 'Subject', kind: 'text' },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
     { key: 'description', label: 'Description', kind: 'textarea' },
+    { key: 'silent', label: 'Silent (no customer emails)', kind: 'checkbox' },
   ],
   helpdesk_update_ticket: [
     { key: 'ticket_id', label: 'Ticket', kind: 'readonly' },

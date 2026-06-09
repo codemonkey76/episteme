@@ -46,7 +46,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_create_ticket",
-            "description": "Create a new helpdesk ticket. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous.",
+            "description": "Create a new helpdesk ticket. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -54,7 +54,8 @@ pub fn schemas() -> Vec<Value> {
                     "user_id": { "type": "integer", "description": "The requesting contact's user id (from helpdesk_list_clients)." },
                     "subject": { "type": "string" },
                     "description": { "type": "string", "description": "Full description of the issue." },
-                    "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+                    "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                    "silent": { "type": "boolean", "description": "If true, suppress all customer-facing email for this ticket. Default false." }
                 },
                 "required": ["client_id", "user_id", "subject", "description", "priority"]
             }
@@ -181,6 +182,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "subject": args["subject"].as_str().ok_or_else(|| anyhow!("subject is required"))?,
                 "description": args["description"].as_str().ok_or_else(|| anyhow!("description is required"))?,
                 "priority": args["priority"].as_str().unwrap_or("medium"),
+                "silent": args["silent"].as_bool().unwrap_or(false),
                 "source": "api",
             });
             let res = helpdesk::request(state, user_id, Method::POST, "/tickets", Some(&body)).await?;
