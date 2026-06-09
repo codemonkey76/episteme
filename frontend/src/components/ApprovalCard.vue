@@ -53,6 +53,7 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'status', label: 'Status', kind: 'select', options: ['open', 'in_progress', 'pending_user', 'resolved', 'closed'] },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
     { key: 'assign_to_me', label: 'Assign to me', kind: 'checkbox' },
+    { key: 'silent', label: 'Silent (no customer emails)', kind: 'checkbox' },
   ],
   helpdesk_create_user: [
     { key: 'name', label: 'Name', kind: 'text' },
