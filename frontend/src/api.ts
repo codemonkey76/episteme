@@ -600,6 +600,21 @@ export const memories = {
       body: JSON.stringify({ content, category }),
     }),
   remove: (id: string) => fetch(BASE + `/memories/${id}`, { method: 'DELETE' }),
+  // Run the "dream" consolidation pass; returns what it changed.
+  consolidate: (provider?: string) =>
+    json<{ summary: ConsolidationSummary; provider: string }>('/memories/consolidate', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    }),
+  listDeleted: () => json<{ memories: Memory[] }>('/memories/deleted'),
+  restore: (id: string) => fetch(BASE + `/memories/${id}/restore`, { method: 'POST' }),
+}
+
+export interface ConsolidationSummary {
+  merged: number
+  dropped: number
+  lessons: number
+  groups: number
 }
 
 // Usage (admin)

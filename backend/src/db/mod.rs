@@ -111,6 +111,30 @@ mod tests {
         assert_eq!(terminal_history::list(&pool, "u3", None, None, 100).await.unwrap().len(), 0);
     }
 
+    /// Soft-delete hides a memory from the active list/count but keeps it
+    /// restorable from the archive.
+    #[tokio::test]
+    async fn memory_soft_delete_restore() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+
+        let a = memories::insert(&pool, "u1", "likes tea", "preference", "auto", None).await.unwrap();
+        memories::insert(&pool, "u1", "likes coffee", "preference", "auto", None).await.unwrap();
+        assert_eq!(memories::count_active(&pool, "u1").await.unwrap(), 2);
+
+        // Soft-delete the first (as if merged); it leaves the active list.
+        memories::soft_delete(&pool, "u1", &a.id, Some("other-id")).await.unwrap();
+        assert_eq!(memories::count_active(&pool, "u1").await.unwrap(), 1);
+        assert_eq!(memories::list(&pool, "u1", None, None, 100).await.unwrap().len(), 1);
+
+        // It shows in the archive and restores cleanly.
+        let archived = memories::list_deleted(&pool, "u1", 100).await.unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].id, a.id);
+        memories::restore(&pool, "u1", &a.id).await.unwrap();
+        assert_eq!(memories::count_active(&pool, "u1").await.unwrap(), 2);
+        assert!(memories::list_deleted(&pool, "u1", 100).await.unwrap().is_empty());
+    }
+
     /// Terminal output archive: tail replays in order; search is scoped to the
     /// user, strips ANSI, and returns a context snippet.
     #[tokio::test]

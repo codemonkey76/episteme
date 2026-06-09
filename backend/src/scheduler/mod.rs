@@ -91,6 +91,10 @@ pub fn spawn_worker(state: Arc<AppState>) {
                 Err(_) => continue,
             };
             for user in users {
+                // Nightly memory consolidation runs independently of scheduled
+                // agents, so check it before the early-continue below.
+                maybe_consolidate(&state, &user.id).await;
+
                 let mut agents = match get_agents(&state.db, &user.id).await {
                     Ok(a) if !a.is_empty() => a,
                     _ => continue,
@@ -118,6 +122,76 @@ pub fn spawn_worker(state: Arc<AppState>) {
                     let _ = set_agents(&state.db, &user.id, &agents).await;
                 }
             }
+        }
+    });
+}
+
+/// Local hour (home tz) after which the nightly memory consolidation may run.
+const CONSOLIDATE_HOUR: u32 = 3;
+/// Skip a nightly run unless at least this many new memories accrued since the
+/// last one — no point dreaming when little has changed.
+const CONSOLIDATE_MIN_NEW: i64 = 5;
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ConsolidationState {
+    /// Local date "YYYY-MM-DD" of the last nightly check (run or skipped).
+    last_run: String,
+    /// Active memory count at the last actual run — gates "enough new".
+    last_count: i64,
+}
+
+fn consolidation_key(user_id: &str) -> String {
+    format!("memory_consolidation_state:{user_id}")
+}
+
+/// Once per day after [`CONSOLIDATE_HOUR`], run the memory "dream" for a user —
+/// but only when enough new memories have accumulated. Detached so a slow cloud
+/// model doesn't stall the scheduler tick.
+async fn maybe_consolidate(state: &Arc<AppState>, user_id: &str) {
+    let now = chrono::Utc::now().with_timezone(&state.home_tz(user_id).await);
+    if now.hour() < CONSOLIDATE_HOUR {
+        return;
+    }
+    let today = now.format("%Y-%m-%d").to_string();
+    let mut cs: ConsolidationState =
+        db::settings::get(&state.db, &consolidation_key(user_id)).await.ok().flatten().unwrap_or_default();
+    if cs.last_run == today {
+        return; // already considered today
+    }
+
+    let count = db::memories::count_active(&state.db, user_id).await.unwrap_or(0);
+    let enough = count - cs.last_count >= CONSOLIDATE_MIN_NEW;
+    // Mark today handled regardless (so we don't recheck every tick); only
+    // advance the baseline count when we actually run.
+    cs.last_run = today;
+    if enough {
+        cs.last_count = count;
+    }
+    let _ = db::settings::set(&state.db, &consolidation_key(user_id), &cs).await;
+    if !enough {
+        return;
+    }
+
+    let Some(provider) = crate::memory::consolidate::resolve_provider(state, None).await else {
+        return;
+    };
+    let st = Arc::clone(state);
+    let uid = user_id.to_string();
+    tokio::spawn(async move {
+        st.log("memory", "info", format!("Nightly consolidation starting ({})", provider.name)).await;
+        match crate::memory::consolidate::run(&st, &uid, &provider).await {
+            Ok(s) => {
+                st.log(
+                    "memory",
+                    "info",
+                    format!(
+                        "Nightly consolidation: merged {}, dropped {}, lessons {}",
+                        s.merged, s.dropped, s.lessons
+                    ),
+                )
+                .await
+            }
+            Err(e) => st.log("memory", "error", format!("Nightly consolidation failed: {e}")).await,
         }
     });
 }

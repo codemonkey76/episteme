@@ -5,7 +5,7 @@ import { useLogsStore } from '../stores/logs'
 
 const logs = useLogsStore()
 
-const CATEGORIES = ['preference', 'fact', 'feedback', 'project', 'style', 'other'] as const
+const CATEGORIES = ['preference', 'fact', 'feedback', 'project', 'style', 'lesson', 'other'] as const
 type Category = (typeof CATEGORIES)[number]
 
 const items = ref<api.Memory[]>([])
@@ -95,6 +95,55 @@ async function remove(m: api.Memory) {
   }
 }
 
+// ── Dream (consolidation) ─────────────────────────────────────────────────────
+const providers = ref<api.ProviderConfig[]>([])
+const dreamProvider = ref('')
+const dreaming = ref(false)
+const dreamMsg = ref('')
+
+onMounted(async () => {
+  try { providers.value = (await api.settings.listProviders()).providers } catch { /* leave empty */ }
+})
+
+async function dream() {
+  if (dreaming.value) return
+  dreaming.value = true
+  dreamMsg.value = ''
+  error.value = ''
+  try {
+    const { summary, provider } = await api.memories.consolidate(dreamProvider.value || undefined)
+    dreamMsg.value = `Dreamt with ${provider} — merged ${summary.merged}, dropped ${summary.dropped}, ${summary.lessons} new lesson${summary.lessons === 1 ? '' : 's'}.`
+    logs.info('Memory', dreamMsg.value)
+    await load()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Consolidation failed'
+  } finally {
+    dreaming.value = false
+  }
+}
+
+// ── Archive (soft-deleted) view ───────────────────────────────────────────────
+const view = ref<'active' | 'archive'>('active')
+const archived = ref<api.Memory[]>([])
+
+async function toggleArchive() {
+  if (view.value === 'archive') { view.value = 'active'; return }
+  view.value = 'archive'
+  try { archived.value = (await api.memories.listDeleted()).memories } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to load archive'
+  }
+}
+
+async function restore(m: api.Memory) {
+  try {
+    await api.memories.restore(m.id)
+    archived.value = archived.value.filter(x => x.id !== m.id)
+    await load()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to restore memory'
+  }
+}
+
 // ── Display helpers ──────────────────────────────────────────────────────────
 const CAT_COLOR: Record<string, string> = {
   preference: '#7ab0ff',
@@ -102,6 +151,7 @@ const CAT_COLOR: Record<string, string> = {
   feedback: '#ffb07a',
   project: '#c07aff',
   style: '#6ecfcf',
+  lesson: '#e0c060',
   other: '#9a9a9a',
 }
 function catColor(c: string): string {
@@ -138,6 +188,31 @@ function fmtDate(iso: string): string {
       </div>
 
       <div class="flex items-center gap-1.5 ml-auto">
+        <select
+          v-if="providers.length"
+          v-model="dreamProvider"
+          title="Model used to consolidate memories — point this at your smartest model"
+          class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer max-w-[9rem]"
+        >
+          <option value="">dream model: default</option>
+          <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+        </select>
+        <button
+          class="flex items-center gap-[0.35rem] bg-[var(--c-2a2150)] text-[var(--c-b69cff)] border border-[var(--c-3a2f70)] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-352a66)] disabled:opacity-50"
+          title="Consolidate memories now: merge redundant, resolve conflicts, extract lessons"
+          :disabled="dreaming"
+          @click="dream"
+        >
+          <span v-if="dreaming" class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-3a2f70)] border-t-[var(--c-b69cff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+          <span v-else>💤</span>
+          {{ dreaming ? 'Dreaming…' : 'Dream' }}
+        </button>
+        <button
+          class="bg-surface text-[var(--c-808080)] border border-raised rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]"
+          :class="view === 'archive' ? 'bg-[var(--c-222222)] text-[var(--c-c0c0c0)]' : ''"
+          title="View archived (consolidated/dropped) memories and restore them"
+          @click="toggleArchive"
+        >Archive</button>
         <button class="flex items-center gap-[0.35rem] bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="startAdd">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add
@@ -163,9 +238,30 @@ function fmtDate(iso: string): string {
     </div>
 
     <div v-if="error" class="px-3 py-2 text-danger text-[0.775rem] border-b border-[var(--c-1e1e1e)] shrink-0">{{ error }}</div>
+    <div v-if="dreamMsg" class="flex items-center gap-2 px-3 py-2 text-[var(--c-b69cff)] text-[0.775rem] border-b border-[var(--c-1e1e1e)] bg-[var(--c-17142c)] shrink-0">
+      <span>💤</span><span class="flex-1">{{ dreamMsg }}</span>
+      <button class="text-[var(--c-585858)] hover:text-muted bg-none border-none cursor-pointer text-[0.7rem]" @click="dreamMsg = ''">✕</button>
+    </div>
+
+    <!-- Archive (soft-deleted) view -->
+    <div v-if="view === 'archive'" class="flex-1 overflow-y-auto">
+      <div v-if="archived.length === 0" class="flex items-center justify-center h-full text-[var(--c-383838)] text-[0.8125rem]">
+        Nothing archived. Consolidated or dropped memories appear here and can be restored.
+      </div>
+      <div v-else>
+        <div v-for="m in archived" :key="m.id" class="group flex items-start gap-3 px-3.5 py-2.5 border-b border-[var(--c-161616)] hover:bg-[var(--c-131313)]">
+          <span class="mt-[0.15rem] shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border" :style="{ color: catColor(m.category), borderColor: catColor(m.category) + '55' }">{{ m.category }}</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-[0.8125rem] text-[var(--c-909090)] leading-[1.45] break-words line-through decoration-[var(--c-3a3a3a)]">{{ m.content }}</p>
+            <div class="text-[0.68rem] text-[var(--c-505050)] mt-[0.2rem]">archived · {{ fmtDate(m.created_at) }}</div>
+          </div>
+          <button class="shrink-0 bg-surface text-[var(--c-7adfbb)] border border-raised rounded px-2 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[var(--c-222222)] opacity-0 group-hover:opacity-100 transition-opacity duration-100" @click="restore(m)">Restore</button>
+        </div>
+      </div>
+    </div>
 
     <!-- List -->
-    <div class="flex-1 overflow-y-auto">
+    <div v-else class="flex-1 overflow-y-auto">
       <div v-if="loading && items.length === 0" class="flex items-center justify-center h-full text-[var(--c-484848)] text-[0.8125rem]">
         <span class="inline-block w-[18px] h-[18px] border-2 border-raised border-t-[var(--c-505050)] rounded-full animate-[spin_0.7s_linear_infinite]" />
       </div>
@@ -212,7 +308,8 @@ function fmtDate(iso: string): string {
 
     <!-- Status bar -->
     <div class="px-3 py-[0.25rem] border-t border-surface text-[var(--c-505050)] text-[0.68rem] shrink-0">
-      {{ filtered.length }} / {{ items.length }} memories
+      <span v-if="view === 'archive'">{{ archived.length }} archived</span>
+      <span v-else>{{ filtered.length }} / {{ items.length }} memories</span>
     </div>
   </div>
 </template>

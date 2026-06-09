@@ -32,7 +32,10 @@ const BACKFILL_BATCH: i64 = 20;
 /// A chat turn never waits longer than this on the query embedding.
 const EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-const VALID_CATEGORIES: [&str; 6] = ["preference", "fact", "feedback", "project", "style", "other"];
+const VALID_CATEGORIES: [&str; 7] =
+    ["preference", "fact", "feedback", "project", "style", "lesson", "other"];
+
+pub mod consolidate;
 
 /// Prepend a system message of stored memories, if any exist.
 ///

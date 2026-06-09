@@ -356,6 +356,44 @@ shared mailbox: Get-MailboxPermission (FullAccess), Get-RecipientPermission (Sen
 Get-Mailbox | Select-Object -ExpandProperty GrantSendOnBehalfTo (SendOnBehalf). Never run \
 Disconnect-* unless the user asks.",
     },
+    PromptDef {
+        key: "memory_consolidate",
+        name: "Memory consolidation",
+        description: "The nightly/manual \"dreaming\" pass that merges redundant memories and \
+resolves conflicts within one category. The numbered memories are supplied as the user message. \
+Must keep instructing the model to answer with ONLY a JSON object of {merges, drops}.",
+        variables: &[],
+        default: "You are consolidating a person's long-term memory during a quiet review, the \
+way sleep consolidates the day's experiences. Below is a numbered list of memories that all share \
+one category. Find memories that are REDUNDANT (the same information stated more than once) and \
+CONFLICTING (contradictory claims — prefer the most recent or most specific), and clean them up. \
+Leave everything else exactly as it is.\n\n\
+Respond with ONLY a JSON object, no prose, no code fences:\n\
+{\"merges\": [{\"ids\": [<numbers>], \"content\": \"<one clear consolidated memory>\", \"category\": \"<category>\"}], \"drops\": [{\"id\": <number>, \"reason\": \"<short why>\"}]}\n\n\
+- merges: combine two or more redundant/overlapping memories (referenced by their numbers) into a \
+single clear memory. Preserve every distinct fact; lose nothing meaningful.\n\
+- drops: remove a memory entirely (e.g. an outdated claim now contradicted by a newer one). Use the \
+number of the memory to remove.\n\
+- Do NOT merge memories that are merely related but carry distinct information — only true \
+redundancy or conflict.\n\
+- Be conservative: when unsure, leave a memory alone. If nothing needs consolidating, return \
+{\"merges\": [], \"drops\": []}.",
+    },
+    PromptDef {
+        key: "memory_lessons",
+        name: "Memory lesson synthesis",
+        description: "The reflection step of the consolidation pass: derives generalized, actionable \
+LESSONS from feedback/preference/project memories. The numbered memories are supplied as the user \
+message. Must keep instructing the model to answer with ONLY a JSON array of {content} objects.",
+        variables: &[],
+        default: "You are reflecting on a person's memories to extract durable LESSONS that will \
+help an AI assistant serve them better in the future — generalized principles drawn from the \
+specific feedback, preferences, and projects below. A good lesson is concise, actionable, and \
+generalizes BEYOND any single memory (e.g. from several edits, \"Keep replies short and skip \
+pleasantries\"). Do not simply restate one memory.\n\n\
+Respond with ONLY a JSON array, no prose, no code fences. Each element: {\"content\": \"<lesson>\"}. \
+Only include lessons that genuinely generalize; if nothing does, return [].",
+    },
 ];
 
 pub fn def(key: &str) -> Option<&'static PromptDef> {

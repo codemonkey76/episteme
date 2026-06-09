@@ -68,7 +68,7 @@ pub async fn list(
 ) -> Result<Vec<Memory>> {
     let mut sql = String::from(
         "SELECT id, content, category, source, session_id, created_at, updated_at, embedding
-         FROM memories WHERE user_id = ?",
+         FROM memories WHERE user_id = ? AND deleted_at IS NULL",
     );
     if category.is_some() { sql.push_str(" AND category = ?"); }
     if q.is_some()        { sql.push_str(" AND content LIKE ?"); }
@@ -125,8 +125,67 @@ pub async fn set_embedding(pool: &SqlitePool, id: &str, blob: &[u8]) -> Result<(
 pub async fn missing_embeddings(pool: &SqlitePool, user_id: &str, limit: i64) -> Result<Vec<Memory>> {
     Ok(sqlx::query_as::<_, Memory>(
         "SELECT id, content, category, source, session_id, created_at, updated_at, embedding
-         FROM memories WHERE user_id = ? AND embedding IS NULL
+         FROM memories WHERE user_id = ? AND embedding IS NULL AND deleted_at IS NULL
          ORDER BY created_at ASC LIMIT ?",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Active (non-archived) memory count for a user — used to gate the nightly
+/// consolidation (skip when too few new memories have accumulated).
+pub async fn count_active(pool: &SqlitePool, user_id: &str) -> Result<i64> {
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM memories WHERE user_id = ? AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(n)
+}
+
+/// Soft-delete a memory: hide it but keep it restorable. `superseded_by` records
+/// the consolidated memory that replaced it, when this was a merge.
+pub async fn soft_delete(
+    pool: &SqlitePool,
+    user_id: &str,
+    id: &str,
+    superseded_by: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE memories SET deleted_at = ?, superseded_by = ?
+         WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(superseded_by)
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Restore a soft-deleted memory (undo a consolidation).
+pub async fn restore(pool: &SqlitePool, user_id: &str, id: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE memories SET deleted_at = NULL, superseded_by = NULL
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Archived (soft-deleted) memories, most recently removed first — for the
+/// Memories "archive" view where the user can restore them.
+pub async fn list_deleted(pool: &SqlitePool, user_id: &str, limit: i64) -> Result<Vec<Memory>> {
+    Ok(sqlx::query_as::<_, Memory>(
+        "SELECT id, content, category, source, session_id, created_at, updated_at, embedding
+         FROM memories WHERE user_id = ? AND deleted_at IS NOT NULL
+         ORDER BY deleted_at DESC LIMIT ?",
     )
     .bind(user_id)
     .bind(limit)
