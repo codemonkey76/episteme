@@ -1,7 +1,8 @@
 //! Helpdesk tools — model-facing adapter over the user's custom helpdesk
 //! platform via its Sanctum API (see `integrations::helpdesk`). Covers the
-//! agent workflow: find/create tickets, reply (or leave internal notes), and
-//! log work time. Ticket ids are numeric helpdesk ids; references (TKT-00042)
+//! agent workflow: find/create tickets, reply (or leave internal notes), log
+//! work time, and update status/priority/assignment. Ticket ids are numeric
+//! helpdesk ids; references (TKT-00042)
 //! resolve via list/search first.
 
 use anyhow::{anyhow, Result};
@@ -100,13 +101,14 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_update_ticket",
-            "description": "Change a helpdesk ticket's status and/or priority (e.g. mark resolved after logging time).",
+            "description": "Change a helpdesk ticket's status and/or priority (e.g. mark resolved after logging time), and/or assign it to yourself. Set assign_to_me to true to assign the ticket to the connected agent (you).",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "ticket_id": { "type": "integer" },
                     "status": { "type": "string", "enum": ["open", "in_progress", "pending_user", "resolved", "closed"] },
-                    "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+                    "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                    "assign_to_me": { "type": "boolean", "description": "Assign the ticket to the connected agent (yourself)." }
                 },
                 "required": ["ticket_id"]
             }
@@ -262,8 +264,15 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(p) = args["priority"].as_str().filter(|s| !s.is_empty()) {
                 body.insert("priority".into(), json!(p));
             }
+            if args["assign_to_me"].as_bool().unwrap_or(false) {
+                let me = helpdesk::request(state, user_id, Method::GET, "/user", None).await?;
+                let agent_id = me["data"]["id"]
+                    .as_i64()
+                    .ok_or_else(|| anyhow!("could not determine the connected agent's id"))?;
+                body.insert("assigned_agent_id".into(), json!(agent_id));
+            }
             if body.is_empty() {
-                return Err(anyhow!("provide status and/or priority"));
+                return Err(anyhow!("provide status, priority, and/or assign_to_me"));
             }
             let res = helpdesk::request(state, user_id, Method::PATCH, &format!("/tickets/{id}"), Some(&Value::Object(body))).await?;
             Ok(json!({ "updated": slim_detail(&res["data"]) }))

@@ -20,7 +20,7 @@ const emit = defineEmits<{
 type Field = {
   key: string
   label: string
-  kind: 'textarea' | 'text' | 'number' | 'select' | 'date' | 'readonly'
+  kind: 'textarea' | 'text' | 'number' | 'select' | 'date' | 'checkbox' | 'readonly'
   options?: string[]
   step?: number
 }
@@ -51,6 +51,7 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'ticket_id', label: 'Ticket', kind: 'readonly' },
     { key: 'status', label: 'Status', kind: 'select', options: ['open', 'in_progress', 'pending_user', 'resolved', 'closed'] },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
+    { key: 'assign_to_me', label: 'Assign to me', kind: 'checkbox' },
   ],
   helpdesk_delete_time: [
     { key: 'ticket_id', label: 'Ticket', kind: 'readonly' },
@@ -142,6 +143,13 @@ function onApprove() {
           v-model="edited[f.key] as string"
           type="date"
           class="text-[0.78rem] text-[var(--c-d0c8b0)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-1.5 font-[inherit] w-44 focus:outline-none focus:border-[var(--c-4a3a1a)]"
+        />
+
+        <input
+          v-else-if="f.kind === 'checkbox'"
+          v-model="edited[f.key] as boolean"
+          type="checkbox"
+          class="w-4 h-4 self-start accent-[var(--c-e0b060)]"
         />
 
         <input
