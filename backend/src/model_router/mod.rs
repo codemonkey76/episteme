@@ -111,11 +111,29 @@ impl ModelRouter {
 
     /// Run a completion to the end and return the full text plus provider-
     /// reported token counts (when given), discarding tool calls. For one-shot
-    /// uses (e.g. JSON classification) where streaming to a client isn't needed.
+    /// uses (e.g. JSON classification, memory consolidation) where streaming to a
+    /// client isn't needed.
     pub async fn complete_with_usage(
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
     ) -> Result<(String, Option<TokenUsage>)> {
+        // Non-Ollama providers go through genai's NON-streaming `exec_chat`.
+        // Streaming there uses reqwest-eventsource, which clones the request for
+        // retries and fails on Anthropic with `CannotCloneRequestError`; a
+        // one-shot completion has no reason to stream anyway.
+        if provider.provider != "ollama" {
+            let client = build_client(provider);
+            let chat_req = ChatRequest::new(history_to_genai(history));
+            let options = ChatOptions::default().with_capture_usage(true);
+            let res = client.exec_chat(&provider.model_id, chat_req, Some(&options)).await?;
+            let usage = Some(TokenUsage {
+                prompt: res.usage.prompt_tokens.unwrap_or(0) as i64,
+                completion: res.usage.completion_tokens.unwrap_or(0) as i64,
+            });
+            return Ok((res.content_text_into_string().unwrap_or_default(), usage));
+        }
+
+        // Ollama: collect from its custom streaming path.
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let provider = provider.clone();
         let task = tokio::spawn(async move {
