@@ -20,6 +20,14 @@ pub struct AppState {
     /// process (rows stay "pending").
     pub pending_approvals:
         Arc<Mutex<HashMap<String, oneshot::Sender<Option<serde_json::Value>>>>>,
+    /// Live terminal sessions, keyed by the client's session id. Both the
+    /// xterm WebSocket and the AI agent attach to the same shared PTY.
+    pub terminal_sessions:
+        Arc<Mutex<HashMap<String, Arc<crate::terminal::TermSession>>>>,
+    /// In-flight terminal-agent command approvals: id → resume channel.
+    /// `None` denies, `Some(cmd)` approves and carries the (possibly edited)
+    /// command to run in the shared shell.
+    pub pending_terminal_cmds: Arc<Mutex<HashMap<String, oneshot::Sender<Option<String>>>>>,
     /// Hand-off queue for background jobs: senders enqueue, the worker spawned
     /// in main runs them. A queue (rather than spawning `jobs::run` directly)
     /// breaks the async-recursion cycle when the agent's own
@@ -46,6 +54,8 @@ impl AppState {
                 .expect("http client"),
             log_tx,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
+            terminal_sessions: Arc::new(Mutex::new(HashMap::new())),
+            pending_terminal_cmds: Arc::new(Mutex::new(HashMap::new())),
             job_tx,
         };
         (state, job_rx)

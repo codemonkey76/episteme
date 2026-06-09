@@ -1,6 +1,8 @@
-//! Interactive terminal endpoints: a WebSocket that bridges the browser's
-//! xterm.js to a real PTY (bash/pwsh) in the container, plus persistent
-//! command-history storage/search and an AI "suggest a command" helper.
+//! Interactive terminal endpoints. A WebSocket bridges the browser's xterm.js
+//! to a shared [`TermSession`] PTY (bash/pwsh) in the container; the AI agent
+//! drives that same session — proposing commands (each approved by the user),
+//! running them in the visible shell, and reading their output to decide the
+//! next step. Plus persistent, searchable command history.
 
 use axum::{
     extract::{
@@ -8,23 +10,30 @@ use axum::{
         Query, State,
     },
     http::StatusCode,
-    response::IntoResponse,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     Extension, Json,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{stream, SinkExt, StreamExt};
 use serde::Deserialize;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
-use crate::terminal::{self, Shell};
+use crate::terminal::{Shell, TermSession};
 
 #[derive(Deserialize)]
 pub struct WsParams {
     shell: String,
+    session: String,
     #[serde(default = "default_cols")]
     cols: u16,
     #[serde(default = "default_rows")]
@@ -37,11 +46,11 @@ fn default_rows() -> u16 {
     24
 }
 
-/// GET /api/terminals/ws?shell=bash|pwsh — upgrade to a WebSocket and attach it
-/// to a freshly-spawned shell. Auth is enforced by the `require_auth` layer on
-/// the protected router (the session cookie rides the same-origin upgrade).
+/// GET /api/terminals/ws?shell=&session=&cols=&rows= — upgrade to a WebSocket
+/// and attach it to a shared shell session (created on first connect). Auth is
+/// enforced by `require_auth`; the session cookie rides the same-origin upgrade.
 pub async fn ws(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Extension(CurrentUser(_user)): Extension<CurrentUser>,
     Query(params): Query<WsParams>,
     upgrade: WebSocketUpgrade,
@@ -50,7 +59,8 @@ pub async fn ws(
         .ok_or_else(|| AppError::BadRequest(format!("unknown shell '{}'", params.shell)))?;
     let cols = params.cols.clamp(1, 1000);
     let rows = params.rows.clamp(1, 1000);
-    Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, shell, cols, rows)))
+    let session_id = params.session;
+    Ok(upgrade.on_upgrade(move |socket| handle_socket(state, socket, session_id, shell, cols, rows)))
 }
 
 #[derive(Deserialize)]
@@ -63,66 +73,38 @@ struct Resize {
     rows: u16,
 }
 
-/// Pump bytes between the WebSocket and the PTY until either side closes.
-/// Protocol: client→server Binary frames are raw stdin; Text frames are JSON
-/// control (`{"resize":{cols,rows}}`). Server→client frames are raw stdout.
-async fn handle_socket(socket: WebSocket, shell: Shell, cols: u16, rows: u16) {
-    let pty = match terminal::spawn(shell, cols, rows) {
-        Ok(p) => p,
+async fn handle_socket(
+    state: Arc<AppState>,
+    socket: WebSocket,
+    session_id: String,
+    shell: Shell,
+    cols: u16,
+    rows: u16,
+) {
+    let session = match TermSession::create(shell, cols, rows) {
+        Ok(s) => s,
         Err(e) => {
             let mut s = socket;
-            let _ = s
-                .send(Message::Text(format!("\r\nfailed to start shell: {e}\r\n")))
-                .await;
+            let _ = s.send(Message::Text(format!("\r\nfailed to start shell: {e}\r\n"))).await;
             return;
         }
     };
+    state.terminal_sessions.lock().await.insert(session_id.clone(), session.clone());
 
-    let reader = match pty.master.try_clone_reader() {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let writer = match pty.master.take_writer() {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-    let master = pty.master;
-    let mut child = pty.child;
+    let mut rx = session.subscribe();
+    let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // PTY stdout → channel (blocking read on a dedicated thread).
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        let mut buf = [0u8; 8192];
+    // PTY output → WebSocket.
+    let mut send_task = tokio::spawn(async move {
         loop {
-            match std::io::Read::read(&mut reader, &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if out_tx.blocking_send(buf[..n].to_vec()).is_err() {
+            match rx.recv().await {
+                Ok(chunk) => {
+                    if ws_tx.send(Message::Binary(chunk)).await.is_err() {
                         break;
                     }
                 }
-            }
-        }
-    });
-
-    // Channel → PTY stdin (blocking write on a dedicated thread).
-    let (in_tx, in_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
-        let mut writer = writer;
-        while let Ok(data) = in_rx.recv() {
-            if std::io::Write::write_all(&mut writer, &data).is_err() {
-                break;
-            }
-            let _ = std::io::Write::flush(&mut writer);
-        }
-    });
-
-    let (mut ws_tx, mut ws_rx) = socket.split();
-    let mut send_task = tokio::spawn(async move {
-        while let Some(chunk) = out_rx.recv().await {
-            if ws_tx.send(Message::Binary(chunk)).await.is_err() {
-                break;
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
         let _ = ws_tx.close().await;
@@ -132,18 +114,11 @@ async fn handle_socket(socket: WebSocket, shell: Shell, cols: u16, rows: u16) {
         tokio::select! {
             incoming = ws_rx.next() => {
                 match incoming {
-                    Some(Ok(Message::Binary(b))) => {
-                        if in_tx.send(b).is_err() { break; }
-                    }
+                    Some(Ok(Message::Binary(b))) => session.write(&b),
                     Some(Ok(Message::Text(t))) => {
                         if let Ok(ctrl) = serde_json::from_str::<Control>(&t) {
                             if let Some(r) = ctrl.resize {
-                                let _ = master.resize(portable_pty::PtySize {
-                                    rows: r.rows.clamp(1, 1000),
-                                    cols: r.cols.clamp(1, 1000),
-                                    pixel_width: 0,
-                                    pixel_height: 0,
-                                });
+                                session.resize(r.cols.clamp(1, 1000), r.rows.clamp(1, 1000));
                             }
                         }
                     }
@@ -152,12 +127,12 @@ async fn handle_socket(socket: WebSocket, shell: Shell, cols: u16, rows: u16) {
                     _ => {}
                 }
             }
-            // PTY closed (shell exited): stop.
             _ = &mut send_task => break,
         }
     }
 
-    let _ = child.kill();
+    session.kill();
+    state.terminal_sessions.lock().await.remove(&session_id);
     send_task.abort();
 }
 
@@ -199,54 +174,229 @@ pub async fn record_history(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── AI command suggestion ───────────────────────────────────────────────────
+// ── AI agent (multi-step, drives the shared shell, approve-each) ─────────────
 
 #[derive(Deserialize)]
-pub struct SuggestBody {
-    shell: String,
-    request: String,
-    #[serde(default)]
-    context: Option<String>,
+pub struct AgentBody {
+    session_id: String,
+    message: String,
     #[serde(default)]
     provider: Option<String>,
 }
 
-pub async fn suggest(
+/// Events streamed from the agent loop to the sidebar.
+enum AgentEvent {
+    Token(String),
+    Approve { id: String, command: String },
+    Output { command: String, exit: Option<i32> },
+    Error(String),
+    Done,
+}
+
+const MAX_STEPS: usize = 25;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+pub async fn agent(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(body): Json<SuggestBody>,
-) -> AppResult<Json<serde_json::Value>> {
-    if body.request.trim().is_empty() {
-        return Err(AppError::BadRequest("request is required".into()));
-    }
+    Json(body): Json<AgentBody>,
+) -> AppResult<impl IntoResponse> {
+    let session = state
+        .terminal_sessions
+        .lock()
+        .await
+        .get(&body.session_id)
+        .cloned()
+        .ok_or_else(|| AppError::BadRequest("terminal session not connected".into()))?;
     let provider = resolve_provider(&state, body.provider.as_deref().unwrap_or("")).await?;
 
-    let shell_name = match Shell::parse(&body.shell) {
-        Some(Shell::Pwsh) => "PowerShell (pwsh on Linux)",
-        _ => "bash on Linux (Debian)",
-    };
-    let system = format!(
-        "You translate a request into a single shell command for {shell_name}. \
-Output ONLY the command on one line — no explanation, no markdown, no code fences, \
-no leading prompt characters. If the request is unclear, output the closest single \
-safe command."
-    );
-    let mut user_msg = body.request.clone();
-    if let Some(ctx) = body.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        let tail: String = ctx.chars().rev().take(2000).collect::<String>().chars().rev().collect();
-        user_msg = format!("Recent terminal output (context):\n{tail}\n\nRequest: {}", body.request);
+    let (tx, rx) = mpsc::channel::<AgentEvent>(64);
+    {
+        let state = Arc::clone(&state);
+        let user_id = user.id.clone();
+        let message = body.message.clone();
+        tokio::spawn(async move {
+            run_agent(state, user_id, provider, session, message, tx).await;
+        });
     }
 
-    let history = vec![
-        ChatMessage { role: "system".to_string(), content: serde_json::Value::String(system) },
-        ChatMessage { role: "user".to_string(), content: serde_json::Value::String(user_msg) },
-    ];
-    let (raw, used) = ModelRouter::complete_with_usage(&provider, history)
-        .await
-        .map_err(AppError::Internal)?;
-    db::usage::record(&state.db, &user.id, &provider, "terminal_suggest", used).await;
+    let event_stream = stream::unfold(rx, |mut rx| async move {
+        let ev = rx.recv().await?;
+        let data = match ev {
+            AgentEvent::Token(text) => serde_json::json!({ "type": "token", "text": text }),
+            AgentEvent::Approve { id, command } => {
+                serde_json::json!({ "type": "approve", "id": id, "command": command })
+            }
+            AgentEvent::Output { command, exit } => {
+                serde_json::json!({ "type": "output", "command": command, "exit": exit })
+            }
+            AgentEvent::Error(m) => serde_json::json!({ "type": "error", "message": m }),
+            AgentEvent::Done => serde_json::json!({ "type": "done" }),
+        };
+        Some((Ok::<Event, Infallible>(Event::default().data(data.to_string())), rx))
+    });
 
-    Ok(Json(serde_json::json!({ "command": clean_command(&raw) })))
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
+}
+
+#[derive(Deserialize)]
+pub struct DecideBody {
+    id: String,
+    approved: bool,
+    #[serde(default)]
+    command: Option<String>,
+}
+
+/// POST /api/terminals/agent/decide — approve (with the possibly-edited command)
+/// or deny a command the agent is waiting on.
+pub async fn agent_decide(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(_user)): Extension<CurrentUser>,
+    Json(body): Json<DecideBody>,
+) -> AppResult<StatusCode> {
+    if let Some(tx) = state.pending_terminal_cmds.lock().await.remove(&body.id) {
+        let decision = if body.approved { body.command.or(Some(String::new())) } else { None };
+        let _ = tx.send(decision);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn run_command_schema() -> serde_json::Value {
+    serde_json::json!({
+        "name": "run_command",
+        "description": "Run a single shell command in the user's terminal and receive its output and exit code. Use exactly one command per call. Prefer non-interactive commands (no pagers, editors, or programs that wait for input). Read the result before deciding the next command.",
+        "input_schema": {
+            "type": "object",
+            "properties": { "command": { "type": "string", "description": "The shell command to run." } },
+            "required": ["command"]
+        }
+    })
+}
+
+async fn run_agent(
+    state: Arc<AppState>,
+    user_id: String,
+    provider: ProviderConfig,
+    session: Arc<TermSession>,
+    message: String,
+    ev: mpsc::Sender<AgentEvent>,
+) {
+    let shell_name = match session.shell() {
+        Shell::Pwsh => "PowerShell (pwsh)",
+        Shell::Bash => "bash",
+    };
+    let system = format!(
+        "You are an assistant operating a {shell_name} shell on Linux (Debian) as root inside a \
+container. To investigate or act, call run_command with ONE command at a time, then read its \
+output and exit code before deciding the next step. Prefer non-interactive commands; never launch \
+pagers, editors, or programs that wait for input. When you have what you need, reply with a concise \
+answer in plain text instead of calling the tool."
+    );
+    let mut history = vec![
+        ChatMessage { role: "system".to_string(), content: serde_json::Value::String(system) },
+        ChatMessage { role: "user".to_string(), content: serde_json::Value::String(message) },
+    ];
+    let tools = vec![run_command_schema()];
+
+    for _ in 0..MAX_STEPS {
+        let (text, calls) = match stream_turn(&state, &user_id, &provider, history.clone(), tools.clone(), &ev).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = ev.send(AgentEvent::Error(e.to_string())).await;
+                let _ = ev.send(AgentEvent::Done).await;
+                return;
+            }
+        };
+        if !text.trim().is_empty() {
+            history.push(ChatMessage { role: "assistant".to_string(), content: serde_json::Value::String(text) });
+        }
+        if calls.is_empty() {
+            break; // final answer
+        }
+        history.push(ChatMessage {
+            role: "tool_call".to_string(),
+            content: serde_json::to_value(&calls).unwrap_or_default(),
+        });
+
+        for call in calls {
+            if call.fn_name != "run_command" {
+                history.push(tool_result(&call.call_id, "error: unknown tool"));
+                continue;
+            }
+            let proposed = call.fn_arguments["command"].as_str().unwrap_or("").to_string();
+
+            // Approval pause.
+            let id = uuid::Uuid::new_v4().to_string();
+            let (dtx, drx) = oneshot::channel::<Option<String>>();
+            state.pending_terminal_cmds.lock().await.insert(id.clone(), dtx);
+            let _ = ev.send(AgentEvent::Approve { id: id.clone(), command: proposed.clone() }).await;
+
+            let decision = match tokio::time::timeout(DECISION_TIMEOUT, drx).await {
+                Ok(Ok(d)) => d,
+                _ => None,
+            };
+            state.pending_terminal_cmds.lock().await.remove(&id);
+
+            match decision {
+                Some(cmd) if !cmd.trim().is_empty() => {
+                    let (output, exit) = session.run_and_capture(&cmd, COMMAND_TIMEOUT).await;
+                    let _ = ev.send(AgentEvent::Output { command: cmd.clone(), exit }).await;
+                    let exit_str = exit.map(|e| e.to_string()).unwrap_or_else(|| "unknown (did not finish)".to_string());
+                    history.push(tool_result(
+                        &call.call_id,
+                        &format!("exit code: {exit_str}\n\noutput:\n{output}"),
+                    ));
+                }
+                _ => {
+                    history.push(tool_result(&call.call_id, "user denied this command"));
+                }
+            }
+        }
+    }
+
+    let _ = ev.send(AgentEvent::Done).await;
+}
+
+fn tool_result(call_id: &str, content: &str) -> ChatMessage {
+    ChatMessage {
+        role: "tool".to_string(),
+        content: serde_json::json!({ "call_id": call_id, "name": "run_command", "content": content }),
+    }
+}
+
+/// Run one model turn: stream text tokens to the sidebar, return the full text
+/// and any tool calls the model requested.
+async fn stream_turn(
+    state: &AppState,
+    user_id: &str,
+    provider: &ProviderConfig,
+    history: Vec<ChatMessage>,
+    tools: Vec<serde_json::Value>,
+    ev: &mpsc::Sender<AgentEvent>,
+) -> anyhow::Result<(String, Vec<genai::chat::ToolCall>)> {
+    let (tx, mut rx) = mpsc::channel(64);
+    let p = provider.clone();
+    let handle = tokio::spawn(async move { ModelRouter::stream(&p, history, tools, false, tx).await });
+
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+        if !chunk.text.is_empty() {
+            text.push_str(&chunk.text);
+            let _ = ev.send(AgentEvent::Token(chunk.text)).await;
+        }
+        if chunk.done {
+            if let Some(c) = chunk.tool_calls {
+                calls = c;
+            }
+            if let Some(usage) = chunk.usage {
+                db::usage::record(&state.db, user_id, provider, "terminal_agent", Some(usage)).await;
+            }
+        }
+    }
+    handle.await??;
+    Ok((text, calls))
 }
 
 /// Resolve the named provider, or the first configured one when unset.
@@ -261,24 +411,4 @@ async fn resolve_provider(state: &AppState, name: &str) -> AppResult<ProviderCon
         providers.into_iter().find(|p| p.name == name)
     };
     chosen.ok_or_else(|| AppError::BadRequest("no AI provider configured".into()))
-}
-
-/// Strip code fences, surrounding whitespace, and a single leading prompt
-/// char so we get a bare command line to paste.
-fn clean_command(raw: &str) -> String {
-    let mut s = raw.trim();
-    if s.starts_with("```") {
-        s = s.trim_start_matches("```");
-        // Drop a language tag on the first line (e.g. ```bash).
-        if let Some(nl) = s.find('\n') {
-            let first = &s[..nl];
-            if !first.contains(' ') {
-                s = &s[nl + 1..];
-            }
-        }
-        s = s.trim_end_matches("```").trim();
-    }
-    // Take the first non-empty line.
-    let line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-    line.trim_start_matches(['$', '#', '>']).trim().to_string()
 }
