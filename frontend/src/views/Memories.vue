@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import * as api from '../api'
 import { useLogsStore } from '../stores/logs'
 
@@ -96,13 +96,23 @@ async function remove(m: api.Memory) {
 }
 
 // ── Dream (consolidation) ─────────────────────────────────────────────────────
+const DREAM_PROVIDER_KEY = 'episteme.memories.dreamProvider'
 const providers = ref<api.ProviderConfig[]>([])
-const dreamProvider = ref('')
+// Remember the chosen dream model across refreshes.
+const dreamProvider = ref(localStorage.getItem(DREAM_PROVIDER_KEY) ?? '')
 const dreaming = ref(false)
 const dreamMsg = ref('')
 
+watch(dreamProvider, (v) => localStorage.setItem(DREAM_PROVIDER_KEY, v))
+
 onMounted(async () => {
-  try { providers.value = (await api.settings.listProviders()).providers } catch { /* leave empty */ }
+  try {
+    providers.value = (await api.settings.listProviders()).providers
+    // Drop a stale saved choice (provider since removed) back to default.
+    if (dreamProvider.value && !providers.value.some(p => p.name === dreamProvider.value)) {
+      dreamProvider.value = ''
+    }
+  } catch { /* leave empty */ }
 })
 
 async function dream() {

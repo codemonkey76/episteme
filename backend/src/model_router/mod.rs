@@ -369,14 +369,21 @@ fn build_client(provider: &ProviderConfig) -> Client {
         move |mut target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
             target.model = ModelIden::new(adapter_kind, model_id.clone());
 
-            if let Some(ref key) = api_key {
-                target.auth = AuthData::from_single(key.clone());
-            } else if let Some(env_name) = adapter_kind.default_key_env_name() {
-                target.auth = AuthData::from_env(env_name);
+            // Treat empty strings as "not set": the settings form stores absent
+            // fields as "" (not null), and an empty base_url would otherwise
+            // override the adapter's default endpoint with a blank URL
+            // (RelativeUrlWithoutBase), and an empty key would blank the auth.
+            match api_key.as_deref().filter(|k| !k.is_empty()) {
+                Some(key) => target.auth = AuthData::from_single(key.to_string()),
+                None => {
+                    if let Some(env_name) = adapter_kind.default_key_env_name() {
+                        target.auth = AuthData::from_env(env_name);
+                    }
+                }
             }
 
-            if let Some(ref url) = base_url {
-                target.endpoint = Endpoint::from_owned(url.as_str());
+            if let Some(url) = base_url.as_deref().filter(|u| !u.is_empty()) {
+                target.endpoint = Endpoint::from_owned(url.to_string());
             }
 
             Ok(target)
