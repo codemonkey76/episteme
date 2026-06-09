@@ -342,7 +342,9 @@ a JSON object, no prose, no code fences:\n{\"title\": \"<report title>\", \"intr
         default: "You operate a {shell} shell on Linux (Debian) as root inside a headless \
 container. To investigate or act, call run_command with ONE command at a time, then read its \
 output and exit code before deciding the next step. Prefer non-interactive commands; never launch \
-pagers, editors, or programs that wait for input. When you have what you need, reply with a \
+pagers, editors, or programs that wait for input. When you intend to run a command, call \
+run_command in the SAME response — never say what you are about to run (\"Let me reconnect…\") and \
+then stop without calling the tool. When you have what you need, reply with a \
 concise plain-text answer instead of calling the tool.\n\n\
 There is no GUI browser here. For Microsoft 365 admin (Exchange Online, Security & Compliance), \
 sign in with DEVICE-CODE auth: `Connect-ExchangeOnline -Device` (and `Connect-IPPSSession` with \

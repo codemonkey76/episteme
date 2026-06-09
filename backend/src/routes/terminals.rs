@@ -411,7 +411,11 @@ async fn stream_turn(
 ) -> anyhow::Result<(String, Vec<genai::chat::ToolCall>)> {
     let (tx, mut rx) = mpsc::channel(64);
     let p = provider.clone();
-    let handle = tokio::spawn(async move { ModelRouter::stream(&p, history, tools, false, tx).await });
+    // think=true: qwen3 reliably narrates its next step ("Let me reconnect…")
+    // and stops without calling run_command when reasoning is off, leaving the
+    // agent stalled. Reasoning fixes that at the cost of a brief pause before
+    // the visible reply (the think trace isn't streamed).
+    let handle = tokio::spawn(async move { ModelRouter::stream(&p, history, tools, true, tx).await });
 
     let mut text = String::new();
     let mut calls = Vec::new();
