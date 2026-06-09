@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import TerminalTab from './TerminalTab.vue'
 
 type Shell = 'bash' | 'pwsh'
-interface Tab { id: string; num: number; title: string }
+interface Tab { id: string; num: number; title: string; shell: Shell }
+
+// Tabs persist across refresh so each terminal keeps its identity (and thus its
+// restorable scrollback). Only the lightweight tab metadata is stored here; the
+// scrollback itself lives durably in the backend, keyed by the tab id.
+const STORE_KEY = 'episteme.terminal.tabs'
+interface Persisted { tabs: Tab[]; activeId: string; counter: number }
 
 let counter = 0
 const tabs = ref<Tab[]>([])
@@ -14,7 +20,7 @@ const sidebarWidth = ref(340)
 function addTab() {
   const id = crypto.randomUUID()
   const num = ++counter
-  tabs.value.push({ id, num, title: `bash ${num}` })
+  tabs.value.push({ id, num, title: `bash ${num}`, shell: 'bash' })
   activeId.value = id
 }
 
@@ -33,10 +39,39 @@ function closeTab(id: string) {
 
 function setShell(id: string, shell: Shell) {
   const t = tabs.value.find((x) => x.id === id)
-  if (t) t.title = `${shell === 'pwsh' ? 'PowerShell' : 'bash'} ${t.num}`
+  if (t) {
+    t.shell = shell
+    t.title = `${shell === 'pwsh' ? 'PowerShell' : 'bash'} ${t.num}`
+  }
 }
 
-addTab()
+function restore(): boolean {
+  try {
+    const raw = localStorage.getItem(STORE_KEY)
+    if (!raw) return false
+    const p = JSON.parse(raw) as Persisted
+    if (!p.tabs?.length) return false
+    tabs.value = p.tabs
+    counter = p.counter ?? p.tabs.length
+    activeId.value = p.tabs.some((t) => t.id === p.activeId) ? p.activeId : p.tabs[0].id
+    return true
+  } catch {
+    return false
+  }
+}
+
+watch(
+  [tabs, activeId],
+  () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify({ tabs: tabs.value, activeId: activeId.value, counter } satisfies Persisted),
+    )
+  },
+  { deep: true },
+)
+
+if (!restore()) addTab()
 </script>
 
 <template>
@@ -72,6 +107,8 @@ addTab()
         :key="t.id"
         class="absolute inset-0"
         :active="t.id === activeId"
+        :tab-id="t.id"
+        :initial-shell="t.shell"
         :sidebar-width="sidebarWidth"
         @update:sidebar-width="sidebarWidth = $event"
         @shell="setShell(t.id, $event)"

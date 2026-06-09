@@ -28,6 +28,13 @@ impl Shell {
             _ => None,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Shell::Bash => "bash",
+            Shell::Pwsh => "pwsh",
+        }
+    }
 }
 
 const BASH_RC: &str = include_str!("integration.bash");

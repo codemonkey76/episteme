@@ -1151,6 +1151,12 @@ export interface TerminalHistoryEntry {
   command: string
   created_at: string
 }
+export interface TerminalOutputHit {
+  terminal_id: string
+  shell: string
+  created_at: string
+  snippet: string
+}
 export const terminals = {
   history: (shell?: string, search?: string) => {
     const p = new URLSearchParams()
@@ -1165,6 +1171,9 @@ export const terminals = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ shell, command }),
     }),
+  // Search the whole terminal scrollback archive (all sessions, across restarts).
+  searchOutput: (q: string) =>
+    json<{ hits: TerminalOutputHit[] }>(`/terminals/output/search?q=${encodeURIComponent(q)}`),
   decide: (id: string, approved: boolean, command?: string) =>
     fetch(BASE + '/terminals/agent/decide', {
       method: 'POST',

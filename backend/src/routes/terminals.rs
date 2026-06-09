@@ -51,7 +51,7 @@ fn default_rows() -> u16 {
 /// enforced by `require_auth`; the session cookie rides the same-origin upgrade.
 pub async fn ws(
     State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(_user)): Extension<CurrentUser>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
     Query(params): Query<WsParams>,
     upgrade: WebSocketUpgrade,
 ) -> AppResult<impl IntoResponse> {
@@ -60,7 +60,9 @@ pub async fn ws(
     let cols = params.cols.clamp(1, 1000);
     let rows = params.rows.clamp(1, 1000);
     let session_id = params.session;
-    Ok(upgrade.on_upgrade(move |socket| handle_socket(state, socket, session_id, shell, cols, rows)))
+    let user_id = user.id;
+    Ok(upgrade
+        .on_upgrade(move |socket| handle_socket(state, socket, user_id, session_id, shell, cols, rows)))
 }
 
 #[derive(Deserialize)]
@@ -76,11 +78,15 @@ struct Resize {
 async fn handle_socket(
     state: Arc<AppState>,
     socket: WebSocket,
+    user_id: String,
     session_id: String,
     shell: Shell,
     cols: u16,
     rows: u16,
 ) {
+    // A fresh shell every connect — we never resurrect the old one (so a
+    // refresh can't re-run an in-flight or destructive command). Continuity
+    // comes from repainting saved scrollback below, not from a live process.
     let session = match TermSession::create(shell, cols, rows) {
         Ok(s) => s,
         Err(e) => {
@@ -91,8 +97,36 @@ async fn handle_socket(
     };
     state.terminal_sessions.lock().await.insert(session_id.clone(), session.clone());
 
+    // Subscribe before anything streams so the new shell's first prompt isn't
+    // missed between spawn and the send loop starting.
     let mut rx = session.subscribe();
+    let capture_rx = session.subscribe();
     let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Repaint the saved scrollback (display only — never written to the shell),
+    // then a "reconnected" banner, before the fresh shell's prompt arrives.
+    let saved =
+        db::terminal_output::restore_tail(&state.db, &user_id, &session_id).await.unwrap_or_default();
+    if !saved.is_empty() {
+        let _ = ws_tx.send(Message::Binary(saved)).await;
+        let when = chrono::Utc::now()
+            .with_timezone(&state.home_tz(&user_id).await)
+            .format("%a %-d %b %Y, %-I:%M %p");
+        let banner = format!("\r\n\x1b[90m── reconnected · {when} ──\x1b[0m\r\n");
+        let _ = ws_tx.send(Message::Binary(banner.into_bytes())).await;
+    }
+
+    // Batch live output into the durable, searchable archive. A Notify lets us
+    // flush and stop it cleanly when the socket closes.
+    let cap_notify = Arc::new(tokio::sync::Notify::new());
+    let capture_task = {
+        let db = state.db.clone();
+        let tid = session_id.clone();
+        let uid = user_id.clone();
+        let shell_name = shell.as_str();
+        let notify = cap_notify.clone();
+        tokio::spawn(capture_loop(db, tid, uid, shell_name, capture_rx, notify))
+    };
 
     // PTY output → WebSocket.
     let mut send_task = tokio::spawn(async move {
@@ -135,6 +169,63 @@ async fn handle_socket(
     state.terminal_sessions.lock().await.remove(&session_id);
     state.terminal_agent_history.lock().await.remove(&session_id);
     send_task.abort();
+    // Stop the capture task and let it write out whatever it has buffered.
+    cap_notify.notify_one();
+    let _ = capture_task.await;
+}
+
+/// Batch PTY output into the durable archive: accumulate chunks and flush on a
+/// size threshold or a timer, then a final flush when `notify` fires (socket
+/// closing). Keeps one DB write per ~batch rather than per chunk.
+async fn capture_loop(
+    db: sqlx::SqlitePool,
+    terminal_id: String,
+    user_id: String,
+    shell: &'static str,
+    mut rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    notify: Arc<tokio::sync::Notify>,
+) {
+    const FLUSH_BYTES: usize = 16 * 1024;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(750));
+    loop {
+        tokio::select! {
+            r = rx.recv() => match r {
+                Ok(chunk) => {
+                    buf.extend_from_slice(&chunk);
+                    if buf.len() >= FLUSH_BYTES {
+                        flush_output(&db, &terminal_id, &user_id, shell, &mut buf).await;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            },
+            _ = tick.tick() => flush_output(&db, &terminal_id, &user_id, shell, &mut buf).await,
+            _ = notify.notified() => break,
+        }
+    }
+    // Drain whatever is still buffered in the broadcast, then a final write.
+    while let Ok(chunk) = rx.try_recv() {
+        buf.extend_from_slice(&chunk);
+    }
+    flush_output(&db, &terminal_id, &user_id, shell, &mut buf).await;
+}
+
+/// Persist one batch: raw bytes for replay plus an ANSI-stripped copy for search.
+async fn flush_output(
+    db: &sqlx::SqlitePool,
+    terminal_id: &str,
+    user_id: &str,
+    shell: &str,
+    buf: &mut Vec<u8>,
+) {
+    if buf.is_empty() {
+        return;
+    }
+    let raw = std::mem::take(buf);
+    let stripped = strip_ansi_escapes::strip(&raw);
+    let text = String::from_utf8_lossy(&stripped).replace("\r\n", "\n");
+    let _ = db::terminal_output::append(db, terminal_id, user_id, shell, &raw, &text).await;
 }
 
 // ── Persistent command history ──────────────────────────────────────────────
@@ -173,6 +264,24 @@ pub async fn record_history(
         .await
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct OutputSearchQuery {
+    q: String,
+}
+
+/// GET /api/terminals/output/search?q= — full-text-ish search across the user's
+/// whole terminal scrollback archive (all sessions, across restarts).
+pub async fn search_output(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(q): Query<OutputSearchQuery>,
+) -> AppResult<Json<serde_json::Value>> {
+    let hits = db::terminal_output::search(&state.db, &user.id, &q.q, 100)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "hits": hits })))
 }
 
 // ── AI agent (multi-step, drives the shared shell, approve-each) ─────────────

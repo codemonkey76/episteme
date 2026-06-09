@@ -173,6 +173,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/terminals/ws", get(terminals::ws))
         .route("/api/terminals/history", get(terminals::list_history))
         .route("/api/terminals/history", post(terminals::record_history))
+        .route("/api/terminals/output/search", get(terminals::search_output))
         .route("/api/terminals/agent", post(terminals::agent))
         .route("/api/terminals/agent/decide", post(terminals::agent_decide))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));

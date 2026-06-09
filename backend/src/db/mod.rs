@@ -19,6 +19,7 @@ pub mod usage;
 pub mod invites;
 pub mod jobs;
 pub mod terminal_history;
+pub mod terminal_output;
 
 pub async fn init(url: &str) -> Result<SqlitePool> {
     let pool = SqlitePoolOptions::new()
@@ -108,6 +109,45 @@ mod tests {
 
         // Other users are isolated.
         assert_eq!(terminal_history::list(&pool, "u3", None, None, 100).await.unwrap().len(), 0);
+    }
+
+    /// Terminal output archive: tail replays in order; search is scoped to the
+    /// user, strips ANSI, and returns a context snippet.
+    #[tokio::test]
+    async fn terminal_output_restore_and_search() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+
+        terminal_output::append(&pool, "t1", "u1", "bash", b"first\n", "first\n").await.unwrap();
+        // Raw keeps the colour codes; the search text is the stripped form.
+        terminal_output::append(
+            &pool,
+            "t1",
+            "u1",
+            "bash",
+            b"\x1b[31mdocker ps\x1b[0m\nCONTAINER\n",
+            "docker ps\nCONTAINER\n",
+        )
+        .await
+        .unwrap();
+        terminal_output::append(&pool, "t2", "u1", "pwsh", b"other\n", "other\n").await.unwrap();
+        terminal_output::append(&pool, "t1", "u2", "bash", b"secret\n", "secret\n").await.unwrap();
+
+        // Tail replays this user's chunks for the terminal in order, raw bytes —
+        // and never another user's, even with the same terminal id.
+        let tail = terminal_output::restore_tail(&pool, "u1", "t1").await.unwrap();
+        assert_eq!(tail, b"first\n\x1b[31mdocker ps\x1b[0m\nCONTAINER\n");
+        let other = terminal_output::restore_tail(&pool, "u2", "t1").await.unwrap();
+        assert_eq!(other, b"secret\n");
+
+        // Search matches across the user's archive (ANSI-stripped), newest first.
+        let hits = terminal_output::search(&pool, "u1", "docker", 100).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].terminal_id, "t1");
+        assert!(hits[0].snippet.contains("docker ps"));
+
+        // Scoped to the user; other users' output is invisible.
+        assert_eq!(terminal_output::search(&pool, "u1", "secret", 100).await.unwrap().len(), 0);
+        assert_eq!(terminal_output::search(&pool, "u2", "secret", 100).await.unwrap().len(), 1);
     }
 
     /// Report share links: mint, public lookup by token, owner scoping, revoke.

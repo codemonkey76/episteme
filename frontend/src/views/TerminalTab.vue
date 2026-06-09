@@ -8,14 +8,16 @@ import * as api from '../api'
 
 type Shell = 'bash' | 'pwsh'
 
-const props = defineProps<{ active: boolean; sidebarWidth: number }>()
+const props = defineProps<{ active: boolean; sidebarWidth: number; tabId: string; initialShell: Shell }>()
 const emit = defineEmits<{
   (e: 'update:sidebarWidth', w: number): void
   (e: 'shell', s: Shell): void
 }>()
 
-const shell = ref<Shell>('bash')
-const sessionId = ref('')
+const shell = ref<Shell>(props.initialShell)
+// Stable across refresh: the tab's id is the terminal id, so the backend can
+// restore this terminal's saved scrollback on reconnect.
+const sessionId = ref(props.tabId)
 
 const rootEl = ref<HTMLElement>()
 const host = ref<HTMLElement>()
@@ -37,6 +39,11 @@ const findQuery = ref('')
 const showHistory = ref(false)
 const historyQuery = ref('')
 const historyItems = ref<api.TerminalHistoryEntry[]>([])
+// Archive (full scrollback) search across all sessions and restarts.
+const showLog = ref(false)
+const logQuery = ref('')
+const logHits = ref<api.TerminalOutputHit[]>([])
+const logBusy = ref(false)
 
 function sendResize() {
   if (!term || ws?.readyState !== WebSocket.OPEN) return
@@ -63,13 +70,16 @@ function showCopied() {
 function connect() {
   teardown()
   if (!host.value) return
-  const sid = crypto.randomUUID()
+  const sid = props.tabId
   sessionId.value = sid
 
   term = new Terminal({
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 13,
     cursorBlink: true,
+    // Hold a generous scrollback so restored history stays scrollable; the full
+    // archive lives in the backend and is reachable via the log search.
+    scrollback: 10000,
     theme: { background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#d4d4d4' },
   })
   fit = new FitAddon()
@@ -172,6 +182,25 @@ function useHistory(cmd: string) {
   showHistory.value = false
 }
 
+// ── Archive search (full scrollback, all sessions, across restarts) ──
+function toggleLog() {
+  showLog.value = !showLog.value
+  if (!showLog.value) { logHits.value = []; logQuery.value = '' }
+}
+async function searchLog() {
+  const q = logQuery.value.trim()
+  if (!q) { logHits.value = []; return }
+  logBusy.value = true
+  try {
+    logHits.value = (await api.terminals.searchOutput(q)).hits
+  } catch { logHits.value = [] }
+  logBusy.value = false
+}
+function fmtTime(iso: string): string {
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? iso : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 // ── AI sidebar agent ──
 type Entry =
   | { kind: 'user'; text: string }
@@ -256,6 +285,7 @@ function stop() { agentAbort?.abort() }
         </select>
         <button class="ml-auto text-[0.72rem] px-2 py-0.5 rounded hover:bg-[var(--c-222222)] hover:text-fg" :class="showFind ? 'bg-[var(--c-222222)] text-fg' : ''" @click="toggleFind">Find</button>
         <button class="text-[0.72rem] px-2 py-0.5 rounded hover:bg-[var(--c-222222)] hover:text-fg" :class="showHistory ? 'bg-[var(--c-222222)] text-fg' : ''" @click="toggleHistory">History</button>
+        <button class="text-[0.72rem] px-2 py-0.5 rounded hover:bg-[var(--c-222222)] hover:text-fg" :class="showLog ? 'bg-[var(--c-222222)] text-fg' : ''" title="Search the full scrollback archive" @click="toggleLog">Archive</button>
       </div>
 
       <div v-if="showFind" class="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--c-1e1e1e)] shrink-0">
@@ -285,6 +315,28 @@ function stop() { agentAbort?.abort() }
           :title="h.command"
           @click="useHistory(h.command)"
         >{{ h.command }}</button>
+      </div>
+
+      <div v-if="showLog" class="flex flex-col gap-1.5 px-2 py-1.5 border-b border-[var(--c-1e1e1e)] shrink-0 max-h-72 overflow-y-auto">
+        <input
+          v-model="logQuery"
+          placeholder="Search all terminal output (every session, across restarts)…"
+          class="text-[0.78rem] text-fg bg-[var(--c-141414)] border border-[var(--c-2a2a2a)] rounded px-2 py-1 focus:outline-none focus:border-[var(--c-3a3a3a)]"
+          @keydown.enter.prevent="searchLog"
+        />
+        <p v-if="logBusy" class="text-[0.72rem] text-[var(--c-585858)] px-1">Searching…</p>
+        <p v-else-if="logQuery && logHits.length === 0" class="text-[0.72rem] text-[var(--c-585858)] px-1">No matches in the archive.</p>
+        <div
+          v-for="(h, i) in logHits"
+          :key="i"
+          class="flex flex-col gap-0.5 px-2 py-1 rounded bg-[var(--c-141414)] border border-[var(--c-1e1e1e)]"
+        >
+          <div class="flex items-center gap-2 text-[0.66rem] text-[var(--c-707070)]">
+            <span class="text-[var(--c-6ecf8e)]">{{ h.shell }}</span>
+            <span>{{ fmtTime(h.created_at) }}</span>
+          </div>
+          <pre class="font-mono text-[0.72rem] text-[var(--c-b0b0b0)] whitespace-pre-wrap break-words m-0">{{ h.snippet }}</pre>
+        </div>
       </div>
 
       <div ref="host" class="flex-1 min-h-0 px-1.5 pt-1"></div>
