@@ -121,14 +121,15 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_update_ticket",
-            "description": "Change a helpdesk ticket's status and/or priority (e.g. mark resolved after logging time), and/or assign it to yourself. Set assign_to_me to true to assign the ticket to the connected agent (you).",
+            "description": "Change a helpdesk ticket's status and/or priority (e.g. mark resolved after logging time), assign it to yourself, and/or toggle its silent flag. Set assign_to_me to true to assign the ticket to the connected agent (you). Set silent to true to suppress all customer-facing email for this ticket, or false to re-enable customer email on a previously silent ticket.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "ticket_id": { "type": "integer" },
                     "status": { "type": "string", "enum": ["open", "in_progress", "pending_user", "resolved", "closed"] },
                     "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
-                    "assign_to_me": { "type": "boolean", "description": "Assign the ticket to the connected agent (yourself)." }
+                    "assign_to_me": { "type": "boolean", "description": "Assign the ticket to the connected agent (yourself)." },
+                    "silent": { "type": "boolean", "description": "Set true to suppress all customer-facing email for this ticket, or false to re-enable it." }
                 },
                 "required": ["ticket_id"]
             }
@@ -321,8 +322,11 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                     .ok_or_else(|| anyhow!("could not determine the connected agent's id"))?;
                 body.insert("assigned_agent_id".into(), json!(agent_id));
             }
+            if let Some(silent) = args["silent"].as_bool() {
+                body.insert("silent".into(), json!(silent));
+            }
             if body.is_empty() {
-                return Err(anyhow!("provide status, priority, and/or assign_to_me"));
+                return Err(anyhow!("provide status, priority, silent, and/or assign_to_me"));
             }
             let res = helpdesk::request(state, user_id, Method::PATCH, &format!("/tickets/{id}"), Some(&Value::Object(body))).await?;
             Ok(json!({ "updated": slim_detail(&res["data"]) }))
