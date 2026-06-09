@@ -66,7 +66,7 @@ onMounted(async () => {
 
   // Land at the latest message on (re)load. The extra frame ensures it happens
   // after the message list (incl. rendered markdown) has its final height.
-  await scrollToBottom()
+  await scrollToBottom(true)
   requestAnimationFrame(() => {
     if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
   })
@@ -155,7 +155,8 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
       : text,
     created_at: new Date().toISOString(),
   })
-  await scrollToBottom()
+  // Sending always jumps to the bottom (and re-arms auto-follow).
+  await scrollToBottom(true)
 
   abortController = new AbortController()
   logs.info('Chat', `Sending message via provider "${provider.value}"`)
@@ -213,9 +214,27 @@ function cancel() {
   sending.value = false
 }
 
-async function scrollToBottom() {
+// Auto-scroll only while the user is parked at (or near) the bottom. Scrolling
+// up during a stream releases this, so they can read back without being yanked
+// down by every token; scrolling back to the bottom re-arms it.
+const stickToBottom = ref(true)
+const STICK_THRESHOLD = 60
+
+function onMessagesScroll() {
+  const el = messagesEl.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_THRESHOLD
+}
+
+// `force` ignores the stick state — used on (re)load and when the user sends,
+// where landing at the bottom is always wanted.
+async function scrollToBottom(force = false) {
+  if (!force && !stickToBottom.value) return
   await nextTick()
-  if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+  if (messagesEl.value) {
+    messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+    stickToBottom.value = true
+  }
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -283,7 +302,7 @@ function toolCallLabels(content: string): string[] {
 
 <template>
   <div class="flex flex-col h-full">
-    <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" ref="messagesEl">
+    <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" ref="messagesEl" @scroll.passive="onMessagesScroll">
       <template v-for="msg in visibleMessages" :key="msg.id">
         <!-- Tool activity indicator -->
         <div v-if="msg.role === 'tool_call'" class="self-start flex items-center gap-2 text-[0.78rem] text-[var(--c-7a9ec0)] py-0.5">
