@@ -45,6 +45,25 @@ pub fn schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "helpdesk_create_user",
+            "description": "Create a new helpdesk customer contact (always role 'User') belonging to one or more clients. Resolve the client id(s) via helpdesk_list_clients first. Only name and email are required; mobile is optional (the user can add their own later). The new user is emailed an invite to set their password. Use this when asked to add a contact/person to a client.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "email": { "type": "string" },
+                    "mobile": { "type": "string", "description": "Optional mobile number." },
+                    "client_ids": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "description": "Ids of the client(s) this user belongs to (from helpdesk_list_clients). At least one."
+                    },
+                    "default_client_id": { "type": "integer", "description": "Optional primary client; defaults to the first of client_ids." }
+                },
+                "required": ["name", "email", "client_ids"]
+            }
+        }),
+        json!({
             "name": "helpdesk_create_ticket",
             "description": "Create a new helpdesk ticket. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
             "input_schema": {
@@ -123,6 +142,7 @@ pub fn handles(name: &str) -> bool {
         "helpdesk_list_tickets"
             | "helpdesk_get_ticket"
             | "helpdesk_list_clients"
+            | "helpdesk_create_user"
             | "helpdesk_create_ticket"
             | "helpdesk_reply_ticket"
             | "helpdesk_log_time"
@@ -174,6 +194,34 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             }
             let res = helpdesk::request(state, user_id, Method::GET, &path, None).await?;
             Ok(json!({ "clients": res["data"] }))
+        }
+        "helpdesk_create_user" => {
+            let client_ids: Vec<i64> = args["client_ids"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_i64()).collect())
+                .unwrap_or_default();
+            if client_ids.is_empty() {
+                return Err(anyhow!("client_ids must list at least one client"));
+            }
+            let mut body = serde_json::Map::new();
+            body.insert("name".into(), json!(args["name"].as_str().ok_or_else(|| anyhow!("name is required"))?));
+            body.insert("email".into(), json!(args["email"].as_str().ok_or_else(|| anyhow!("email is required"))?));
+            body.insert("client_ids".into(), json!(client_ids));
+            if let Some(m) = args["mobile"].as_str().filter(|s| !s.is_empty()) {
+                body.insert("mobile".into(), json!(m));
+            }
+            if let Some(d) = args["default_client_id"].as_i64() {
+                body.insert("default_client_id".into(), json!(d));
+            }
+            let res = helpdesk::request(state, user_id, Method::POST, "/users", Some(&Value::Object(body))).await?;
+            state
+                .log("helpdesk", "info", format!(
+                    "User created: {} <{}>",
+                    res["data"]["name"].as_str().unwrap_or("?"),
+                    res["data"]["email"].as_str().unwrap_or("")
+                ))
+                .await;
+            Ok(json!({ "created": res["data"] }))
         }
         "helpdesk_create_ticket" => {
             let body = json!({

@@ -54,6 +54,12 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
     { key: 'assign_to_me', label: 'Assign to me', kind: 'checkbox' },
   ],
+  helpdesk_create_user: [
+    { key: 'name', label: 'Name', kind: 'text' },
+    { key: 'email', label: 'Email', kind: 'text' },
+    { key: 'mobile', label: 'Mobile (optional)', kind: 'text' },
+    { key: 'client_ids', label: 'Client ids', kind: 'readonly' },
+  ],
   helpdesk_delete_time: [
     { key: 'ticket_id', label: 'Ticket', kind: 'readonly' },
     { key: 'time_entry_id', label: 'Time entry to delete', kind: 'readonly' },

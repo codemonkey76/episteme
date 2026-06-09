@@ -78,7 +78,8 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
 /// entries feed billing) start gated; everything else auto-executes.
 pub fn default_policy(name: &str) -> &'static str {
     match name {
-        "helpdesk_create_ticket"
+        "helpdesk_create_user"
+        | "helpdesk_create_ticket"
         | "helpdesk_reply_ticket"
         | "helpdesk_log_time"
         | "helpdesk_delete_time"
