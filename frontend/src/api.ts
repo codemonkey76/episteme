@@ -1178,11 +1178,12 @@ export const terminals = {
 }
 
 // Drive the terminal AI agent. Streams events: assistant text tokens, a
-// per-command approval request, command output, and done. The caller approves
-// via terminals.decide().
+// per-command "proposed" event (the agent typed the command into the live
+// terminal for the user to edit and run), command output, and done. The user
+// runs it by pressing Enter in the terminal; terminals.decide() skips it.
 export interface TerminalAgentHandlers {
   onToken: (text: string) => void
-  onApprove: (id: string, command: string) => void
+  onProposed: (id: string, command: string) => void
   onOutput: (command: string, exit: number | null) => void
   onError: (message: string) => void
   onDone: () => void
@@ -1218,7 +1219,7 @@ export async function streamTerminalAgent(
       let d: { type: string; text?: string; id?: string; command?: string; exit?: number | null; message?: string }
       try { d = JSON.parse(raw) } catch { continue }
       if (d.type === 'token' && d.text != null) handlers.onToken(d.text)
-      else if (d.type === 'approve' && d.id != null) handlers.onApprove(d.id, d.command ?? '')
+      else if (d.type === 'proposed' && d.id != null) handlers.onProposed(d.id, d.command ?? '')
       else if (d.type === 'output') handlers.onOutput(d.command ?? '', d.exit ?? null)
       else if (d.type === 'error') handlers.onError(d.message ?? 'error')
       else if (d.type === 'done') { handlers.onDone(); return }

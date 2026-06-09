@@ -188,27 +188,19 @@ pub struct AgentBody {
 /// Events streamed from the agent loop to the sidebar.
 enum AgentEvent {
     Token(String),
-    Approve { id: String, command: String },
+    /// The agent typed `command` into the live terminal prompt; the user can
+    /// edit it and press Enter to run, or Skip (referenced by `id`).
+    Proposed { id: String, command: String },
     Output { command: String, exit: Option<i32> },
     Error(String),
     Done,
 }
 
 const MAX_STEPS: usize = 25;
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
-/// Interactive sign-in (device-code) blocks while the user authenticates in a
-/// browser — give those commands a much longer capture window.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-
-/// Does this command start an interactive auth flow the user must complete?
-fn is_interactive_connect(cmd: &str) -> bool {
-    let c = cmd.to_ascii_lowercase();
-    c.contains("connect-exchangeonline")
-        || c.contains("connect-ippssession")
-        || c.contains("connect-mggraph")
-        || c.contains("connect-azaccount")
-}
+/// One window covering the whole typed-command flow: the user's editing time,
+/// any interactive sign-in (device-code auth blocks while they authenticate in
+/// a browser), and the command's own runtime.
+const TYPED_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub async fn agent(
     State(state): State<Arc<AppState>>,
@@ -239,8 +231,8 @@ pub async fn agent(
         let ev = rx.recv().await?;
         let data = match ev {
             AgentEvent::Token(text) => serde_json::json!({ "type": "token", "text": text }),
-            AgentEvent::Approve { id, command } => {
-                serde_json::json!({ "type": "approve", "id": id, "command": command })
+            AgentEvent::Proposed { id, command } => {
+                serde_json::json!({ "type": "proposed", "id": id, "command": command })
             }
             AgentEvent::Output { command, exit } => {
                 serde_json::json!({ "type": "output", "command": command, "exit": exit })
@@ -262,8 +254,9 @@ pub struct DecideBody {
     command: Option<String>,
 }
 
-/// POST /api/terminals/agent/decide — approve (with the possibly-edited command)
-/// or deny a command the agent is waiting on.
+/// POST /api/terminals/agent/decide — skip the command the agent typed into the
+/// prompt (the user runs it themselves by pressing Enter; this is the reject
+/// path). Any decision firing the channel cancels the pending capture.
 pub async fn agent_decide(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(_user)): Extension<CurrentUser>,
@@ -355,33 +348,30 @@ async fn run_agent(
             }
             let proposed = call.fn_arguments["command"].as_str().unwrap_or("").to_string();
 
-            // Approval pause.
+            // Type the command into the live prompt for the user to edit (or
+            // not) and run themselves, then capture whatever they actually run.
+            // A Skip signal (via agent_decide) lets them reject it instead.
             let id = uuid::Uuid::new_v4().to_string();
             let (dtx, drx) = oneshot::channel::<Option<String>>();
             state.pending_terminal_cmds.lock().await.insert(id.clone(), dtx);
-            let _ = ev.send(AgentEvent::Approve { id: id.clone(), command: proposed.clone() }).await;
+            let _ = ev.send(AgentEvent::Proposed { id: id.clone(), command: proposed.clone() }).await;
 
-            let decision = match tokio::time::timeout(DECISION_TIMEOUT, drx).await {
-                Ok(Ok(d)) => d,
-                _ => None,
-            };
-            state.pending_terminal_cmds.lock().await.remove(&id);
-
-            match decision {
-                Some(cmd) if !cmd.trim().is_empty() => {
-                    let timeout = if is_interactive_connect(&cmd) { CONNECT_TIMEOUT } else { COMMAND_TIMEOUT };
-                    let (output, exit) = session.run_and_capture(&cmd, timeout).await;
-                    let _ = ev.send(AgentEvent::Output { command: cmd.clone(), exit }).await;
+            tokio::select! {
+                (output, exit) = session.type_and_capture(&proposed, TYPED_TIMEOUT) => {
+                    let _ = ev.send(AgentEvent::Output { command: proposed.clone(), exit }).await;
                     let exit_str = exit.map(|e| e.to_string()).unwrap_or_else(|| "unknown (did not finish)".to_string());
                     history.push(tool_result(
                         &call.call_id,
                         &format!("exit code: {exit_str}\n\noutput:\n{output}"),
                     ));
                 }
-                _ => {
-                    history.push(tool_result(&call.call_id, "user denied this command"));
+                _ = drx => {
+                    // User skipped: clear the typed-but-unrun line.
+                    session.cancel_line();
+                    history.push(tool_result(&call.call_id, "user skipped this command"));
                 }
             }
+            state.pending_terminal_cmds.lock().await.remove(&id);
         }
     }
 

@@ -153,7 +153,9 @@ type Entry =
 const entries = ref<Entry[]>([])
 const input = ref('')
 const busy = ref(false)
-const approval = ref<{ id: string; command: string } | null>(null)
+// A command the agent has typed into the live terminal, awaiting the user to
+// edit/run it (press Enter in the terminal) or Skip it here.
+const proposed = ref<{ id: string; command: string } | null>(null)
 const sidebarEl = ref<HTMLElement>()
 let agentAbort: AbortController | null = null
 let asstIdx: number | null = null
@@ -182,8 +184,15 @@ async function ask() {
         if (e.kind === 'assistant') e.text += t
         scrollSidebar()
       },
-      onApprove: (id, command) => { approval.value = { id, command }; asstIdx = null; scrollSidebar() },
-      onOutput: (command, exit) => { entries.value.push({ kind: 'output', command, exit }); asstIdx = null; scrollSidebar() },
+      onProposed: (id, command) => {
+        // The backend already typed the command into the terminal; focus it so
+        // the user can edit and press Enter right away.
+        proposed.value = { id, command }
+        asstIdx = null
+        term?.focus()
+        scrollSidebar()
+      },
+      onOutput: (command, exit) => { proposed.value = null; entries.value.push({ kind: 'output', command, exit }); asstIdx = null; scrollSidebar() },
       onError: (m) => { entries.value.push({ kind: 'assistant', text: '⚠ ' + m }); asstIdx = null },
       onDone: () => {},
     }, undefined, agentAbort.signal)
@@ -193,18 +202,15 @@ async function ask() {
     }
   }
   busy.value = false
-  approval.value = null
+  proposed.value = null
 }
 
-function approve() {
-  if (!approval.value) return
-  api.terminals.decide(approval.value.id, true, approval.value.command).catch(() => {})
-  approval.value = null
-}
-function deny() {
-  if (!approval.value) return
-  api.terminals.decide(approval.value.id, false).catch(() => {})
-  approval.value = null
+// Reject a command the agent typed into the terminal — the backend clears the
+// prompt line and tells the agent to move on.
+function skip() {
+  if (!proposed.value) return
+  api.terminals.decide(proposed.value.id, false).catch(() => {})
+  proposed.value = null
 }
 function stop() { agentAbort?.abort() }
 </script>
@@ -271,9 +277,9 @@ function stop() { agentAbort?.abort() }
       </div>
 
       <div ref="sidebarEl" class="flex-1 overflow-y-auto p-2.5 flex flex-col gap-2.5 text-[0.8rem]">
-        <p v-if="entries.length === 0 && !approval" class="text-[var(--c-707070)] leading-relaxed">
-          Ask me to do something in this {{ shell === 'pwsh' ? 'PowerShell' : 'bash' }} shell. I'll run commands here
-          (you approve each one) and read the output to decide the next step.
+        <p v-if="entries.length === 0 && !proposed" class="text-[var(--c-707070)] leading-relaxed">
+          Ask me to do something in this {{ shell === 'pwsh' ? 'PowerShell' : 'bash' }} shell. I'll type each command
+          into the terminal for you to edit (or not) and run by pressing Enter, then read the output to decide the next step.
         </p>
 
         <template v-for="(e, i) in entries" :key="i">
@@ -285,16 +291,12 @@ function stop() { agentAbort?.abort() }
           </div>
         </template>
 
-        <div v-if="approval" class="self-start w-full flex flex-col gap-2 bg-[var(--c-1a1610)] border border-[var(--c-4a3a1a)] rounded-lg p-2.5">
-          <div class="text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-e0b060)]">Run this command?</div>
-          <textarea
-            v-model="approval.command"
-            rows="2"
-            class="font-mono text-[0.78rem] text-[var(--c-d4d4d4)] bg-[#0d0d0d] border border-[var(--c-2a2a2a)] rounded p-2 resize-y focus:outline-none focus:border-[var(--c-3a3a3a)]"
-          />
+        <div v-if="proposed" class="self-start w-full flex flex-col gap-2 bg-[var(--c-1a1610)] border border-[var(--c-4a3a1a)] rounded-lg p-2.5">
+          <div class="text-[0.7rem] uppercase tracking-[0.05em] text-[var(--c-e0b060)]">Typed into the terminal — edit if needed, press Enter to run</div>
+          <div class="font-mono text-[0.78rem] text-[var(--c-d4d4d4)] bg-[#0d0d0d] border border-[var(--c-2a2a2a)] rounded p-2 break-words whitespace-pre-wrap">{{ proposed.command }}</div>
           <div class="flex items-center gap-2">
-            <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs cursor-pointer hover:bg-[var(--c-254a35)]" @click="approve">Approve &amp; run</button>
-            <button class="bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded px-3 py-1 text-xs cursor-pointer hover:bg-[var(--c-4a2525)]" @click="deny">Deny</button>
+            <button class="bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-3 py-1 text-xs cursor-pointer hover:bg-[var(--c-254a35)]" @click="term?.focus()">Go to terminal</button>
+            <button class="bg-[var(--c-3a1e1e)] text-[var(--c-df7a7a)] border border-[var(--c-5a2a2a)] rounded px-3 py-1 text-xs cursor-pointer hover:bg-[var(--c-4a2525)]" @click="skip">Skip</button>
           </div>
         </div>
       </div>

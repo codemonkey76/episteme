@@ -162,15 +162,33 @@ impl TermSession {
         }
     }
 
-    /// Run `command` in the shared shell (visible to the user), capturing its
-    /// output and exit code via the OSC 633 markers. Returns the cleaned output
-    /// and the exit code (None if the command didn't finish before `timeout`,
-    /// e.g. an interactive program).
-    pub async fn run_and_capture(&self, command: &str, timeout: Duration) -> (String, Option<i32>) {
+    /// Type `command` into the shell exactly as given, WITHOUT a trailing
+    /// newline, so it lands at the prompt for the user to edit (or not) and run
+    /// themselves. Then capture whatever they actually run — once they press
+    /// Enter — via the same OSC 633 markers. The timeout therefore spans the
+    /// user's editing time plus the command's own runtime.
+    pub async fn type_and_capture(&self, command: &str, timeout: Duration) -> (String, Option<i32>) {
         let _guard = self.cmd_lock.lock().await;
-        let mut rx = self.subscribe();
-        self.write(format!("{command}\n").as_bytes());
+        let rx = self.subscribe();
+        self.write(command.as_bytes());
+        self.capture(rx, command, timeout).await
+    }
 
+    /// Send Ctrl+C to clear a typed-but-unrun command line (used when the user
+    /// skips a command the agent typed into the prompt).
+    pub fn cancel_line(&self) {
+        self.write(&[0x03]);
+    }
+
+    /// Accumulate PTY output from `rx` until the command's `OSC 633;D` done
+    /// marker (carrying the exit code) appears or `timeout` elapses. Subscribe
+    /// before writing the command so no early output is missed.
+    async fn capture(
+        &self,
+        mut rx: broadcast::Receiver<Vec<u8>>,
+        command: &str,
+        timeout: Duration,
+    ) -> (String, Option<i32>) {
         let mut raw: Vec<u8> = Vec::new();
         let mut exit: Option<i32> = None;
         let deadline = tokio::time::Instant::now() + timeout;
