@@ -1142,3 +1142,36 @@ export const settings = {
     }
   },
 }
+
+// Terminals (PTY shells + searchable command history + AI suggestion)
+export interface TerminalHistoryEntry {
+  id: string
+  user_id: string
+  shell: string
+  command: string
+  created_at: string
+}
+export const terminals = {
+  history: (shell?: string, search?: string) => {
+    const p = new URLSearchParams()
+    if (shell) p.set('shell', shell)
+    if (search) p.set('search', search)
+    const qs = p.toString()
+    return json<{ history: TerminalHistoryEntry[] }>(`/terminals/history${qs ? '?' + qs : ''}`)
+  },
+  record: (shell: string, command: string) =>
+    fetch(BASE + '/terminals/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shell, command }),
+    }),
+  suggest: (shell: string, request: string, context?: string, provider?: string) =>
+    json<{ command: string }>('/terminals/suggest', {
+      method: 'POST',
+      body: JSON.stringify({ shell, request, context, provider }),
+    }),
+  wsUrl: (shell: string, cols: number, rows: number) => {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${proto}//${location.host}${BASE}/terminals/ws?shell=${shell}&cols=${cols}&rows=${rows}`
+  },
+}
