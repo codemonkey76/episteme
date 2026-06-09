@@ -195,7 +195,19 @@ enum AgentEvent {
 
 const MAX_STEPS: usize = 25;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// Interactive sign-in (device-code) blocks while the user authenticates in a
+/// browser — give those commands a much longer capture window.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DECISION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Does this command start an interactive auth flow the user must complete?
+fn is_interactive_connect(cmd: &str) -> bool {
+    let c = cmd.to_ascii_lowercase();
+    c.contains("connect-exchangeonline")
+        || c.contains("connect-ippssession")
+        || c.contains("connect-mggraph")
+        || c.contains("connect-azaccount")
+}
 
 pub async fn agent(
     State(state): State<Arc<AppState>>,
@@ -283,16 +295,12 @@ async fn run_agent(
     ev: mpsc::Sender<AgentEvent>,
 ) {
     let shell_name = match session.shell() {
-        Shell::Pwsh => "PowerShell (pwsh)",
+        Shell::Pwsh => "PowerShell",
         Shell::Bash => "bash",
     };
-    let system = format!(
-        "You are an assistant operating a {shell_name} shell on Linux (Debian) as root inside a \
-container. To investigate or act, call run_command with ONE command at a time, then read its \
-output and exit code before deciding the next step. Prefer non-interactive commands; never launch \
-pagers, editors, or programs that wait for input. When you have what you need, reply with a concise \
-answer in plain text instead of calling the tool."
-    );
+    let system = crate::prompts::get(&state.db, "terminal_agent")
+        .await
+        .replace("{shell}", shell_name);
     let mut history = vec![
         ChatMessage { role: "system".to_string(), content: serde_json::Value::String(system) },
         ChatMessage { role: "user".to_string(), content: serde_json::Value::String(message) },
@@ -340,7 +348,8 @@ answer in plain text instead of calling the tool."
 
             match decision {
                 Some(cmd) if !cmd.trim().is_empty() => {
-                    let (output, exit) = session.run_and_capture(&cmd, COMMAND_TIMEOUT).await;
+                    let timeout = if is_interactive_connect(&cmd) { CONNECT_TIMEOUT } else { COMMAND_TIMEOUT };
+                    let (output, exit) = session.run_and_capture(&cmd, timeout).await;
                     let _ = ev.send(AgentEvent::Output { command: cmd.clone(), exit }).await;
                     let exit_str = exit.map(|e| e.to_string()).unwrap_or_else(|| "unknown (did not finish)".to_string());
                     history.push(tool_result(

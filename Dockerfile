@@ -53,6 +53,12 @@ RUN curl -fsSL -o /tmp/pwsh.tar.gz \
     ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh && \
     rm /tmp/pwsh.tar.gz
 
+# Exchange Online / Security & Compliance PowerShell for O365 admin from the
+# terminal (device-code interactive auth). Installed AllUsers so spawned shells
+# see it. Single-quoted so the shell doesn't touch pwsh's syntax; version pinned
+# for reproducible builds.
+RUN pwsh -NoLogo -NonInteractive -Command 'Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name ExchangeOnlineManagement -RequiredVersion 3.5.1 -Scope AllUsers -Force -AllowClobber'
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 # Keep package caches on the data volume so npx/uvx MCP servers don't

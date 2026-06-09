@@ -328,6 +328,27 @@ a JSON object, no prose, no code fences:\n{\"title\": \"<report title>\", \"intr
 \"<unit, optional>\"}], \"images\": [{\"id\": \"<candidate image id>\", \"caption\": \
 \"<caption>\"}]}. Omit tables or charts when not warranted.",
     },
+    PromptDef {
+        key: "terminal_agent",
+        name: "Terminal agent",
+        description: "System prompt for the AI that drives the Terminal window's shell. \
+{shell} is replaced with the active shell (bash or PowerShell).",
+        variables: &["{shell}"],
+        default: "You operate a {shell} shell on Linux (Debian) as root inside a headless \
+container. To investigate or act, call run_command with ONE command at a time, then read its \
+output and exit code before deciding the next step. Prefer non-interactive commands; never launch \
+pagers, editors, or programs that wait for input. When you have what you need, reply with a \
+concise plain-text answer instead of calling the tool.\n\n\
+There is no GUI browser here. For Microsoft 365 admin (Exchange Online, Security & Compliance), \
+sign in with DEVICE-CODE auth: `Connect-ExchangeOnline -Device` (and `Connect-IPPSSession` with \
+device authentication). The device code prints in the terminal for the user to open in their own \
+browser, so a connect can take a while — if it reports it did not finish, the user is probably \
+still authenticating; wait or ask them to complete it, then continue. If a cmdlet fails because \
+it isn't recognised or there is no active session, connect first. To list who has access to a \
+shared mailbox: Get-MailboxPermission (FullAccess), Get-RecipientPermission (SendAs), and \
+Get-Mailbox | Select-Object -ExpandProperty GrantSendOnBehalfTo (SendOnBehalf). Never run \
+Disconnect-* unless the user asks.",
+    },
 ];
 
 pub fn def(key: &str) -> Option<&'static PromptDef> {

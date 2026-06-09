@@ -28,3 +28,15 @@ function global:prompt {
         "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
     }
 }
+
+# Output-start marker (OSC 633;C) so the AI agent captures clean command output.
+# PowerShell has no PS0 hook, so emit it from a PSReadLine Enter handler right
+# before the line runs — keeps PSReadLine for interactive use, unlike disabling
+# it. (bash uses PS0 for the same boundary.)
+try {
+    Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {
+        [Console]::Write("`e]633;C`a")
+        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+    }
+} catch {}
+
