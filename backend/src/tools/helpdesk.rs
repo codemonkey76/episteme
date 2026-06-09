@@ -87,6 +87,18 @@ pub fn schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "helpdesk_delete_time",
+            "description": "Delete a logged time entry from a ticket. Get the time entry's id (and its ticket_id) from helpdesk_get_ticket first. Locked (invoiced) entries cannot be deleted. This is permanent.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": { "type": "integer" },
+                    "time_entry_id": { "type": "integer", "description": "The id of the time entry to delete (from helpdesk_get_ticket)." }
+                },
+                "required": ["ticket_id", "time_entry_id"]
+            }
+        }),
+        json!({
             "name": "helpdesk_update_ticket",
             "description": "Change a helpdesk ticket's status and/or priority (e.g. mark resolved after logging time).",
             "input_schema": {
@@ -111,6 +123,7 @@ pub fn handles(name: &str) -> bool {
             | "helpdesk_create_ticket"
             | "helpdesk_reply_ticket"
             | "helpdesk_log_time"
+            | "helpdesk_delete_time"
             | "helpdesk_update_ticket"
     )
 }
@@ -221,6 +234,24 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 .log("helpdesk", "info", format!("Logged {minutes}m against ticket #{id}"))
                 .await;
             Ok(json!({ "time_entry": res["data"] }))
+        }
+        "helpdesk_delete_time" => {
+            let id = ticket_id(&args)?;
+            let entry_id = args["time_entry_id"]
+                .as_i64()
+                .ok_or_else(|| anyhow!("time_entry_id is required"))?;
+            helpdesk::request(
+                state,
+                user_id,
+                Method::DELETE,
+                &format!("/tickets/{id}/time-entries/{entry_id}"),
+                None,
+            )
+            .await?;
+            state
+                .log("helpdesk", "info", format!("Deleted time entry #{entry_id} from ticket #{id}"))
+                .await;
+            Ok(json!({ "deleted": true, "time_entry_id": entry_id }))
         }
         "helpdesk_update_ticket" => {
             let id = ticket_id(&args)?;

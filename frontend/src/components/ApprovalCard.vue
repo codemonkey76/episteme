@@ -52,6 +52,10 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'status', label: 'Status', kind: 'select', options: ['open', 'in_progress', 'pending_user', 'resolved', 'closed'] },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
   ],
+  helpdesk_delete_time: [
+    { key: 'ticket_id', label: 'Ticket', kind: 'readonly' },
+    { key: 'time_entry_id', label: 'Time entry to delete', kind: 'readonly' },
+  ],
 }
 
 const fields = FIELD_SPECS[props.toolName]

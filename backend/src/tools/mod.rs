@@ -81,6 +81,7 @@ pub fn default_policy(name: &str) -> &'static str {
         "helpdesk_create_ticket"
         | "helpdesk_reply_ticket"
         | "helpdesk_log_time"
+        | "helpdesk_delete_time"
         | "helpdesk_update_ticket" => "ask",
         _ => "auto",
     }
