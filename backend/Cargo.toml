@@ -71,5 +71,8 @@ totp-rs = { version = "5.7.1", features = ["gen_secret", "otpauth"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 sha2 = "0.11.0"
 
+# Interactive terminals (PTY for the bash/PowerShell windows)
+portable-pty = "0.8"
+
 [dev-dependencies]
 tokio-test = "0.4"

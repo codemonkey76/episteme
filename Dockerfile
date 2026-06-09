@@ -39,8 +39,19 @@ RUN touch backend/src/main.rs && cargo build --release
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+    apt-get install -y --no-install-recommends ca-certificates libssl3 curl libicu72 && \
     rm -rf /var/lib/apt/lists/*
+
+# PowerShell for the in-app PowerShell terminal (bash ships with the base image).
+# Pinned tarball install; x64 to match the amd64 runtime.
+ARG PWSH_VERSION=7.4.6
+RUN curl -fsSL -o /tmp/pwsh.tar.gz \
+      "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" && \
+    mkdir -p /opt/microsoft/powershell/7 && \
+    tar zxf /tmp/pwsh.tar.gz -C /opt/microsoft/powershell/7 && \
+    chmod +x /opt/microsoft/powershell/7/pwsh && \
+    ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh && \
+    rm /tmp/pwsh.tar.gz
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 

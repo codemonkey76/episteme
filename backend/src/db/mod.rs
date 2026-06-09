@@ -18,6 +18,7 @@ pub mod suggestions;
 pub mod usage;
 pub mod invites;
 pub mod jobs;
+pub mod terminal_history;
 
 pub async fn init(url: &str) -> Result<SqlitePool> {
     let pool = SqlitePoolOptions::new()
@@ -75,6 +76,38 @@ mod tests {
         // Idempotence guard data: a decided action keeps its status.
         let decided = pending_actions::get(&pool, &a.id).await.unwrap().unwrap();
         assert_eq!(decided.status, "approved");
+    }
+
+    /// Terminal command history: insert with blank/dup suppression, plus shell
+    /// and substring search scoping.
+    #[tokio::test]
+    async fn terminal_history_insert_and_search() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+
+        terminal_history::insert(&pool, "u1", "bash", "ls -la").await.unwrap();
+        // Blank and an immediate duplicate are both ignored.
+        terminal_history::insert(&pool, "u1", "bash", "   ").await.unwrap();
+        terminal_history::insert(&pool, "u1", "bash", "ls -la").await.unwrap();
+        terminal_history::insert(&pool, "u1", "bash", "docker ps").await.unwrap();
+        terminal_history::insert(&pool, "u1", "pwsh", "Get-ChildItem").await.unwrap();
+        terminal_history::insert(&pool, "u2", "bash", "whoami").await.unwrap();
+
+        // Scoped to the user; newest first; dup collapsed.
+        let all = terminal_history::list(&pool, "u1", None, None, 100).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].command, "Get-ChildItem");
+
+        // Shell filter.
+        let bash = terminal_history::list(&pool, "u1", Some("bash"), None, 100).await.unwrap();
+        assert_eq!(bash.len(), 2);
+
+        // Substring search.
+        let found = terminal_history::list(&pool, "u1", None, Some("docker"), 100).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].command, "docker ps");
+
+        // Other users are isolated.
+        assert_eq!(terminal_history::list(&pool, "u3", None, None, 100).await.unwrap().len(), 0);
     }
 
     /// Report share links: mint, public lookup by token, owner scoping, revoke.

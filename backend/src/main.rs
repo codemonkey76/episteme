@@ -22,6 +22,7 @@ mod agent;
 mod routes;
 mod scheduler;
 mod state;
+mod terminal;
 
 use state::AppState;
 

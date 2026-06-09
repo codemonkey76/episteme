@@ -30,6 +30,7 @@ mod suggestions;
 mod users;
 mod sessions;
 mod settings;
+mod terminals;
 
 pub fn router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
@@ -169,6 +170,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/calendar/events", get(calendar::list_events))
         .route("/api/calendar/events", post(calendar::create_event))
         .route("/api/calendar/events/:id", delete(calendar::delete_event))
+        .route("/api/terminals/ws", get(terminals::ws))
+        .route("/api/terminals/history", get(terminals::list_history))
+        .route("/api/terminals/history", post(terminals::record_history))
+        .route("/api/terminals/suggest", post(terminals::suggest))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     // Admin-only management routes (auth + role check).
