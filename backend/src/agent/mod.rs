@@ -148,10 +148,13 @@ pub async fn run_turn(
             let hist = history.clone();
             let schemas = tool_schemas.clone();
             tokio::spawn(async move {
-                // think=false: don't force reasoning models (e.g. qwen3) into a
-                // long internal think trace before answering — it isn't streamed
-                // back, so chat just appears to hang. Plain replies stream immediately.
-                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, false, chunk_tx).await {
+                // think=true: let reasoning models (e.g. qwen3) reason before
+                // answering. With thinking disabled, qwen3 reliably narrates its
+                // plan as a text-only message and stops without calling the tool
+                // — the user then has to say "continue". Reasoning fixes that at
+                // the cost of a brief pause (the think trace isn't streamed) before
+                // the visible reply.
+                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, true, chunk_tx).await {
                     tracing::error!("model_router error: {e}");
                 }
             });
