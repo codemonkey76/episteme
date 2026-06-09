@@ -14,6 +14,8 @@ pub enum AgentEvent {
     Token(String),
     /// A native tool is about to run — surfaced in the chat UI.
     ToolCall { name: String },
+    /// The session was auto-named from its first exchange; update the UI live.
+    Title(String),
     Done,
     AwaitingApproval { action_id: String, tool_name: String, tool_args: Value },
 }
@@ -181,7 +183,13 @@ pub async fn run_turn(
 
         match tool_calls_from_model {
             None => {
-                // Model returned a final text answer.
+                // Model returned a final text answer. Auto-name a still-default
+                // session from this first exchange before closing the turn.
+                if let Some(title) =
+                    maybe_autoname(&state, &user_id, &session_id, &provider, &user_text, &assistant_text).await
+                {
+                    let _ = tx.send(AgentEvent::Title(title)).await;
+                }
                 tx.send(AgentEvent::Done).await?;
                 // Persist this iteration's reply so it survives a page refresh
                 // (earlier iterations' text was already persisted alongside
@@ -378,6 +386,64 @@ pub async fn run_turn(
     }
 }
 
+/// Default title given to a fresh session (mirrors `db::sessions`/migration
+/// 001). Only sessions still carrying this get auto-named.
+const DEFAULT_TITLE: &str = "New conversation";
+
+/// Name a still-default session from its first exchange, returning the new
+/// title (also persisted). Best-effort: any failure leaves the default title.
+async fn maybe_autoname(
+    state: &Arc<AppState>,
+    user_id: &str,
+    session_id: &str,
+    provider: &ProviderConfig,
+    user_text: &str,
+    assistant_text: &str,
+) -> Option<String> {
+    if user_text.trim().is_empty() {
+        return None;
+    }
+    // Only name once — never override a user rename or a job/scheduled title.
+    let session = db::sessions::get(&state.db, user_id, session_id).await.ok().flatten()?;
+    if session.title != DEFAULT_TITLE {
+        return None;
+    }
+
+    let system = crate::prompts::get(&state.db, "chat_title").await;
+    let user = format!("User: {user_text}\n\nAssistant: {assistant_text}");
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user) },
+    ];
+    let (raw, used) = crate::model_router::ModelRouter::complete_with_usage(provider, history)
+        .await
+        .ok()?;
+    db::usage::record(&state.db, user_id, provider, "title", used).await;
+
+    let title = clean_title(&raw);
+    if title.is_empty() {
+        return None;
+    }
+    db::sessions::update_title(&state.db, user_id, session_id, &title).await.ok()?;
+    Some(title)
+}
+
+/// Tidy a model-generated title: first non-empty line, strip wrapping quotes and
+/// trailing punctuation, and cap the length so the sidebar stays readable.
+fn clean_title(raw: &str) -> String {
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    // Trim wrapping quotes/backticks and stray punctuation from both ends in one
+    // pass (so `"Title".` → `Title`).
+    let line = line.trim_matches(|c: char| c.is_whitespace() || "\"'`.!?,:;".contains(c));
+    // Cap at ~8 words / 60 chars so long outputs don't bloat the list.
+    let capped: String = line.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+    if capped.chars().count() > 60 {
+        capped.chars().take(60).collect::<String>().trim_end().to_string()
+    } else {
+        capped
+    }
+}
+
 /// Execute one tool call — native registry or MCP — returning the raw result.
 /// Shared by the agent loop and the approval-resume path, so a parked call
 /// executes exactly the way a live one would have.
@@ -399,5 +465,24 @@ pub async fn execute_tool(
     match peer {
         Ok((peer, tool)) => crate::mcp_host::call_on_peer(&peer, &tool, args).await,
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_title;
+
+    #[test]
+    fn clean_title_strips_quotes_punctuation_and_caps() {
+        assert_eq!(clean_title("\"Invoice Dispute With Acme\"."), "Invoice Dispute With Acme");
+        assert_eq!(clean_title("  `Graph API Permissions`  "), "Graph API Permissions");
+        // Trailing punctuation trimmed; first non-empty line wins.
+        assert_eq!(clean_title("Renew Vehicle Registration!\n(here you go)"), "Renew Vehicle Registration");
+        // Word cap (8) keeps long outputs in check.
+        assert_eq!(
+            clean_title("one two three four five six seven eight nine ten"),
+            "one two three four five six seven eight"
+        );
+        assert_eq!(clean_title(""), "");
     }
 }

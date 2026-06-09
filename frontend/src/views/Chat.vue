@@ -195,6 +195,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
         if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
       },
+      (title) => { if (store.activeSession) store.setSessionTitle(store.activeSession.id, title) },
       abortController.signal,
       images,
     )

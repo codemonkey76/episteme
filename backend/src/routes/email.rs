@@ -1660,6 +1660,8 @@ pub async fn advise(
                 .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
             AgentEvent::ToolCall { name } => Event::default()
                 .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
+            AgentEvent::Title(title) => Event::default()
+                .data(serde_json::json!({ "type": "title", "title": title }).to_string()),
             AgentEvent::Done => Event::default().data(serde_json::json!({ "type": "done" }).to_string()),
             AgentEvent::AwaitingApproval { action_id, tool_name, tool_args } => Event::default().data(
                 serde_json::json!({

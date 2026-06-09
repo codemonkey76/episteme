@@ -394,6 +394,17 @@ pleasantries\"). Do not simply restate one memory.\n\n\
 Respond with ONLY a JSON array, no prose, no code fences. Each element: {\"content\": \"<lesson>\"}. \
 Only include lessons that genuinely generalize; if nothing does, return [].",
     },
+    PromptDef {
+        key: "chat_title",
+        name: "Chat title",
+        description: "Names a new chat from its first exchange (supplied as the user message), \
+replacing the default \"New conversation\". Must keep instructing the model to answer with ONLY \
+the short title.",
+        variables: &[],
+        default: "Write a very short title (3–6 words) summarising what this conversation is \
+about, based on the first exchange below. Use Title Case. No quotes, no surrounding text, no \
+trailing punctuation, no emoji. Respond with ONLY the title.",
+    },
 ];
 
 pub fn def(key: &str) -> Option<&'static PromptDef> {

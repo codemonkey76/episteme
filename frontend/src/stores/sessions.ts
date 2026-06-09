@@ -31,6 +31,13 @@ export const useSessionsStore = defineStore('sessions', () => {
     messages.value.push(msg)
   }
 
+  // Apply an auto-generated (or renamed) title to the active session and the list.
+  function setSessionTitle(id: string, title: string) {
+    if (activeSession.value?.id === id) activeSession.value.title = title
+    const s = sessions.value.find(x => x.id === id)
+    if (s) s.title = title
+  }
+
   // Display-only indicator that the AI ran a tool (not persisted).
   function appendToolCall(name: string) {
     messages.value.push({
@@ -57,5 +64,5 @@ export const useSessionsStore = defineStore('sessions', () => {
     }
   }
 
-  return { sessions, activeSession, messages, fetchSessions, createSession, loadSession, appendMessage, appendToolCall, appendToken }
+  return { sessions, activeSession, messages, fetchSessions, createSession, loadSession, appendMessage, setSessionTitle, appendToolCall, appendToken }
 })

@@ -120,6 +120,7 @@ export async function streamChat(
   onDone: () => void,
   onApproval: (actionId: string, toolName: string, toolArgs: unknown) => void,
   onTool: (name: string) => void,
+  onTitle: (title: string) => void,
   signal?: AbortSignal,
   images?: ChatImage[],
 ): Promise<void> {
@@ -149,13 +150,15 @@ export async function streamChat(
       const raw = line.slice(6).trim()
       if (!raw || raw === '[DONE]') continue
 
-      let data: { type: string; text?: string; name?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
+      let data: { type: string; text?: string; name?: string; title?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
       try { data = JSON.parse(raw) } catch { continue }
 
       if (data.type === 'token' && data.text != null) {
         onToken(data.text)
       } else if (data.type === 'tool' && data.name) {
         onTool(data.name)
+      } else if (data.type === 'title' && data.title) {
+        onTitle(data.title)
       } else if (data.type === 'done') {
         onDone()
         return
