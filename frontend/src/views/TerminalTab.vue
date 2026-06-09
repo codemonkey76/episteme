@@ -26,6 +26,11 @@ let ws: WebSocket | null = null
 let ro: ResizeObserver | null = null
 const enc = new TextEncoder()
 
+// Auto-copy terminal selections, with a brief "Copied" toast.
+const copied = ref(false)
+let copyDebounce: ReturnType<typeof setTimeout> | null = null
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
 // Terminal toolbar state
 const showFind = ref(false)
 const findQuery = ref('')
@@ -43,6 +48,16 @@ function teardown() {
   ws?.close(); ws = null
   term?.dispose(); term = null
   fit = null; search = null
+  if (copyDebounce) { clearTimeout(copyDebounce); copyDebounce = null }
+  if (copiedTimer) { clearTimeout(copiedTimer); copiedTimer = null }
+  copied.value = false
+}
+
+// Flash the "Copied to clipboard" toast for ~1s.
+function showCopied() {
+  copied.value = true
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => { copied.value = false }, 1000)
 }
 
 function connect() {
@@ -82,6 +97,18 @@ function connect() {
 
   term.onData((d) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(enc.encode(d))
+  })
+
+  // Auto-copy whatever the user selects. Debounced so a drag-select copies
+  // once it settles, not on every intermediate change; clearing the selection
+  // (empty) is ignored.
+  term.onSelectionChange(() => {
+    if (copyDebounce) clearTimeout(copyDebounce)
+    copyDebounce = setTimeout(() => {
+      const sel = term?.getSelection() ?? ''
+      if (!sel) return
+      navigator.clipboard?.writeText(sel).then(showCopied).catch(() => {})
+    }, 120)
   })
 
   ro = new ResizeObserver(() => {
@@ -218,7 +245,7 @@ function stop() { agentAbort?.abort() }
 <template>
   <div ref="rootEl" class="flex h-full w-full bg-[#0d0d0d] overflow-hidden">
     <!-- Terminal column -->
-    <div class="flex flex-col flex-1 min-w-0">
+    <div class="flex flex-col flex-1 min-w-0 relative">
       <div class="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--c-1e1e1e)] shrink-0 text-[var(--c-808080)]">
         <select
           v-model="shell"
@@ -261,6 +288,16 @@ function stop() { agentAbort?.abort() }
       </div>
 
       <div ref="host" class="flex-1 min-h-0 px-1.5 pt-1"></div>
+
+      <transition
+        enter-active-class="transition-opacity duration-150" enter-from-class="opacity-0"
+        leave-active-class="transition-opacity duration-300" leave-to-class="opacity-0"
+      >
+        <div
+          v-if="copied"
+          class="absolute bottom-3 right-3 pointer-events-none bg-[var(--c-1e3a2a)] text-[var(--c-6ecf8e)] border border-[var(--c-2a5a3a)] rounded px-2.5 py-1 text-[0.72rem] shadow-lg"
+        >Copied to clipboard</div>
+      </transition>
     </div>
 
     <!-- Drag handle -->
