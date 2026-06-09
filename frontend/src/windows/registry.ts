@@ -15,7 +15,6 @@ import Tasks from '../views/Tasks.vue'
 import Memories from '../views/Memories.vue'
 import Prompts from '../views/Prompts.vue'
 import Terminal from '../views/Terminal.vue'
-import TerminalChat from '../views/TerminalChat.vue'
 import SettingsPanel from '../components/SettingsPanel.vue'
 
 export interface WindowDef {
@@ -43,8 +42,6 @@ export const windowRegistry: Record<string, WindowDef> = {
   tasks: { title: 'Tasks', component: markRaw(Tasks), width: 620, height: 480 },
   memories: { title: 'Memories', component: markRaw(Memories), width: 680, height: 560 },
   prompts: { title: 'Prompts', component: markRaw(Prompts), width: 860, height: 600 },
-  terminal: { title: 'Terminal', component: markRaw(Terminal), width: 760, height: 480, props: { shell: 'bash' } },
-  powershell: { title: 'PowerShell', component: markRaw(Terminal), width: 760, height: 480, props: { shell: 'pwsh' } },
-  'terminal-chat': { title: 'Terminal AI', component: markRaw(TerminalChat), width: 420, height: 480 },
+  terminal: { title: 'Terminal', component: markRaw(Terminal), width: 1040, height: 560 },
   settings: { title: 'Settings', component: markRaw(SettingsPanel), width: 680, props: { initialTab: 'account' } },
 }

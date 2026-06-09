@@ -1165,13 +1165,63 @@ export const terminals = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ shell, command }),
     }),
-  suggest: (shell: string, request: string, context?: string, provider?: string) =>
-    json<{ command: string }>('/terminals/suggest', {
+  decide: (id: string, approved: boolean, command?: string) =>
+    fetch(BASE + '/terminals/agent/decide', {
       method: 'POST',
-      body: JSON.stringify({ shell, request, context, provider }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, approved, command }),
     }),
-  wsUrl: (shell: string, cols: number, rows: number) => {
+  wsUrl: (shell: string, session: string, cols: number, rows: number) => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${proto}//${location.host}${BASE}/terminals/ws?shell=${shell}&cols=${cols}&rows=${rows}`
+    return `${proto}//${location.host}${BASE}/terminals/ws?shell=${shell}&session=${session}&cols=${cols}&rows=${rows}`
   },
+}
+
+// Drive the terminal AI agent. Streams events: assistant text tokens, a
+// per-command approval request, command output, and done. The caller approves
+// via terminals.decide().
+export interface TerminalAgentHandlers {
+  onToken: (text: string) => void
+  onApprove: (id: string, command: string) => void
+  onOutput: (command: string, exit: number | null) => void
+  onError: (message: string) => void
+  onDone: () => void
+}
+export async function streamTerminalAgent(
+  sessionId: string,
+  message: string,
+  handlers: TerminalAgentHandlers,
+  provider?: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(BASE + '/terminals/agent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, message, provider }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw) continue
+      let d: { type: string; text?: string; id?: string; command?: string; exit?: number | null; message?: string }
+      try { d = JSON.parse(raw) } catch { continue }
+      if (d.type === 'token' && d.text != null) handlers.onToken(d.text)
+      else if (d.type === 'approve' && d.id != null) handlers.onApprove(d.id, d.command ?? '')
+      else if (d.type === 'output') handlers.onOutput(d.command ?? '', d.exit ?? null)
+      else if (d.type === 'error') handlers.onError(d.message ?? 'error')
+      else if (d.type === 'done') { handlers.onDone(); return }
+    }
+  }
 }
