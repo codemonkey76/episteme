@@ -8,6 +8,13 @@ import * as api from '../api'
 
 type Shell = 'bash' | 'pwsh'
 
+// PowerShell gets the classic white-on-blue console scheme; bash stays dark.
+function themeFor(s: Shell) {
+  return s === 'pwsh'
+    ? { background: '#012456', foreground: '#eeedf0', cursor: '#eeedf0' }
+    : { background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#d4d4d4' }
+}
+
 const props = defineProps<{ active: boolean; sidebarWidth: number; tabId: string; initialShell: Shell }>()
 const emit = defineEmits<{
   (e: 'update:sidebarWidth', w: number): void
@@ -80,7 +87,7 @@ function connect() {
     // Hold a generous scrollback so restored history stays scrollable; the full
     // archive lives in the backend and is reachable via the log search.
     scrollback: 10000,
-    theme: { background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+    theme: themeFor(shell.value),
   })
   fit = new FitAddon()
   search = new SearchAddon()
@@ -339,7 +346,7 @@ function stop() { agentAbort?.abort() }
         </div>
       </div>
 
-      <div ref="host" class="flex-1 min-h-0 px-1.5 pt-1"></div>
+      <div ref="host" class="flex-1 min-h-0 px-1.5 pt-1" :style="{ background: themeFor(shell).background }"></div>
 
       <transition
         enter-active-class="transition-opacity duration-150" enter-from-class="opacity-0"
