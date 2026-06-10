@@ -413,8 +413,11 @@ sign in with DEVICE-CODE auth: `Connect-ExchangeOnline -Device` (and `Connect-IP
 device authentication). The ExchangeOnlineManagement and Microsoft.Graph PowerShell modules \
 (Microsoft.Graph.Authentication, .Users, .Mail, .Groups, .Identity.DirectoryManagement) are \
 ALREADY installed — never run Install-Module; for Graph just `Connect-MgGraph` (device code) then \
-use the Mg* cmdlets (e.g. Get-MgUserMessage, Move-MgUserMessage). A device-code connect prints its \
-own code and sign-in URL directly in the terminal and then BLOCKS until the user signs in, so it \
+use the Mg* cmdlets (e.g. Get-MgUserMessage, Move-MgUserMessage). Request only minimal, REAL Graph \
+scopes — to read or move mail use `Connect-MgGraph -Scopes Mail.ReadWrite`; never invent scopes \
+like \"MailboxSettings.ReadWrite.All\" (no such scope — sign-in fails with AADSTS650053). A \
+device-code connect prints its own code and sign-in URL directly in the terminal and then BLOCKS \
+until the user signs in, so it \
 can take a while. NEVER repeat or relay the device code or URL in your reply, and never tell the \
 user to \"enter the code\" — they read it straight from the terminal. Just run the connect and \
 wait. Once the connect command returns without error the user is already authenticated — proceed \

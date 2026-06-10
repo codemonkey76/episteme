@@ -48,10 +48,29 @@ const DISTILL_TEXT_MAX: usize = 10_000;
 const MAX_REPORT_IMAGES: usize = 4;
 const IMAGE_MAX_BYTES: usize = 1_536 * 1024;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Note {
     source_id: String,
     finding: String,
     quote: Option<String>,
+}
+
+/// Serializable snapshot of a run's gathered state, saved after each round so an
+/// interrupted run resumes from where it left off (see `db::research_checkpoint`).
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Checkpoint {
+    category: String,
+    focus: String,
+    draft: String,
+    memo: Vec<Note>,
+    memo_chars: usize,
+    sources: Vec<Source>,
+    image_candidates: Vec<ImageCandidate>,
+    all_queries: Vec<String>,
+    fetched_urls: Vec<String>,
+    fetches_left: usize,
+    attempts_left: usize,
+    compactions_left: usize,
 }
 
 /// One pooled SERP result awaiting triage.
@@ -63,6 +82,7 @@ struct SerpCandidate {
     snippet: String,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct ImageCandidate {
     /// Short id (I1, I2…) the models reference — never a retyped URL.
     id: String,
@@ -175,27 +195,63 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     // this attempt cap bounds the total HTTP work so refunds can't run away.
     let mut attempts_left = fetch_budget * 2;
     let mut compactions_left = MEMO_COMPACTIONS;
-
-    // ── PLAN + CATEGORY ─────────────────────────────────────────────────────
-    progress(state, &job.session_id, "Planning the investigation…").await;
-    let plan_system = prompt(state, "research_plan", &topic).await;
-    let subquestions = match complete_json(state, &job.user_id, &writer, &plan_system, &topic).await {
-        Ok(v) => parse_plan(&v).1,
-        Err(e) => {
-            tracing::warn!("research plan failed ({e}); proceeding without sub-questions");
-            Vec::new()
-        }
-    };
-    let focus = focus_block(&subquestions);
-    let category = classify_category(state, &job.user_id, &worker, &topic).await;
-
-    // ── ITERATIVE ROUNDS: think → gather → evolve → decide (IterResearch) ────
-    let distill_system = prompt(state, "research_distill", &topic).await;
-    let triage_system = prompt(state, "research_triage", &topic).await;
     // The evolving working draft — re-synthesized each round, it tells the next
     // round what's still missing and the stop check when we're done.
     let mut draft = String::new();
-    for round in 1..=max_rounds {
+    let mut focus = String::new();
+    let mut category = String::new();
+    let mut start_round = 1usize;
+
+    // ── RESUME ──────────────────────────────────────────────────────────────
+    // Pick up from the last checkpoint if a prior run was interrupted (e.g. a
+    // restart re-enqueued this job) — redoing only the round that was in flight.
+    if let Some((ckpt_round, json)) =
+        db::research_checkpoint::load(&state.db, &job.id).await.ok().flatten()
+    {
+        if let Ok(c) = serde_json::from_str::<Checkpoint>(&json) {
+            progress(
+                state,
+                &job.session_id,
+                &format!("Resuming where the last run left off (after round {ckpt_round})…"),
+            )
+            .await;
+            category = c.category;
+            focus = c.focus;
+            draft = c.draft;
+            memo = c.memo;
+            memo_chars = c.memo_chars;
+            sources = c.sources;
+            image_candidates = c.image_candidates;
+            all_queries = c.all_queries;
+            fetched_urls = c.fetched_urls.into_iter().collect();
+            fetches_left = c.fetches_left;
+            attempts_left = c.attempts_left;
+            compactions_left = c.compactions_left;
+            start_round = (ckpt_round as usize) + 1;
+        }
+    }
+
+    let distill_system = prompt(state, "research_distill", &topic).await;
+    let triage_system = prompt(state, "research_triage", &topic).await;
+
+    // ── PLAN + CATEGORY (skipped when resuming) ─────────────────────────────
+    if start_round == 1 {
+        progress(state, &job.session_id, "Planning the investigation…").await;
+        let plan_system = prompt(state, "research_plan", &topic).await;
+        let subquestions =
+            match complete_json(state, &job.user_id, &writer, &plan_system, &topic).await {
+                Ok(v) => parse_plan(&v).1,
+                Err(e) => {
+                    tracing::warn!("research plan failed ({e}); proceeding without sub-questions");
+                    Vec::new()
+                }
+            };
+        focus = focus_block(&subquestions);
+        category = classify_category(state, &job.user_id, &worker, &topic).await;
+    }
+
+    // ── ITERATIVE ROUNDS: think → gather → evolve → decide (IterResearch) ────
+    for round in start_round..=max_rounds {
         // THINK: queries from the plan + what the draft already covers (gaps).
         let mut queries =
             generate_queries(state, &job.user_id, &writer, &topic, &focus, &draft, round, &all_queries).await;
@@ -243,6 +299,25 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
             compact_memo(state, job, &worker, &topic, &mut memo, &mut memo_chars, &sources).await;
         }
 
+        // CHECKPOINT: snapshot the gathered state so a restart resumes from here.
+        let snapshot = Checkpoint {
+            category: category.clone(),
+            focus: focus.clone(),
+            draft: draft.clone(),
+            memo: memo.clone(),
+            memo_chars,
+            sources: sources.clone(),
+            image_candidates: image_candidates.clone(),
+            all_queries: all_queries.clone(),
+            fetched_urls: fetched_urls.iter().cloned().collect(),
+            fetches_left,
+            attempts_left,
+            compactions_left,
+        };
+        if let Ok(json) = serde_json::to_string(&snapshot) {
+            let _ = db::research_checkpoint::save(&state.db, &job.id, round as i64, &json).await;
+        }
+
         if fetches_left == 0 || attempts_left == 0 {
             break;
         }
@@ -255,6 +330,7 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     }
 
     if memo.is_empty() {
+        let _ = db::research_checkpoint::delete(&state.db, &job.id).await;
         return Err(anyhow!(
             "no usable sources found — web search may be down and nothing internal matched"
         ));
@@ -311,6 +387,9 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         }
         Err(e) => tracing::warn!("report→RAG ingestion skipped: {e}"),
     }
+
+    // The run finished — drop the resume checkpoint.
+    let _ = db::research_checkpoint::delete(&state.db, &job.id).await;
 
     state
         .log("research", "info", format!("report ready: {title} ({} sources)", sources.len()))

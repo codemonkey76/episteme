@@ -79,7 +79,7 @@ pub struct ImagePick {
 }
 
 /// A research source: web page or internal material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     /// The id the model cites (S1.., doc:…, email:…, memory:…, chat:…).
     pub id: String,
