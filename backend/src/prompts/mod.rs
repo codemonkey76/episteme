@@ -331,7 +331,69 @@ a JSON object, no prose, no code fences:\n{\"title\": \"<report title>\", \"intr
 \"<caption>\", \"columns\": [\"<col>\"], \"rows\": [[\"<cell>\"]]}], \"charts\": \
 [{\"title\": \"<caption>\", \"labels\": [\"<label>\"], \"values\": [1.0], \"unit\": \
 \"<unit, optional>\"}], \"images\": [{\"id\": \"<candidate image id>\", \"caption\": \
-\"<caption>\"}]}. Omit tables or charts when not warranted.",
+\"<caption>\"}]}. Omit tables or charts when not warranted. Write thoroughly — prefer several \
+substantial, analytical paragraphs per section over thin ones, cover every sub-question, explain \
+why findings matter, and surface where sources agree or disagree.",
+    },
+    PromptDef {
+        key: "research_category",
+        name: "Research: classify category",
+        description: "Classifies a research topic into a report category that shapes the final \
+report's structure. Must keep instructing the model to answer with ONLY the category word.",
+        variables: &["{topic}"],
+        default: "Classify this research topic into exactly ONE category that best fits the kind of \
+report the user wants:\n\
+- product: ranking or recommending products/tools/services to choose between\n\
+- comparison: comparing specific named options against each other\n\
+- howto: a step-by-step guide or tutorial\n\
+- factcheck: verifying whether a specific claim is true\n\
+- general: anything else\n\n\
+Topic: {topic}\n\nRespond with ONLY the category word, nothing else.",
+    },
+    PromptDef {
+        key: "research_queries",
+        name: "Research: generate queries",
+        description: "Each round of the iterative loop: proposes web search queries from the topic, \
+plan, and the evolving draft (its gaps). The plan/draft/round are supplied in the user message. \
+Must keep instructing the model to answer with ONLY a JSON array of query strings.",
+        variables: &["{topic}"],
+        default: "You are planning web searches for an ongoing research investigation.\n\n\
+Topic: {topic}\n\nUsing the research plan and what the report covers so far (below), propose \
+focused search queries that move the report toward a thorough, well-sourced answer. On the first \
+round go broad across the key facets; on later rounds target the specific gaps, weakly-sourced \
+claims, or unanswered sub-questions — never repeat earlier queries. Prefer specific, authoritative, \
+current sources over broad ones.\n\nRespond with ONLY a JSON array of query strings, no prose, no \
+code fences. Example: [\"query one\", \"query two\"].",
+    },
+    PromptDef {
+        key: "research_evolve",
+        name: "Research: evolving draft",
+        description: "Each round: folds the round's new notes into an internal working draft \
+(markdown) that drives the next round's queries and the stop decision — not the final report. \
+Answer with the updated draft only.",
+        variables: &["{topic}"],
+        default: "You are maintaining an evolving working draft of a research report — an internal \
+scratch document tracking what is known and what is still missing, not the final report.\n\n\
+Topic: {topic}\n\nFold the new notes (below) into the current draft. Produce an updated, \
+well-organized draft that answers the topic as completely as the evidence allows: merge duplicates, \
+resolve contradictions (prefer better-sourced or more recent), and keep each claim attributed to \
+its source id (e.g. S1, doc:contract.pdf). Call out which important sub-questions are still \
+unanswered or thinly sourced.\n\nWrite ONLY the updated draft as markdown — no preamble or \
+meta-commentary.",
+    },
+    PromptDef {
+        key: "research_should_stop",
+        name: "Research: stop decision",
+        description: "Between rounds (after the minimum): decides whether enough has been gathered \
+to write a thorough report. Must keep instructing the model to answer with ONLY YES or NO followed \
+by a brief reason.",
+        variables: &["{topic}"],
+        default: "You are deciding whether a research investigation has gathered enough to write a \
+thorough, well-supported report.\n\nTopic: {topic}\n\nGiven the working draft and sub-questions \
+below, are the key aspects addressed with sufficient evidence from multiple sources, with no \
+obvious gaps?\n\nReply with ONLY \"YES\" or \"NO\" followed by a brief one-sentence reason. \
+Example: \"YES — every sub-question is covered with multiple sources.\" Example: \"NO — pricing and \
+limitations are still thinly sourced.\"",
     },
     PromptDef {
         key: "terminal_agent",

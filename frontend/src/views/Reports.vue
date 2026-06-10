@@ -122,10 +122,24 @@ async function revokeShare() {
 }
 
 // ── New research launcher ────────────────────────────────────────────────────
+const RESEARCH_PROVIDER_KEY = 'episteme.research.provider'
 const topic = ref('')
 const depth = ref<'quick' | 'standard' | 'deep'>('standard')
 const starting = ref(false)
 const startedNote = ref('')
+// The research model — point at Opus/Sonnet for much better reports. Persisted.
+const providers = ref<api.ProviderConfig[]>([])
+const researchProvider = ref(localStorage.getItem(RESEARCH_PROVIDER_KEY) ?? '')
+watch(researchProvider, (v) => localStorage.setItem(RESEARCH_PROVIDER_KEY, v))
+
+onMounted(async () => {
+  try {
+    providers.value = (await api.settings.listProviders()).providers
+    if (researchProvider.value && !providers.value.some(p => p.name === researchProvider.value)) {
+      researchProvider.value = ''
+    }
+  } catch { /* leave empty */ }
+})
 
 async function startResearch() {
   const t = topic.value.trim()
@@ -133,7 +147,7 @@ async function startResearch() {
   starting.value = true
   error.value = ''
   try {
-    await api.reports.startResearch(t, depth.value)
+    await api.reports.startResearch(t, depth.value, researchProvider.value || undefined)
     startedNote.value = `Researching "${t}" — the report will appear here when ready.`
     topic.value = ''
     setTimeout(() => (startedNote.value = ''), 8000)
@@ -159,6 +173,15 @@ async function startResearch() {
         <option value="quick">quick</option>
         <option value="standard">standard</option>
         <option value="deep">deep</option>
+      </select>
+      <select
+        v-if="providers.length"
+        v-model="researchProvider"
+        title="Model used to write the report — point at your smartest model for the best results"
+        class="bg-surface text-[var(--c-c0c0c0)] border border-raised rounded px-2 py-1.5 text-xs font-[inherit] cursor-pointer max-w-[9rem]"
+      >
+        <option value="">model: default</option>
+        <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
       </select>
       <button
         class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1.5 text-xs font-[inherit] cursor-pointer transition-colors duration-100 hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50 whitespace-nowrap"

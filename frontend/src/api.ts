@@ -689,10 +689,10 @@ export const reports = {
   list: () => json<{ reports: Report[] }>('/reports'),
   htmlPath: (id: string) => `${BASE}/reports/${id}/html`,
   remove: (id: string) => fetch(BASE + `/reports/${id}`, { method: 'DELETE' }),
-  startResearch: (topic: string, depth: 'quick' | 'standard' | 'deep') =>
+  startResearch: (topic: string, depth: 'quick' | 'standard' | 'deep', provider?: string) =>
     json<{ job_id: string; session_id: string }>('/research', {
       method: 'POST',
-      body: JSON.stringify({ topic, depth }),
+      body: JSON.stringify({ topic, depth, provider }),
     }),
   /** Mint (or return the existing) public link; `path` is origin-relative. */
   share: (id: string) =>

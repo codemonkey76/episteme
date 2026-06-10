@@ -21,12 +21,14 @@ use crate::model_router::{ModelRouter, ProviderConfig};
 use crate::state::AppState;
 use render::{EmbeddedImage, ReportDoc, Source};
 
-/// Per-depth budgets: web page fetches and reflect rounds.
-fn budgets(depth: &str) -> (usize, usize) {
+/// Per-depth loop bounds: (min_rounds, max_rounds, total web-fetch budget). The
+/// IterResearch loop runs at least `min` rounds and at most `max`, stopping early
+/// when the model judges the draft comprehensive or the fetch budget runs out.
+fn budgets(depth: &str) -> (usize, usize, usize) {
     match depth {
-        "quick" => (6, 0),
-        "deep" => (20, 2),
-        _ => (12, 1), // standard
+        "quick" => (1, 3, 8),
+        "deep" => (3, 8, 40),
+        _ => (2, 5, 20), // standard
     }
 }
 
@@ -98,6 +100,20 @@ pub async fn launch(
         return Err(anyhow!("provider '{provider_arg}' not found"));
     }
 
+    // Resolve the research (writer) model: an explicit choice is also saved as
+    // the default; otherwise use the saved default, else the first provider.
+    let provider_name = if !provider_arg.is_empty() {
+        let _ = db::settings::set(&state.db, "research_provider", &provider_arg.to_string()).await;
+        provider_arg.to_string()
+    } else {
+        db::settings::get::<String>(&state.db, "research_provider")
+            .await
+            .ok()
+            .flatten()
+            .filter(|name| providers.iter().any(|p| p.name == *name))
+            .unwrap_or_default()
+    };
+
     let session = db::sessions::create(&state.db, user_id, &format!("🔎 {topic}")).await?;
     db::messages::insert(
         &state.db,
@@ -115,7 +131,7 @@ pub async fn launch(
         state,
         user_id,
         &session.id,
-        provider_arg,
+        &provider_name,
         "research",
         &format!("Research: {name_clipped}"),
         Some(&meta),
@@ -139,7 +155,14 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         .and_then(|m| serde_json::from_str::<Value>(m).ok())
         .and_then(|v| v["depth"].as_str().map(String::from))
         .unwrap_or_else(|| "standard".to_string());
-    let (fetch_budget, reflect_rounds) = budgets(&depth);
+    let (min_rounds, max_rounds, fetch_budget) = budgets(&depth);
+
+    // The research (writer) model — point at Opus/Sonnet — does the reasoning and
+    // writing (plan, queries, evolve, stop, final report). The worker model (the
+    // first configured, usually local) does the high-volume per-page distill and
+    // triage, so a deep run doesn't make dozens of frontier-model extraction calls.
+    let writer = provider;
+    let worker = first_provider(state).await.unwrap_or_else(|| writer.clone());
 
     let mut memo: Vec<Note> = Vec::new();
     let mut memo_chars = 0usize;
@@ -151,115 +174,85 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     // Failed fetches (404s, paywalls, timeouts) refund their budget slot;
     // this attempt cap bounds the total HTTP work so refunds can't run away.
     let mut attempts_left = fetch_budget * 2;
+    let mut compactions_left = MEMO_COMPACTIONS;
 
-    // ── PLAN ────────────────────────────────────────────────────────────────
+    // ── PLAN + CATEGORY ─────────────────────────────────────────────────────
     progress(state, &job.session_id, "Planning the investigation…").await;
     let plan_system = prompt(state, "research_plan", &topic).await;
-    let (mut queries, subquestions) =
-        match complete_json(state, &job.user_id, &provider, &plan_system, &topic).await {
-            Ok(v) => parse_plan(&v),
-            Err(e) => {
-                tracing::warn!("research plan failed ({e}); degrading to the topic as one query");
-                (Vec::new(), Vec::new())
-            }
-        };
-    if queries.is_empty() {
-        queries.push(topic.clone());
-    }
+    let subquestions = match complete_json(state, &job.user_id, &writer, &plan_system, &topic).await {
+        Ok(v) => parse_plan(&v).1,
+        Err(e) => {
+            tracing::warn!("research plan failed ({e}); proceeding without sub-questions");
+            Vec::new()
+        }
+    };
     let focus = focus_block(&subquestions);
+    let category = classify_category(state, &job.user_id, &worker, &topic).await;
 
-    // ── GATHER (web) + REFLECT rounds ──────────────────────────────────────
+    // ── ITERATIVE ROUNDS: think → gather → evolve → decide (IterResearch) ────
     let distill_system = prompt(state, "research_distill", &topic).await;
     let triage_system = prompt(state, "research_triage", &topic).await;
-    let mut compactions_left = MEMO_COMPACTIONS;
-    let mut round = 0usize;
-    loop {
+    // The evolving working draft — re-synthesized each round, it tells the next
+    // round what's still missing and the stop check when we're done.
+    let mut draft = String::new();
+    for round in 1..=max_rounds {
+        // THINK: queries from the plan + what the draft already covers (gaps).
+        let mut queries =
+            generate_queries(state, &job.user_id, &writer, &topic, &focus, &draft, round, &all_queries).await;
+        if queries.is_empty() {
+            if round == 1 {
+                queries.push(topic.clone());
+            } else {
+                break; // nothing new worth chasing
+            }
+        }
         all_queries.extend(queries.iter().cloned());
+        progress(state, &job.session_id, &format!("Round {round}: {}", queries.join(" · "))).await;
+
+        let before = memo.len();
+        // GATHER: web every round; the user's own corpus on the first round.
         gather_web(
-            state,
-            job,
-            &provider,
-            &distill_system,
-            &triage_system,
-            &focus,
-            &queries,
-            &mut fetches_left,
-            &mut attempts_left,
-            &mut fetched_urls,
-            &mut memo,
-            &mut memo_chars,
-            &mut sources,
-            &mut image_candidates,
+            state, job, &worker, &distill_system, &triage_system, &focus, &queries,
+            &mut fetches_left, &mut attempts_left, &mut fetched_urls,
+            &mut memo, &mut memo_chars, &mut sources, &mut image_candidates,
         )
         .await;
-
-        // A full memo re-opens via compaction (merge duplicates) at stage
-        // boundaries, so further rounds and the internal pass aren't refused.
-        if memo_chars >= MEMO_MAX_CHARS && compactions_left > 0 {
-            compactions_left -= 1;
-            progress(state, &job.session_id, "Consolidating notes…").await;
-            compact_memo(state, job, &provider, &topic, &mut memo, &mut memo_chars, &sources)
-                .await;
+        if round == 1 {
+            progress(state, &job.session_id, "Checking your documents, email, memories, and chats…").await;
+            gather_internal(
+                state, job, &worker, &distill_system, &focus, &topic, &all_queries,
+                &mut memo, &mut memo_chars, &mut sources,
+            )
+            .await;
         }
 
-        if round >= reflect_rounds
-            || fetches_left == 0
-            || attempts_left == 0
-            || memo_chars >= MEMO_MAX_CHARS
+        // EVOLVE: fold this round's new notes into the working draft.
+        let new_notes = memo_as_text(&memo[before.min(memo.len())..]);
+        if !new_notes.trim().is_empty() {
+            progress(state, &job.session_id, "Reviewing what we have so far…").await;
+            if let Ok(updated) = evolve(state, &job.user_id, &writer, &topic, &draft, &new_notes).await {
+                if !updated.trim().is_empty() {
+                    draft = updated;
+                }
+            }
+        }
+
+        // Keep the memo under its cap (worker merges duplicates).
+        if memo_chars >= MEMO_MAX_CHARS && compactions_left > 0 {
+            compactions_left -= 1;
+            compact_memo(state, job, &worker, &topic, &mut memo, &mut memo_chars, &sources).await;
+        }
+
+        if fetches_left == 0 || attempts_left == 0 {
+            break;
+        }
+        // DECIDE: past the minimum, stop once the draft is comprehensive.
+        if round >= min_rounds
+            && should_stop(state, &job.user_id, &writer, &topic, &draft, &focus).await
         {
             break;
         }
-        round += 1;
-
-        let reflect_system = prompt(state, "research_reflect", &topic).await;
-        let memo_text = memo_as_text(&memo);
-        let user = format!(
-            "Earlier queries: {}{}\n\nCollected notes:\n{}",
-            all_queries.join("; "),
-            focus,
-            memo_text
-        );
-        match complete_json(state, &job.user_id, &provider, &reflect_system, &user).await {
-            Ok(v) if !v["done"].as_bool().unwrap_or(true) => {
-                queries = v["queries"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|q| q.as_str().map(String::from))
-                    .filter(|q| !all_queries.contains(q))
-                    .take(3)
-                    .collect();
-                if queries.is_empty() {
-                    break;
-                }
-                progress(state, &job.session_id, &format!("Digging deeper: {}", queries.join(" · ")))
-                    .await;
-            }
-            _ => break,
-        }
     }
-
-    // ── INTERNAL corpus ────────────────────────────────────────────────────
-    // Same re-open before the internal pass: the user's own data shouldn't be
-    // the leg that gets refused because the web filled the memo.
-    if memo_chars >= MEMO_MAX_CHARS && compactions_left > 0 {
-        progress(state, &job.session_id, "Consolidating notes…").await;
-        compact_memo(state, job, &provider, &topic, &mut memo, &mut memo_chars, &sources).await;
-    }
-    progress(state, &job.session_id, "Checking your documents, email, memories, and chats…").await;
-    gather_internal(
-        state,
-        job,
-        &provider,
-        &distill_system,
-        &focus,
-        &topic,
-        &all_queries,
-        &mut memo,
-        &mut memo_chars,
-        &mut sources,
-    )
-    .await;
 
     if memo.is_empty() {
         return Err(anyhow!(
@@ -267,19 +260,12 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
         ));
     }
 
-    // ── SYNTHESIZE ─────────────────────────────────────────────────────────
+    // ── SYNTHESIZE (final visual report) ────────────────────────────────────
     progress(state, &job.session_id, "Writing the report…").await;
     let synth_system = prompt(state, "research_synthesize", &topic).await;
     let doc = synthesize(
-        state,
-        job,
-        &provider,
-        &topic,
-        &focus,
-        &synth_system,
-        &memo,
-        &sources,
-        &image_candidates,
+        state, job, &writer, &topic, &focus, &category, &draft, &synth_system,
+        &memo, &sources, &image_candidates,
     )
     .await;
 
@@ -771,20 +757,24 @@ const SYNTH_RETRY_MEMO_CHARS: usize = 8_000;
 /// retry once with a hard-trimmed memo and no image catalogue; (3) only then
 /// the grouped-notes fallback, which is still a complete, cited report.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn synthesize(
     state: &Arc<AppState>,
     job: &Job,
     provider: &ProviderConfig,
     topic: &str,
     focus: &str,
+    category: &str,
+    draft: &str,
     synth_system: &str,
     memo: &[Note],
     sources: &[Source],
     image_candidates: &[ImageCandidate],
 ) -> ReportDoc {
-    if let Some(doc) =
-        try_synthesize(state, job, provider, synth_system, focus, memo, sources, image_candidates)
-            .await
+    if let Some(doc) = try_synthesize(
+        state, job, provider, synth_system, focus, category, draft, memo, sources, image_candidates,
+    )
+    .await
     {
         return doc;
     }
@@ -795,8 +785,10 @@ async fn synthesize(
     )
     .await;
     let trimmed = trim_memo(memo, SYNTH_RETRY_MEMO_CHARS);
-    if let Some(doc) =
-        try_synthesize(state, job, provider, synth_system, focus, &trimmed, sources, &[]).await
+    if let Some(doc) = try_synthesize(
+        state, job, provider, synth_system, focus, category, draft, &trimmed, sources, &[],
+    )
+    .await
     {
         return doc;
     }
@@ -813,11 +805,13 @@ async fn try_synthesize(
     provider: &ProviderConfig,
     synth_system: &str,
     focus: &str,
+    category: &str,
+    draft: &str,
     memo: &[Note],
     sources: &[Source],
     image_candidates: &[ImageCandidate],
 ) -> Option<ReportDoc> {
-    let user = synth_user_prompt(focus, memo, sources, image_candidates);
+    let user = synth_user_prompt(focus, category, draft, memo, sources, image_candidates);
     match complete_json(state, &job.user_id, provider, synth_system, &user).await {
         Ok(v) => {
             let doc: ReportDoc = serde_json::from_value(v).unwrap_or_default();
@@ -834,13 +828,22 @@ async fn try_synthesize(
 /// the candidate-image catalogue.
 fn synth_user_prompt(
     focus: &str,
+    category: &str,
+    draft: &str,
     memo: &[Note],
     sources: &[Source],
     image_candidates: &[ImageCandidate],
 ) -> String {
+    let guidance = category_guidance(category);
     format!(
-        "{}Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
+        "{}{}{}Notes (each tagged with its source id):\n{}\n\nSources:\n{}\n\nCandidate images:\n{}",
+        if guidance.is_empty() { String::new() } else { format!("{guidance}\n\n") },
         if focus.is_empty() { String::new() } else { format!("{}\n\n", focus.trim_start()) },
+        if draft.trim().is_empty() {
+            String::new()
+        } else {
+            format!("Working draft assembled while researching (use as a structural guide; cite from the notes):\n{draft}\n\n")
+        },
         memo_as_text(memo),
         sources.iter().map(|s| format!("{} = {}", s.id, s.label)).collect::<Vec<_>>().join("\n"),
         if image_candidates.is_empty() {
@@ -1137,6 +1140,141 @@ async fn complete_json(
     json_slice(&raw).ok_or_else(|| anyhow!("model did not return parseable JSON"))
 }
 
+/// Plain-text model call recording usage under "research".
+async fn complete_text(
+    state: &AppState,
+    user_id: &str,
+    provider: &ProviderConfig,
+    system: &str,
+    user: &str,
+) -> Result<String> {
+    use crate::model_router::ChatMessage;
+    let history = vec![
+        ChatMessage { role: "system".into(), content: Value::String(system.to_string()) },
+        ChatMessage { role: "user".into(), content: Value::String(user.to_string()) },
+    ];
+    let (raw, used) = complete_with_timeout(provider, history).await?;
+    db::usage::record(&state.db, user_id, provider, "research", used).await;
+    Ok(raw)
+}
+
+/// First configured provider — the "worker" model for high-volume distill/triage.
+async fn first_provider(state: &AppState) -> Option<ProviderConfig> {
+    db::settings::get::<Vec<ProviderConfig>>(&state.db, "providers")
+        .await
+        .ok()
+        .flatten()?
+        .into_iter()
+        .next()
+}
+
+/// Classify the topic into a report category (shapes the final report).
+async fn classify_category(
+    state: &AppState,
+    user_id: &str,
+    worker: &ProviderConfig,
+    topic: &str,
+) -> String {
+    let system = prompt(state, "research_category", topic).await;
+    let raw = match complete_text(state, user_id, worker, &system, topic).await {
+        Ok(t) => t.to_lowercase(),
+        Err(_) => return "general".into(),
+    };
+    for cat in ["product", "comparison", "howto", "factcheck"] {
+        if raw.contains(cat) {
+            return cat.into();
+        }
+    }
+    "general".into()
+}
+
+/// Extra per-category structure instructions folded into the final synthesis.
+fn category_guidance(category: &str) -> &'static str {
+    match category {
+        "product" => "This is a PRODUCT report: rank the options best-first; for each give a heading, a 2-3 sentence summary, pros and cons, and an approximate price; include a quick-compare table (Name, Price, Best for) and end with a verdict (best overall, best value).",
+        "comparison" => "This is a COMPARISON report: include a comparison table (criteria as rows, options as columns); a section per option covering strengths, weaknesses, and ideal use; and end with 'best for' verdicts.",
+        "howto" => "This is a HOW-TO guide: open with a concise numbered quick-guide, then prerequisites, then detailed numbered steps each under its own heading, and a common-mistakes section.",
+        "factcheck" => "This is a FACT-CHECK: restate the claim; give evidence-for and evidence-against sections; end with a verdict (Supported / Mixed evidence / Unsupported) and caveats.",
+        _ => "",
+    }
+}
+
+/// THINK: web search queries from the plan + the evolving draft's gaps.
+#[allow(clippy::too_many_arguments)]
+async fn generate_queries(
+    state: &AppState,
+    user_id: &str,
+    writer: &ProviderConfig,
+    topic: &str,
+    focus: &str,
+    draft: &str,
+    round: usize,
+    used: &[String],
+) -> Vec<String> {
+    let system = prompt(state, "research_queries", topic).await;
+    let instruction = if round == 1 {
+        "This is the first round — go broad across the key facets of the topic."
+    } else {
+        "We already have partial findings — generate targeted follow-ups for the gaps and weakly-sourced claims; do not repeat earlier queries."
+    };
+    let user = format!(
+        "Research plan (sub-questions):{}\n\nReport so far:\n{}\n\nRound {round}. {instruction}",
+        if focus.is_empty() { " (none)".to_string() } else { focus.to_string() },
+        if draft.trim().is_empty() { "(nothing yet)" } else { draft },
+    );
+    let want = if round == 1 { 5 } else { 3 };
+    match complete_json(state, user_id, writer, &system, &user).await {
+        Ok(v) => v
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|q| q.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+            .filter(|q| !used.iter().any(|u| u.eq_ignore_ascii_case(q)))
+            .take(want)
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// EVOLVE: fold the round's new notes into the internal working draft.
+async fn evolve(
+    state: &AppState,
+    user_id: &str,
+    writer: &ProviderConfig,
+    topic: &str,
+    draft: &str,
+    new_notes: &str,
+) -> Result<String> {
+    let system = prompt(state, "research_evolve", topic).await;
+    let user = format!(
+        "Current draft:\n{}\n\nNew notes this round:\n{}",
+        if draft.trim().is_empty() { "(empty — start the draft)" } else { draft },
+        new_notes,
+    );
+    Ok(complete_text(state, user_id, writer, &system, &user).await?.trim().to_string())
+}
+
+/// DECIDE: is the draft comprehensive enough to write the final report?
+async fn should_stop(
+    state: &AppState,
+    user_id: &str,
+    writer: &ProviderConfig,
+    topic: &str,
+    draft: &str,
+    focus: &str,
+) -> bool {
+    let system = prompt(state, "research_should_stop", topic).await;
+    let user = format!(
+        "Sub-questions:{}\n\nWorking draft:\n{}",
+        if focus.is_empty() { " (none)".to_string() } else { focus.to_string() },
+        draft,
+    );
+    match complete_text(state, user_id, writer, &system, &user).await {
+        Ok(t) => t.trim_start().to_ascii_uppercase().starts_with("YES"),
+        Err(_) => false,
+    }
+}
+
 /// Extract the outermost JSON value from model output, tolerating code fences
 /// and surrounding prose (mirrors memory::parse).
 fn json_slice(raw: &str) -> Option<Value> {
@@ -1200,6 +1338,25 @@ mod tests {
     }
 
     #[test]
+    fn budgets_scale_with_depth_and_min_le_max() {
+        for d in ["quick", "standard", "deep", "other"] {
+            let (min, max, fetch) = budgets(d);
+            assert!(min >= 1 && min <= max && fetch > 0);
+        }
+        assert!(budgets("deep").1 > budgets("standard").1);
+        assert!(budgets("standard").1 > budgets("quick").1);
+    }
+
+    #[test]
+    fn category_guidance_only_for_known_categories() {
+        for c in ["product", "comparison", "howto", "factcheck"] {
+            assert!(!category_guidance(c).is_empty(), "{c} should have guidance");
+        }
+        assert!(category_guidance("general").is_empty());
+        assert!(category_guidance("nonsense").is_empty());
+    }
+
+    #[test]
     fn parse_picks_validates_dedupes_and_caps() {
         let v = serde_json::json!({ "picks": [3, 1, 3, 99, 0, 2, 4] });
         // 8 candidates, want 3: 3→idx2, 1→idx0, dup 3 skipped, 99/0 out of
@@ -1247,10 +1404,10 @@ mod tests {
 
     #[test]
     fn budgets_by_depth() {
-        assert_eq!(budgets("quick"), (6, 0));
-        assert_eq!(budgets("standard"), (12, 1));
-        assert_eq!(budgets("deep"), (20, 2));
-        assert_eq!(budgets("nonsense"), (12, 1));
+        assert_eq!(budgets("quick"), (1, 3, 8));
+        assert_eq!(budgets("standard"), (2, 5, 20));
+        assert_eq!(budgets("deep"), (3, 8, 40));
+        assert_eq!(budgets("nonsense"), (2, 5, 20));
     }
 
     #[test]
