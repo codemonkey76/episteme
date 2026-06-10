@@ -56,8 +56,15 @@ RUN curl -fsSL -o /tmp/pwsh.tar.gz \
 # Exchange Online / Security & Compliance PowerShell for O365 admin from the
 # terminal (device-code interactive auth). Installed AllUsers so spawned shells
 # see it. Single-quoted so the shell doesn't touch pwsh's syntax; version pinned
-# for reproducible builds.
-RUN pwsh -NoLogo -NonInteractive -Command 'Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name ExchangeOnlineManagement -RequiredVersion 3.5.1 -Scope AllUsers -Force -AllowClobber'
+# for reproducible builds. The Microsoft.Graph submodules (Connect-MgGraph, mail,
+# users, groups, directory) cover the common admin tasks without the ~1.5GB full
+# meta-module — all pinned to the same version so the submodules stay compatible.
+RUN pwsh -NoLogo -NonInteractive -Command 'Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; \
+    Install-Module -Name ExchangeOnlineManagement -RequiredVersion 3.5.1 -Scope AllUsers -Force -AllowClobber; \
+    $gv = "2.25.0"; \
+    foreach ($m in @("Microsoft.Graph.Authentication","Microsoft.Graph.Users","Microsoft.Graph.Mail","Microsoft.Graph.Groups","Microsoft.Graph.Identity.DirectoryManagement")) { \
+        Install-Module -Name $m -RequiredVersion $gv -Scope AllUsers -Force -AllowClobber \
+    }'
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
