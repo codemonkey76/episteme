@@ -435,6 +435,7 @@ async fn run_agent(
         .cloned()
         .unwrap_or_default();
 
+    let user_message = message.clone();
     let mut history: Vec<ChatMessage> = std::iter::once(ChatMessage {
         role: "system".to_string(),
         content: serde_json::Value::String(system),
@@ -446,7 +447,14 @@ async fn run_agent(
     }))
     .collect();
 
+    // Cross-session memory: prepend relevant stored memories so the terminal
+    // agent recalls who the user is (UPN, tenant) and lessons from past sessions
+    // instead of re-asking — the same learning the chat agent has.
+    crate::memory::inject(&mut history, &state, &user_id, &user_message).await;
+
     let tools = vec![run_command_schema()];
+    // Accumulated visible narration this turn — fed to memory extraction.
+    let mut assistant_text = String::new();
 
     for _ in 0..MAX_STEPS {
         let (text, calls) = match stream_turn(&state, &user_id, &provider, history.clone(), tools.clone(), &ev).await {
@@ -458,6 +466,8 @@ async fn run_agent(
             }
         };
         if !text.trim().is_empty() {
+            assistant_text.push_str(&text);
+            assistant_text.push('\n');
             history.push(ChatMessage { role: "assistant".to_string(), content: serde_json::Value::String(text) });
         }
         if calls.is_empty() {
@@ -502,9 +512,20 @@ async fn run_agent(
         }
     }
 
-    // Persist all turns except the system message for the next call.
-    let to_save: Vec<ChatMessage> = history.into_iter().skip(1).collect();
+    // Persist the conversation for the next call — drop the leading system
+    // messages (the terminal prompt and injected memories are rebuilt fresh).
+    let to_save: Vec<ChatMessage> =
+        history.into_iter().skip_while(|m| m.role == "system").collect();
     state.terminal_agent_history.lock().await.insert(session_id, to_save);
+
+    // Best-effort, detached: learn durable facts/lessons from this session so the
+    // terminal agent improves over time (UPN, tenant, approaches that worked).
+    if !assistant_text.trim().is_empty() {
+        let st = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::memory::extract(&st, &user_id, provider, user_message, assistant_text, None).await;
+        });
+    }
 
     let _ = ev.send(AgentEvent::Done).await;
 }
