@@ -428,6 +428,23 @@ Get-Mailbox | Select-Object -ExpandProperty GrantSendOnBehalfTo (SendOnBehalf). 
 Disconnect-* unless the user asks.",
     },
     PromptDef {
+        key: "terminal_lessons",
+        name: "Terminal: lesson extraction",
+        description: "Runs after a terminal AI session to learn durable operational lessons and \
+facts from the commands run and their output (including errors). Must keep instructing the model \
+to answer with ONLY a JSON array of {content, category} objects.",
+        variables: &[],
+        default: "You are reviewing a terminal session — the commands the AI assistant ran and \
+their output, INCLUDING any errors — to extract durable, reusable knowledge for FUTURE sessions on \
+this same system. Capture things like: a correct command/flag/scope that worked; stable \
+identifiers (UPN, tenant, folder ids, hostnames, paths); an effective approach to a recurring \
+task; and MISTAKES to avoid — what failed and the correct fix (e.g. an invalid parameter or Graph \
+scope and the working one). Ignore one-off values, transient state, and anything specific to only \
+this run.\n\nCategorize each as one of: fact, feedback, lesson, other.\n\nRespond with ONLY a JSON \
+array, no prose, no code fences. Each element: {\"content\": \"<concise, reusable note for a \
+future terminal session>\", \"category\": \"<category>\"}. If there is nothing durable, return [].",
+    },
+    PromptDef {
         key: "memory_consolidate",
         name: "Memory consolidation",
         description: "The nightly/manual \"dreaming\" pass that merges redundant memories and \

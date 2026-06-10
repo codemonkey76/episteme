@@ -222,6 +222,48 @@ pub async fn extract(
     save_extracted(state, user_id, items, session_id.as_deref(), None).await;
 }
 
+/// Best-effort extraction of durable lessons/facts from a finished TERMINAL
+/// session — the commands the agent ran and their output, including failures.
+/// Unlike [`extract`] (which only sees chat narration), this reads the command
+/// transcript so the terminal agent learns operational lessons (a correct flag/
+/// scope, an id/UPN, a mistake to avoid). Detached and swallowed like `extract`.
+pub async fn extract_terminal(
+    state: &AppState,
+    user_id: &str,
+    provider: ProviderConfig,
+    request: String,
+    transcript: String,
+) {
+    if transcript.trim().is_empty() {
+        return;
+    }
+    let user = format!("User request: {request}\n\nCommands run and their output:\n{transcript}");
+    let system = crate::prompts::get(&state.db, "terminal_lessons").await;
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user) },
+    ];
+
+    let raw = match ModelRouter::complete_with_usage(&provider, history).await {
+        Ok((r, used)) => {
+            db::usage::record(&state.db, user_id, &provider, "memory", used).await;
+            r
+        }
+        Err(e) => {
+            tracing::warn!("terminal lesson extraction failed: {e}");
+            return;
+        }
+    };
+    let items = match parse(&raw) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("terminal lesson parse failed: {e}");
+            return;
+        }
+    };
+    save_extracted(state, user_id, items, None, None).await;
+}
+
 /// Validate, dedup, and persist extracted memories. `force_category` pins
 /// every item to one category (used by the style path) instead of trusting
 /// the model's per-item categorization.

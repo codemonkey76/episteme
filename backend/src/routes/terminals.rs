@@ -453,8 +453,9 @@ async fn run_agent(
     crate::memory::inject(&mut history, &state, &user_id, &user_message).await;
 
     let tools = vec![run_command_schema()];
-    // Accumulated visible narration this turn — fed to memory extraction.
-    let mut assistant_text = String::new();
+    // Transcript of the commands run this turn and their output (incl. errors) —
+    // fed to terminal lesson extraction so the agent learns from what happened.
+    let mut transcript = String::new();
 
     for _ in 0..MAX_STEPS {
         let (text, calls) = match stream_turn(&state, &user_id, &provider, history.clone(), tools.clone(), &ev).await {
@@ -466,8 +467,6 @@ async fn run_agent(
             }
         };
         if !text.trim().is_empty() {
-            assistant_text.push_str(&text);
-            assistant_text.push('\n');
             history.push(ChatMessage { role: "assistant".to_string(), content: serde_json::Value::String(text) });
         }
         if calls.is_empty() {
@@ -497,6 +496,12 @@ async fn run_agent(
                 (output, exit) = session.type_and_capture(&proposed, TYPED_TIMEOUT) => {
                     let _ = ev.send(AgentEvent::Output { command: proposed.clone(), exit }).await;
                     let exit_str = exit.map(|e| e.to_string()).unwrap_or_else(|| "unknown (did not finish)".to_string());
+                    // Record for lesson extraction (output clipped to keep it sane).
+                    if transcript.len() < 12_000 {
+                        let shown: String = output.chars().take(1500).collect();
+                        let ell = if output.chars().count() > 1500 { "\n…(truncated)" } else { "" };
+                        transcript.push_str(&format!("$ {proposed}\nexit {exit_str}\n{shown}{ell}\n\n"));
+                    }
                     history.push(tool_result(
                         &call.call_id,
                         &format!("exit code: {exit_str}\n\noutput:\n{output}"),
@@ -505,6 +510,7 @@ async fn run_agent(
                 _ = drx => {
                     // User skipped: clear the typed-but-unrun line.
                     session.cancel_line();
+                    transcript.push_str(&format!("$ {proposed}\n(skipped by user)\n\n"));
                     history.push(tool_result(&call.call_id, "user skipped this command"));
                 }
             }
@@ -518,12 +524,13 @@ async fn run_agent(
         history.into_iter().skip_while(|m| m.role == "system").collect();
     state.terminal_agent_history.lock().await.insert(session_id, to_save);
 
-    // Best-effort, detached: learn durable facts/lessons from this session so the
-    // terminal agent improves over time (UPN, tenant, approaches that worked).
-    if !assistant_text.trim().is_empty() {
+    // Best-effort, detached: learn durable facts/lessons from this session's
+    // commands + output (incl. failures) so the terminal agent improves over time
+    // — correct flags/scopes, ids/UPN, mistakes to avoid.
+    if !transcript.trim().is_empty() {
         let st = Arc::clone(&state);
         tokio::spawn(async move {
-            crate::memory::extract(&st, &user_id, provider, user_message, assistant_text, None).await;
+            crate::memory::extract_terminal(&st, &user_id, provider, user_message, transcript).await;
         });
     }
 
