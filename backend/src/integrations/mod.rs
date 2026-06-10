@@ -4,6 +4,7 @@ pub mod github;
 pub mod graph;
 pub mod helpdesk;
 pub mod microsoft;
+pub mod phoneus;
 pub mod push;
 pub mod websearch;
 pub mod webpush;

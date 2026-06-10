@@ -945,9 +945,26 @@ export const integrations = {
       }),
     disconnect: () => fetch(BASE + '/integrations/github/config', { method: 'DELETE' }),
   },
+  phoneus: {
+    getConfig: () => json<PhoneusStatus>('/integrations/phoneus/config'),
+    // Logs in with the credentials once; only the resulting token is stored.
+    connect: (base_url: string, email: string, password: string) =>
+      json<PhoneusStatus>('/integrations/phoneus/config', {
+        method: 'POST',
+        body: JSON.stringify({ base_url, email, password }),
+      }),
+    disconnect: () =>
+      fetch(BASE + '/integrations/phoneus/config', { method: 'DELETE' }),
+  },
 }
 
 export interface HelpdeskStatus {
+  connected: boolean
+  base_url: string
+  email: string
+}
+
+export interface PhoneusStatus {
   connected: boolean
   base_url: string
   email: string

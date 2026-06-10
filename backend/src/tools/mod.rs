@@ -18,6 +18,7 @@ pub mod history;
 pub mod jobs;
 pub mod memories;
 pub mod notes;
+pub mod phoneus;
 pub mod research;
 pub mod tasks;
 pub mod web;
@@ -37,6 +38,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(research::schemas());
     all.extend(helpdesk::schemas());
     all.extend(github::schemas());
+    all.extend(phoneus::schemas());
     all
 }
 
@@ -53,6 +55,7 @@ pub fn is_native(name: &str) -> bool {
         || research::handles(name)
         || helpdesk::handles(name)
         || github::handles(name)
+        || phoneus::handles(name)
 }
 
 /// Native tools grouped by integration, for the settings Tools page.
@@ -70,12 +73,14 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("research", research::schemas()),
         ("helpdesk", helpdesk::schemas()),
         ("github", github::schemas()),
+        ("phoneus", phoneus::schemas()),
     ]
 }
 
 /// Default approval policy when the user hasn't configured one in Settings →
-/// Tools. Outward-facing helpdesk writes (replies email the customer; time
-/// entries feed billing) start gated; everything else auto-executes.
+/// Tools. Outward-facing writes (helpdesk replies email the customer; time
+/// entries feed billing; PhoneUs SMS goes to a real phone) start gated;
+/// everything else auto-executes.
 pub fn default_policy(name: &str) -> &'static str {
     match name {
         "helpdesk_create_user"
@@ -83,7 +88,8 @@ pub fn default_policy(name: &str) -> &'static str {
         | "helpdesk_reply_ticket"
         | "helpdesk_log_time"
         | "helpdesk_delete_time"
-        | "helpdesk_update_ticket" => "ask",
+        | "helpdesk_update_ticket"
+        | "phoneus_send_sms" => "ask",
         _ => "auto",
     }
 }
@@ -129,6 +135,9 @@ pub async fn execute(
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;
+    }
+    if phoneus::handles(name) {
+        return phoneus::execute(state, user_id, name, args).await;
     }
     if github::handles(name) {
         return github::execute(state, user_id, name, args).await;

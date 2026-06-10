@@ -499,3 +499,68 @@ pub async fn github_disconnect(
         .map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+// ── PhoneUs ──────────────────────────────────────────────────────────────────
+
+use crate::integrations::phoneus;
+
+#[derive(Serialize)]
+pub struct PhoneusStatus {
+    connected: bool,
+    base_url: String,
+    email: String,
+}
+
+// GET /api/integrations/phoneus/config — connection status (token never leaves).
+pub async fn phoneus_status(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<Json<PhoneusStatus>> {
+    let cfg = db::settings::get::<phoneus::PhoneusConfig>(&state.db, &phoneus::config_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(match cfg {
+        Some(c) => PhoneusStatus { connected: true, base_url: c.base_url, email: c.email },
+        None => PhoneusStatus { connected: false, base_url: String::new(), email: String::new() },
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct PhoneusConnectBody {
+    base_url: String,
+    email: String,
+    password: String,
+}
+
+// POST /api/integrations/phoneus/config — log in and store the token. The
+// password is used once for /api/mobile/auth/login and never persisted.
+pub async fn phoneus_connect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<PhoneusConnectBody>,
+) -> AppResult<Json<PhoneusStatus>> {
+    let base_url = body.base_url.trim().trim_end_matches('/').to_string();
+    let email = body.email.trim().to_string();
+    if base_url.is_empty() || !base_url.starts_with("http") {
+        return Err(AppError::BadRequest("base_url must be a http(s) URL".into()));
+    }
+    let token = phoneus::login(&state, &base_url, &email, &body.password)
+        .await
+        .map_err(AppError::Internal)?;
+    let cfg = phoneus::PhoneusConfig { base_url, email, token };
+    db::settings::set(&state.db, &phoneus::config_key(&user.id), &cfg)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(PhoneusStatus { connected: true, base_url: cfg.base_url, email: cfg.email }))
+}
+
+// DELETE /api/integrations/phoneus/config — disconnect (forget the token).
+pub async fn phoneus_disconnect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> AppResult<StatusCode> {
+    db::settings::delete(&state.db, &phoneus::config_key(&user.id))
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}

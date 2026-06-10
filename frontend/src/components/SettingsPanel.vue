@@ -82,6 +82,7 @@ onMounted(async () => {
   await loadEmailConfig()
   await loadCategorizer()
   await loadHelpdeskConfig()
+  await loadPhoneusConfig()
   await loadGithubConfig()
   if (emailConfig.value.connected) await loadSignatures()
 })
@@ -513,6 +514,47 @@ async function disconnectHelpdesk() {
   hdConfig.value = { connected: false, base_url: '', email: '' }
   hdForm.value.password = ''
   hdMsg.value = ''
+}
+
+// ── PhoneUs integration ──────────────────────────────────────────────────────
+const puConfig = ref<api.PhoneusStatus>({ connected: false, base_url: '', email: '' })
+const puForm = ref({ base_url: '', email: '', password: '' })
+const puMsg = ref('')
+const puSaving = ref(false)
+
+async function loadPhoneusConfig() {
+  try {
+    puConfig.value = await api.integrations.phoneus.getConfig()
+    if (puConfig.value.connected) {
+      puForm.value.base_url = puConfig.value.base_url
+      puForm.value.email = puConfig.value.email
+    }
+  } catch { /* not connected */ }
+}
+
+async function connectPhoneus() {
+  puSaving.value = true
+  puMsg.value = ''
+  try {
+    puConfig.value = await api.integrations.phoneus.connect(
+      puForm.value.base_url.trim(),
+      puForm.value.email.trim(),
+      puForm.value.password,
+    )
+    puForm.value.password = ''
+    puMsg.value = 'Connected.'
+  } catch (e: unknown) {
+    puMsg.value = e instanceof Error ? e.message : 'Connection failed.'
+  } finally {
+    puSaving.value = false
+  }
+}
+
+async function disconnectPhoneus() {
+  await api.integrations.phoneus.disconnect()
+  puConfig.value = { connected: false, base_url: '', email: '' }
+  puForm.value.password = ''
+  puMsg.value = ''
 }
 
 // ── GitHub integration ──────────────────────────────────────────────────────────
@@ -1549,6 +1591,55 @@ async function logout() {
               </button>
               <button v-if="hdConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectHelpdesk">Disconnect</button>
               <span v-if="hdMsg" class="text-[0.775rem]" :class="hdMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ hdMsg }}</span>
+            </div>
+          </form>
+        </section>
+
+        <!-- PhoneUs card -->
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
+          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('phoneus', !puConfig.connected)">
+            <div class="flex items-center gap-2.5">
+              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>
+              </svg>
+              <div>
+                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">PhoneUs</div>
+                <div class="text-[0.72rem] text-[var(--c-585858)]">Customer balances, services, contacts, and SMS from chat</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div v-if="puConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]" :title="puConfig.email">
+                Connected — {{ puConfig.email }}
+              </div>
+              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
+                Not connected
+              </div>
+              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('phoneus', !puConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+          </div>
+
+          <form v-if="cardOpen('phoneus', !puConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectPhoneus">
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              PhoneUs URL
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.base_url" placeholder="https://portal.phoneus.example" required />
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Email
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.email" type="email" autocomplete="off" required />
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Password
+              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.password" type="password" autocomplete="new-password" :placeholder="puConfig.connected ? 'Enter to reconnect' : ''" required />
+            </label>
+            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
+              The password is exchanged for an API token and never stored. Sending an SMS asks for approval in chat before it goes out (change under Settings → Tools).
+            </p>
+            <div class="flex items-center gap-2">
+              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="puSaving">
+                {{ puSaving ? 'Connecting…' : puConfig.connected ? 'Reconnect' : 'Connect' }}
+              </button>
+              <button v-if="puConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectPhoneus">Disconnect</button>
+              <span v-if="puMsg" class="text-[0.775rem]" :class="puMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ puMsg }}</span>
             </div>
           </form>
         </section>
