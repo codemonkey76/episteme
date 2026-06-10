@@ -10,10 +10,6 @@ use serde_json::Value;
 
 use crate::state::AppState;
 
-pub fn config_key(user_id: &str) -> String {
-    format!("phoneus_config:{user_id}")
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhoneusConfig {
     /// e.g. https://portal.phoneus.example — stored without a trailing slash.
@@ -24,10 +20,11 @@ pub struct PhoneusConfig {
     pub token: String,
 }
 
-pub async fn config(state: &AppState, user_id: &str) -> Result<PhoneusConfig> {
-    crate::db::settings::get::<PhoneusConfig>(&state.db, &config_key(user_id))
+/// Resolve the chosen PhoneUs instance's config (by name, default, or sole).
+pub async fn config(state: &AppState, user_id: &str, instance: Option<&str>) -> Result<PhoneusConfig> {
+    crate::integrations::registry::resolve(&state.db, user_id, "phoneus", instance)
         .await?
-        .ok_or_else(|| anyhow!("PhoneUs not connected — add it in Settings → Integrations"))
+        .parse_config()
 }
 
 /// Exchange credentials for a Sanctum token (POST /api/mobile/auth/login).
@@ -60,11 +57,12 @@ pub async fn login(state: &AppState, base_url: &str, email: &str, password: &str
 pub async fn request(
     state: &AppState,
     user_id: &str,
+    instance: Option<&str>,
     method: reqwest::Method,
     path: &str,
     body: Option<&Value>,
 ) -> Result<Value> {
-    let cfg = config(state, user_id).await?;
+    let cfg = config(state, user_id, instance).await?;
     let url = format!("{}/api/integration{}", cfg.base_url.trim_end_matches('/'), path);
     let mut req = state
         .http_client

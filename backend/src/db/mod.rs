@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
 pub mod auth;
+pub mod integrations;
 pub mod sessions;
 pub mod messages;
 pub mod settings;
@@ -109,6 +110,31 @@ mod tests {
 
         // Other users are isolated.
         assert_eq!(terminal_history::list(&pool, "u3", None, None, 100).await.unwrap().len(), 0);
+    }
+
+    /// Legacy single-config settings keys migrate into integration rows (as the
+    /// default instance) and the old key is removed.
+    #[tokio::test]
+    async fn integrations_import_legacy() {
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+
+        let key = "phoneus_config:u1";
+        settings::set(&pool, key, &serde_json::json!({
+            "base_url": "https://p", "email": "a@b.c", "token": "tok"
+        }))
+        .await
+        .unwrap();
+
+        integrations::import_legacy(&pool, "u1").await.unwrap();
+
+        let rows = integrations::list_by_kind(&pool, "u1", "phoneus").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_default);
+        assert!(rows[0].config.contains("tok"));
+        // The legacy key is gone, and a second import is a no-op.
+        assert!(settings::get::<serde_json::Value>(&pool, key).await.unwrap().is_none());
+        integrations::import_legacy(&pool, "u1").await.unwrap();
+        assert_eq!(integrations::count_by_kind(&pool, "u1", "phoneus").await.unwrap(), 1);
     }
 
     /// Soft-delete hides a memory from the active list/count but keeps it

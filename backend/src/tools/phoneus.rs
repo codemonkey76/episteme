@@ -15,11 +15,12 @@ pub fn schemas() -> Vec<Value> {
     vec![
         json!({
             "name": "phoneus_list_customers",
-            "description": "Search PhoneUs customers by company name, contact name, or account number. Returns each match's account_number, display_name, and current total_outstanding. Use this first to resolve a customer before asking about their balance, services, or contacts.",
+            "description": "Search PhoneUs customers by company name, contact name, or account number. Returns each match's account_number, display_name, and current total_outstanding. Use this first to resolve a customer before asking about their balance, services, or contacts. If multiple PhoneUs instances (portals) are configured, ask the user which one and pass its name as `integration`.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "search": { "type": "string", "description": "Company name, contact name, or account number to search for." }
+                    "search": { "type": "string", "description": "Company name, contact name, or account number to search for." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
                 },
                 "required": ["search"]
             }
@@ -30,7 +31,8 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." }
+                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
                 },
                 "required": ["account_number"]
             }
@@ -41,7 +43,8 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." }
+                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
                 },
                 "required": ["account_number"]
             }
@@ -52,7 +55,8 @@ pub fn schemas() -> Vec<Value> {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." }
+                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
                 },
                 "required": ["account_number"]
             }
@@ -65,7 +69,8 @@ pub fn schemas() -> Vec<Value> {
                 "properties": {
                     "contact_id": { "type": "integer", "description": "PhoneUs contact id (from phoneus_list_contacts) to send to." },
                     "to": { "type": "string", "description": "Raw destination number, if not sending to a known contact." },
-                    "message": { "type": "string", "description": "The SMS text." }
+                    "message": { "type": "string", "description": "The SMS text." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to send from, by name. Optional when only one is configured." }
                 },
                 "required": ["message"]
             }
@@ -89,26 +94,28 @@ fn account_number(args: &Value) -> Result<i64> {
 }
 
 pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
+    // Which PhoneUs instance to use (name); resolved against the registry.
+    let instance = args["integration"].as_str();
     match name {
         "phoneus_list_customers" => {
             let search = args["search"].as_str().unwrap_or("");
             let path = format!("/customers?search={}", urlencoding::encode(search));
-            let res = phoneus::request(state, user_id, Method::GET, &path, None).await?;
+            let res = phoneus::request(state, user_id, instance, Method::GET, &path, None).await?;
             Ok(json!({ "customers": res["customers"] }))
         }
         "phoneus_customer_balance" => {
             let id = account_number(&args)?;
-            let res = phoneus::request(state, user_id, Method::GET, &format!("/customers/{id}/balance"), None).await?;
+            let res = phoneus::request(state, user_id, instance, Method::GET, &format!("/customers/{id}/balance"), None).await?;
             Ok(res)
         }
         "phoneus_list_services" => {
             let id = account_number(&args)?;
-            let res = phoneus::request(state, user_id, Method::GET, &format!("/customers/{id}/services"), None).await?;
+            let res = phoneus::request(state, user_id, instance, Method::GET, &format!("/customers/{id}/services"), None).await?;
             Ok(res)
         }
         "phoneus_list_contacts" => {
             let id = account_number(&args)?;
-            let res = phoneus::request(state, user_id, Method::GET, &format!("/customers/{id}/contacts"), None).await?;
+            let res = phoneus::request(state, user_id, instance, Method::GET, &format!("/customers/{id}/contacts"), None).await?;
             Ok(res)
         }
         "phoneus_send_sms" => {
@@ -124,7 +131,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if !body.contains_key("contact_id") && !body.contains_key("to") {
                 return Err(anyhow!("provide a contact_id or a destination number (to)"));
             }
-            let res = phoneus::request(state, user_id, Method::POST, "/sms", Some(&Value::Object(body))).await?;
+            let res = phoneus::request(state, user_id, instance, Method::POST, "/sms", Some(&Value::Object(body))).await?;
             state
                 .log("phoneus", "info", format!(
                     "SMS queued to {}",

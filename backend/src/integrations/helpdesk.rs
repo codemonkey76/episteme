@@ -10,10 +10,6 @@ use serde_json::Value;
 
 use crate::state::AppState;
 
-pub fn config_key(user_id: &str) -> String {
-    format!("helpdesk_config:{user_id}")
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelpdeskConfig {
     /// e.g. https://helpdesk.example.com — stored without a trailing slash.
@@ -24,10 +20,11 @@ pub struct HelpdeskConfig {
     pub token: String,
 }
 
-pub async fn config(state: &AppState, user_id: &str) -> Result<HelpdeskConfig> {
-    crate::db::settings::get::<HelpdeskConfig>(&state.db, &config_key(user_id))
+/// Resolve the chosen helpdesk instance's config (by name, default, or sole).
+pub async fn config(state: &AppState, user_id: &str, instance: Option<&str>) -> Result<HelpdeskConfig> {
+    crate::integrations::registry::resolve(&state.db, user_id, "helpdesk", instance)
         .await?
-        .ok_or_else(|| anyhow!("helpdesk not connected — add it in Settings → Integrations"))
+        .parse_config()
 }
 
 /// Exchange agent credentials for a Sanctum token (POST /api/login).
@@ -72,11 +69,12 @@ pub struct UploadFile {
 pub async fn request_multipart(
     state: &AppState,
     user_id: &str,
+    instance: Option<&str>,
     path: &str,
     fields: Vec<(String, String)>,
     files: Vec<UploadFile>,
 ) -> Result<Value> {
-    let cfg = config(state, user_id).await?;
+    let cfg = config(state, user_id, instance).await?;
     let url = format!("{}/api{}", cfg.base_url.trim_end_matches('/'), path);
 
     let mut form = reqwest::multipart::Form::new();
@@ -130,11 +128,12 @@ pub async fn request_multipart(
 pub async fn request(
     state: &AppState,
     user_id: &str,
+    instance: Option<&str>,
     method: reqwest::Method,
     path: &str,
     body: Option<&Value>,
 ) -> Result<Value> {
-    let cfg = config(state, user_id).await?;
+    let cfg = config(state, user_id, instance).await?;
     let url = format!("{}/api{}", cfg.base_url.trim_end_matches('/'), path);
     let mut req = state
         .http_client

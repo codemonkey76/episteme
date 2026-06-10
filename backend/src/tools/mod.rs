@@ -36,10 +36,25 @@ pub fn schemas() -> Vec<Value> {
     all.extend(history::schemas());
     all.extend(jobs::schemas());
     all.extend(research::schemas());
-    all.extend(helpdesk::schemas());
-    all.extend(github::schemas());
-    all.extend(phoneus::schemas());
+    all.extend(tag_instance(helpdesk::schemas(), "helpdesk"));
+    all.extend(tag_instance(github::schemas(), "GitHub"));
+    all.extend(phoneus::schemas()); // already carries `integration` per tool
     all
+}
+
+/// Add an optional `integration` property to each schema so the model can target
+/// a specific named instance when several of a kind are configured.
+fn tag_instance(mut schemas: Vec<Value>, noun: &str) -> Vec<Value> {
+    let desc = format!("Which {noun} instance to use, by name. Optional when only one is configured.");
+    for s in &mut schemas {
+        if let Some(props) = s["input_schema"]["properties"].as_object_mut() {
+            props.insert(
+                "integration".into(),
+                serde_json::json!({ "type": "string", "description": desc.clone() }),
+            );
+        }
+    }
+    schemas
 }
 
 pub fn is_native(name: &str) -> bool {
@@ -151,11 +166,31 @@ pub async fn execute(
 pub async fn system_preamble(state: &AppState, user_id: &str) -> ChatMessage {
     let tz = state.home_tz(user_id).await;
     let now = Utc::now().with_timezone(&tz);
-    let text = crate::prompts::get(&state.db, "chat_system")
+    let mut text = crate::prompts::get(&state.db, "chat_system")
         .await
         .replace("{now}", &now.format("%A, %-d %B %Y, %-I:%M %p").to_string())
         .replace("{timezone}", tz.name())
         .replace("{offset}", &now.format("%:z").to_string());
+
+    // When a user has several instances of an integration (e.g. two PhoneUs
+    // portals), list them so the model can pass `integration` (by name) and ask
+    // which to use when it's ambiguous.
+    use crate::integrations::registry;
+    let mut multi: Vec<String> = Vec::new();
+    for kind in ["helpdesk", "phoneus", "github"] {
+        let names = registry::names(&state.db, user_id, kind).await;
+        if names.len() > 1 {
+            multi.push(format!("- {}: {}", registry::label(kind), names.join(", ")));
+        }
+    }
+    if !multi.is_empty() {
+        text.push_str(
+            "\n\nYou have multiple instances of these integrations. Pass `integration` (by name) \
+             to target one, and ask the user which when it isn't clear:\n",
+        );
+        text.push_str(&multi.join("\n"));
+    }
+
     ChatMessage { role: "system".to_string(), content: Value::String(text) }
 }
 

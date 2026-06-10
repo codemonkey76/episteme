@@ -140,13 +140,16 @@ fn slim_commit(c: &Value) -> Value {
 }
 
 pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
-    let repo = github::resolve_repo(state, user_id, args["repo"].as_str().unwrap_or("")).await?;
+    // Which GitHub instance (account) to use (name); resolved against the registry.
+    let instance = args["integration"].as_str();
+    let repo = github::resolve_repo(state, user_id, instance, args["repo"].as_str().unwrap_or("")).await?;
     match name {
         "github_get_commit" => {
             let sha = args["sha"].as_str().filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("sha is required"))?;
             let res = github::request(
                 state,
                 user_id,
+                instance,
                 Method::GET,
                 &format!("/repos/{repo}/commits/{}", urlencoding::encode(sha)),
                 None,
@@ -166,7 +169,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(a) = args["author"].as_str().filter(|s| !s.is_empty()) {
                 path.push_str(&format!("&author={}", urlencoding::encode(a)));
             }
-            let res = github::request(state, user_id, Method::GET, &path, None).await?;
+            let res = github::request(state, user_id, instance, Method::GET, &path, None).await?;
             // List items omit per-file diffs; summarize each.
             let commits: Vec<Value> = res
                 .as_array()
@@ -192,7 +195,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(r) = args["ref"].as_str().filter(|s| !s.is_empty()) {
                 path.push_str(&format!("?ref={}", urlencoding::encode(r)));
             }
-            let res = github::request(state, user_id, Method::GET, &path, None).await?;
+            let res = github::request(state, user_id, instance, Method::GET, &path, None).await?;
             if res["type"].as_str() != Some("file") {
                 return Err(anyhow!("'{file_path}' is not a file (a directory or symlink?)"));
             }
@@ -221,7 +224,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
         }
         "github_get_pull_request" => {
             let number = args["number"].as_i64().ok_or_else(|| anyhow!("number is required"))?;
-            let res = github::request(state, user_id, Method::GET, &format!("/repos/{repo}/pulls/{number}"), None).await?;
+            let res = github::request(state, user_id, instance, Method::GET, &format!("/repos/{repo}/pulls/{number}"), None).await?;
             Ok(json!({
                 "pull_request": {
                     "number": res["number"],
@@ -246,6 +249,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             let res = github::request(
                 state,
                 user_id,
+                instance,
                 Method::GET,
                 &format!("/search/commits?q={}&per_page=15", urlencoding::encode(&q)),
                 None,

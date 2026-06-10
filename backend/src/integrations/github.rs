@@ -13,10 +13,6 @@ use crate::state::AppState;
 const API: &str = "https://api.github.com";
 const API_VERSION: &str = "2022-11-28";
 
-pub fn config_key(user_id: &str) -> String {
-    format!("github_config:{user_id}")
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubConfig {
     /// Personal access token (fine-grained or classic, repo-read scope).
@@ -28,10 +24,11 @@ pub struct GithubConfig {
     pub default_owner: Option<String>,
 }
 
-pub async fn config(state: &AppState, user_id: &str) -> Result<GithubConfig> {
-    crate::db::settings::get::<GithubConfig>(&state.db, &config_key(user_id))
+/// Resolve the chosen GitHub instance's config (by name, default, or sole).
+pub async fn config(state: &AppState, user_id: &str, instance: Option<&str>) -> Result<GithubConfig> {
+    crate::integrations::registry::resolve(&state.db, user_id, "github", instance)
         .await?
-        .ok_or_else(|| anyhow!("GitHub not connected — add it in Settings → Integrations"))
+        .parse_config()
 }
 
 /// Verify a token and return its GitHub login (`GET /user`).
@@ -60,11 +57,12 @@ pub async fn verify(state: &AppState, token: &str) -> Result<String> {
 pub async fn request(
     state: &AppState,
     user_id: &str,
+    instance: Option<&str>,
     method: reqwest::Method,
     path: &str,
     body: Option<&Value>,
 ) -> Result<Value> {
-    let cfg = config(state, user_id).await?;
+    let cfg = config(state, user_id, instance).await?;
     let mut req = state
         .http_client
         .request(method, format!("{API}{path}"))
@@ -90,7 +88,7 @@ pub async fn request(
 
 /// Resolve a `repo` argument to `owner/name`: pass through when it already has
 /// an owner, else prepend the configured default owner.
-pub async fn resolve_repo(state: &AppState, user_id: &str, repo: &str) -> Result<String> {
+pub async fn resolve_repo(state: &AppState, user_id: &str, instance: Option<&str>, repo: &str) -> Result<String> {
     let repo = repo.trim().trim_start_matches('/');
     if repo.is_empty() {
         return Err(anyhow!("repo is required"));
@@ -98,7 +96,7 @@ pub async fn resolve_repo(state: &AppState, user_id: &str, repo: &str) -> Result
     if repo.contains('/') {
         return Ok(repo.to_string());
     }
-    let cfg = config(state, user_id).await?;
+    let cfg = config(state, user_id, instance).await?;
     match cfg.default_owner.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(owner) => Ok(format!("{owner}/{repo}")),
         None => Err(anyhow!(

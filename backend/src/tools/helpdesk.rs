@@ -171,6 +171,8 @@ fn slim_detail(t: &Value) -> Value {
 }
 
 pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -> Result<Value> {
+    // Which helpdesk instance to use (name); resolved against the registry.
+    let instance = args["integration"].as_str();
     match name {
         "helpdesk_list_tickets" => {
             let mut path = "/tickets?per_page=25".to_string();
@@ -180,12 +182,12 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(s) = args["search"].as_str().filter(|s| !s.is_empty()) {
                 path.push_str(&format!("&search={}", urlencoding::encode(s)));
             }
-            let res = helpdesk::request(state, user_id, Method::GET, &path, None).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::GET, &path, None).await?;
             Ok(json!({ "tickets": res["data"] }))
         }
         "helpdesk_get_ticket" => {
             let id = ticket_id(&args)?;
-            let res = helpdesk::request(state, user_id, Method::GET, &format!("/tickets/{id}"), None).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::GET, &format!("/tickets/{id}"), None).await?;
             Ok(json!({ "ticket": slim_detail(&res["data"]) }))
         }
         "helpdesk_list_clients" => {
@@ -193,7 +195,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(s) = args["search"].as_str().filter(|s| !s.is_empty()) {
                 path.push_str(&format!("?search={}", urlencoding::encode(s)));
             }
-            let res = helpdesk::request(state, user_id, Method::GET, &path, None).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::GET, &path, None).await?;
             Ok(json!({ "clients": res["data"] }))
         }
         "helpdesk_create_user" => {
@@ -214,7 +216,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if let Some(d) = args["default_client_id"].as_i64() {
                 body.insert("default_client_id".into(), json!(d));
             }
-            let res = helpdesk::request(state, user_id, Method::POST, "/users", Some(&Value::Object(body))).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::POST, "/users", Some(&Value::Object(body))).await?;
             state
                 .log("helpdesk", "info", format!(
                     "User created: {} <{}>",
@@ -234,7 +236,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "silent": args["silent"].as_bool().unwrap_or(false),
                 "source": "api",
             });
-            let res = helpdesk::request(state, user_id, Method::POST, "/tickets", Some(&body)).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::POST, "/tickets", Some(&body)).await?;
             state
                 .log("helpdesk", "info", format!(
                     "Ticket created: {} — {}",
@@ -254,7 +256,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "body": args["body"].as_str().ok_or_else(|| anyhow!("body is required"))?,
                 "type": kind,
             });
-            let res = helpdesk::request(state, user_id, Method::POST, &format!("/tickets/{id}/messages"), Some(&body)).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::POST, &format!("/tickets/{id}/messages"), Some(&body)).await?;
             state
                 .log("helpdesk", "info", format!("{kind} added to ticket #{id}"))
                 .await;
@@ -282,7 +284,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "description": args["description"].as_str().ok_or_else(|| anyhow!("description is required"))?,
                 "logged_at": logged_at,
             });
-            let res = helpdesk::request(state, user_id, Method::POST, &format!("/tickets/{id}/time-entries"), Some(&body)).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::POST, &format!("/tickets/{id}/time-entries"), Some(&body)).await?;
             state
                 .log("helpdesk", "info", format!("Logged {minutes}m against ticket #{id}"))
                 .await;
@@ -296,6 +298,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             helpdesk::request(
                 state,
                 user_id,
+                instance,
                 Method::DELETE,
                 &format!("/tickets/{id}/time-entries/{entry_id}"),
                 None,
@@ -316,7 +319,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 body.insert("priority".into(), json!(p));
             }
             if args["assign_to_me"].as_bool().unwrap_or(false) {
-                let me = helpdesk::request(state, user_id, Method::GET, "/user", None).await?;
+                let me = helpdesk::request(state, user_id, instance, Method::GET, "/user", None).await?;
                 let agent_id = me["data"]["id"]
                     .as_i64()
                     .ok_or_else(|| anyhow!("could not determine the connected agent's id"))?;
@@ -328,7 +331,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             if body.is_empty() {
                 return Err(anyhow!("provide status, priority, silent, and/or assign_to_me"));
             }
-            let res = helpdesk::request(state, user_id, Method::PATCH, &format!("/tickets/{id}"), Some(&Value::Object(body))).await?;
+            let res = helpdesk::request(state, user_id, instance, Method::PATCH, &format!("/tickets/{id}"), Some(&Value::Object(body))).await?;
             Ok(json!({ "updated": slim_detail(&res["data"]) }))
         }
         other => Err(anyhow!("unknown helpdesk tool '{other}'")),

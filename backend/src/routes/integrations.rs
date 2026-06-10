@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Redirect,
     Json,
@@ -362,205 +362,194 @@ pub async fn remove_shared(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── Helpdesk integration ────────────────────────────────────────────────────────
+// ── Integrations registry (helpdesk / phoneus / github) ──────────────────────
 
-use crate::integrations::helpdesk;
+use crate::db::integrations as int_db;
+use crate::integrations::{github, helpdesk, phoneus};
 
+/// Masked view of an instance — never returns the token.
 #[derive(Serialize)]
-pub struct HelpdeskStatus {
-    connected: bool,
+pub struct IntegrationView {
+    id: String,
+    kind: String,
+    name: String,
+    is_default: bool,
+    /// Account label: helpdesk/phoneus email, or GitHub login.
+    account: String,
     base_url: String,
-    email: String,
-}
-
-// GET /api/integrations/helpdesk/config — connection status (token never leaves).
-pub async fn helpdesk_status(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<Json<HelpdeskStatus>> {
-    let cfg = db::settings::get::<helpdesk::HelpdeskConfig>(
-        &state.db,
-        &helpdesk::config_key(&user.id),
-    )
-    .await
-    .map_err(AppError::Internal)?;
-    Ok(Json(match cfg {
-        Some(c) => HelpdeskStatus { connected: true, base_url: c.base_url, email: c.email },
-        None => HelpdeskStatus { connected: false, base_url: String::new(), email: String::new() },
-    }))
-}
-
-#[derive(Deserialize)]
-pub struct HelpdeskConnectBody {
-    base_url: String,
-    email: String,
-    password: String,
-}
-
-// POST /api/integrations/helpdesk/config — log in and store the token. The
-// password is used once for /api/login and never persisted.
-pub async fn helpdesk_connect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(body): Json<HelpdeskConnectBody>,
-) -> AppResult<Json<HelpdeskStatus>> {
-    let base_url = body.base_url.trim().trim_end_matches('/').to_string();
-    let email = body.email.trim().to_string();
-    if base_url.is_empty() || !base_url.starts_with("http") {
-        return Err(AppError::BadRequest("base_url must be a http(s) URL".into()));
-    }
-    let token = helpdesk::login(&state, &base_url, &email, &body.password)
-        .await
-        .map_err(AppError::Internal)?;
-    let cfg = helpdesk::HelpdeskConfig { base_url, email, token };
-    db::settings::set(&state.db, &helpdesk::config_key(&user.id), &cfg)
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(Json(HelpdeskStatus { connected: true, base_url: cfg.base_url, email: cfg.email }))
-}
-
-// DELETE /api/integrations/helpdesk/config — disconnect (forget the token).
-pub async fn helpdesk_disconnect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<StatusCode> {
-    db::settings::delete(&state.db, &helpdesk::config_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// ── GitHub integration ──────────────────────────────────────────────────────
-
-use crate::integrations::github;
-
-#[derive(Serialize)]
-pub struct GithubStatus {
-    connected: bool,
-    login: String,
     default_owner: String,
 }
 
-// GET /api/integrations/github/config — connection status (token never leaves).
-pub async fn github_status(
+fn view(i: &int_db::Integration) -> IntegrationView {
+    let cfg: serde_json::Value = serde_json::from_str(&i.config).unwrap_or(serde_json::Value::Null);
+    let account = cfg["email"].as_str().or_else(|| cfg["login"].as_str()).unwrap_or("").to_string();
+    IntegrationView {
+        id: i.id.clone(),
+        kind: i.kind.clone(),
+        name: i.name.clone(),
+        is_default: i.is_default,
+        account,
+        base_url: cfg["base_url"].as_str().unwrap_or("").to_string(),
+        default_owner: cfg["default_owner"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+// GET /api/integrations — all the user's integration instances (masked).
+pub async fn integrations_list(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<Json<GithubStatus>> {
-    let cfg = db::settings::get::<github::GithubConfig>(&state.db, &github::config_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(Json(match cfg {
-        Some(c) => GithubStatus {
-            connected: true,
-            login: c.login,
-            default_owner: c.default_owner.unwrap_or_default(),
-        },
-        None => GithubStatus { connected: false, login: String::new(), default_owner: String::new() },
-    }))
+) -> AppResult<Json<serde_json::Value>> {
+    let _ = int_db::import_legacy(&state.db, &user.id).await;
+    let rows = int_db::list(&state.db, &user.id).await.map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "integrations": rows.iter().map(view).collect::<Vec<_>>() })))
 }
 
 #[derive(Deserialize)]
-pub struct GithubConnectBody {
-    token: String,
+pub struct IntegrationBody {
+    kind: String,
+    name: String,
+    #[serde(default)]
+    is_default: bool,
+    // Type-specific connect fields.
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
     #[serde(default)]
     default_owner: Option<String>,
 }
 
-// POST /api/integrations/github/config — verify the token (GET /user) and store
-// it with the resolved login.
-pub async fn github_connect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(body): Json<GithubConnectBody>,
-) -> AppResult<Json<GithubStatus>> {
-    let token = body.token.trim().to_string();
-    if token.is_empty() {
-        return Err(AppError::BadRequest("a personal access token is required".into()));
+/// Run the per-kind credential exchange and return the config JSON to store.
+/// On edit (`existing` set) an absent password/token keeps the current token.
+async fn build_config(
+    state: &AppState,
+    kind: &str,
+    body: &IntegrationBody,
+    existing: Option<&int_db::Integration>,
+) -> AppResult<serde_json::Value> {
+    match kind {
+        "helpdesk" | "phoneus" => {
+            let base_url =
+                body.base_url.clone().unwrap_or_default().trim().trim_end_matches('/').to_string();
+            let email = body.email.clone().unwrap_or_default().trim().to_string();
+            if base_url.is_empty() || !base_url.starts_with("http") {
+                return Err(AppError::BadRequest("base_url must be a http(s) URL".into()));
+            }
+            let pw = body.password.clone().unwrap_or_default();
+            if pw.is_empty() {
+                if let Some(ex) = existing {
+                    let mut cfg: serde_json::Value =
+                        serde_json::from_str(&ex.config).unwrap_or_else(|_| serde_json::json!({}));
+                    cfg["base_url"] = serde_json::json!(base_url);
+                    cfg["email"] = serde_json::json!(email);
+                    return Ok(cfg);
+                }
+                return Err(AppError::BadRequest("password is required".into()));
+            }
+            let token = if kind == "helpdesk" {
+                helpdesk::login(state, &base_url, &email, &pw).await
+            } else {
+                phoneus::login(state, &base_url, &email, &pw).await
+            }
+            .map_err(AppError::Internal)?;
+            Ok(serde_json::json!({ "base_url": base_url, "email": email, "token": token }))
+        }
+        "github" => {
+            let default_owner = body.default_owner.clone().unwrap_or_default().trim().to_string();
+            let token = body.token.clone().unwrap_or_default();
+            if token.is_empty() {
+                if let Some(ex) = existing {
+                    let mut cfg: serde_json::Value =
+                        serde_json::from_str(&ex.config).unwrap_or_else(|_| serde_json::json!({}));
+                    cfg["default_owner"] = serde_json::json!(default_owner);
+                    return Ok(cfg);
+                }
+                return Err(AppError::BadRequest("token is required".into()));
+            }
+            let login = github::verify(state, &token).await.map_err(AppError::Internal)?;
+            Ok(serde_json::json!({ "token": token, "login": login, "default_owner": default_owner }))
+        }
+        other => Err(AppError::BadRequest(format!("unknown integration kind '{other}'"))),
     }
-    let login = github::verify(&state, &token).await.map_err(AppError::Internal)?;
-    let default_owner = body
-        .default_owner
-        .map(|o| o.trim().to_string())
-        .filter(|o| !o.is_empty());
-    let cfg = github::GithubConfig { token, login: login.clone(), default_owner: default_owner.clone() };
-    db::settings::set(&state.db, &github::config_key(&user.id), &cfg)
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(Json(GithubStatus { connected: true, login, default_owner: default_owner.unwrap_or_default() }))
 }
 
-// DELETE /api/integrations/github/config — disconnect (forget the token).
-pub async fn github_disconnect(
+// POST /api/integrations — add an instance (runs the connect/credential exchange).
+pub async fn integrations_create(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<StatusCode> {
-    db::settings::delete(&state.db, &github::config_key(&user.id))
+    Json(body): Json<IntegrationBody>,
+) -> AppResult<Json<IntegrationView>> {
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("name is required".into()));
+    }
+    let cfg = build_config(&state, &body.kind, &body, None).await?;
+    // First instance of a kind becomes default automatically.
+    let first =
+        int_db::count_by_kind(&state.db, &user.id, &body.kind).await.map_err(AppError::Internal)? == 0;
+    let row = int_db::insert(
+        &state.db,
+        &user.id,
+        &body.kind,
+        &name,
+        body.is_default || first,
+        &cfg.to_string(),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+    Ok(Json(view(&row)))
+}
+
+// PUT /api/integrations/:id — rename and/or re-authenticate.
+pub async fn integrations_update(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+    Json(body): Json<IntegrationBody>,
+) -> AppResult<Json<IntegrationView>> {
+    let existing = int_db::get(&state.db, &user.id, &id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or(AppError::NotFound)?;
+    let name = if body.name.trim().is_empty() {
+        existing.name.clone()
+    } else {
+        body.name.trim().to_string()
+    };
+    let cfg = build_config(&state, &existing.kind, &body, Some(&existing)).await?;
+    int_db::update(&state.db, &user.id, &id, &name, Some(&cfg.to_string()))
         .await
         .map_err(AppError::Internal)?;
+    if body.is_default {
+        int_db::set_default(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
+    }
+    let row = int_db::get(&state.db, &user.id, &id)
+        .await
+        .map_err(AppError::Internal)?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(view(&row)))
+}
+
+// DELETE /api/integrations/:id
+pub async fn integrations_delete(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    int_db::delete(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── PhoneUs ──────────────────────────────────────────────────────────────────
-
-use crate::integrations::phoneus;
-
-#[derive(Serialize)]
-pub struct PhoneusStatus {
-    connected: bool,
-    base_url: String,
-    email: String,
-}
-
-// GET /api/integrations/phoneus/config — connection status (token never leaves).
-pub async fn phoneus_status(
+// POST /api/integrations/:id/default — make this the default for its kind.
+pub async fn integrations_set_default(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<Json<PhoneusStatus>> {
-    let cfg = db::settings::get::<phoneus::PhoneusConfig>(&state.db, &phoneus::config_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(Json(match cfg {
-        Some(c) => PhoneusStatus { connected: true, base_url: c.base_url, email: c.email },
-        None => PhoneusStatus { connected: false, base_url: String::new(), email: String::new() },
-    }))
-}
-
-#[derive(Deserialize)]
-pub struct PhoneusConnectBody {
-    base_url: String,
-    email: String,
-    password: String,
-}
-
-// POST /api/integrations/phoneus/config — log in and store the token. The
-// password is used once for /api/mobile/auth/login and never persisted.
-pub async fn phoneus_connect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(body): Json<PhoneusConnectBody>,
-) -> AppResult<Json<PhoneusStatus>> {
-    let base_url = body.base_url.trim().trim_end_matches('/').to_string();
-    let email = body.email.trim().to_string();
-    if base_url.is_empty() || !base_url.starts_with("http") {
-        return Err(AppError::BadRequest("base_url must be a http(s) URL".into()));
-    }
-    let token = phoneus::login(&state, &base_url, &email, &body.password)
-        .await
-        .map_err(AppError::Internal)?;
-    let cfg = phoneus::PhoneusConfig { base_url, email, token };
-    db::settings::set(&state.db, &phoneus::config_key(&user.id), &cfg)
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(Json(PhoneusStatus { connected: true, base_url: cfg.base_url, email: cfg.email }))
-}
-
-// DELETE /api/integrations/phoneus/config — disconnect (forget the token).
-pub async fn phoneus_disconnect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
-    db::settings::delete(&state.db, &phoneus::config_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
+    int_db::set_default(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

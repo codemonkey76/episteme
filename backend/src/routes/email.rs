@@ -1290,6 +1290,7 @@ pub async fn ticket_preview(
     let clients = crate::integrations::helpdesk::request(
         &state,
         user_id,
+        None,
         reqwest::Method::GET,
         &format!("/clients?contact_email={}", urlencoding::encode(from_addr)),
         None,
@@ -1509,7 +1510,7 @@ pub async fn ticket_create(
     let attached = files.len();
 
     let created =
-        crate::integrations::helpdesk::request_multipart(&state, user_id, "/tickets", fields, files)
+        crate::integrations::helpdesk::request_multipart(&state, user_id, None, "/tickets", fields, files)
             .await
             .map_err(AppError::Internal)?;
 

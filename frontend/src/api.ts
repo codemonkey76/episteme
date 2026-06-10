@@ -924,56 +924,39 @@ export const integrations = {
     removeShared: (address: string) =>
       fetch(BASE + `/integrations/email/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
   },
-  helpdesk: {
-    getConfig: () => json<HelpdeskStatus>('/integrations/helpdesk/config'),
-    // Logs in with the credentials once; only the resulting token is stored.
-    connect: (base_url: string, email: string, password: string) =>
-      json<HelpdeskStatus>('/integrations/helpdesk/config', {
-        method: 'POST',
-        body: JSON.stringify({ base_url, email, password }),
-      }),
-    disconnect: () =>
-      fetch(BASE + '/integrations/helpdesk/config', { method: 'DELETE' }),
-  },
-  github: {
-    getConfig: () => json<GithubStatus>('/integrations/github/config'),
-    // Verifies the token (GET /user); only the token is stored.
-    connect: (token: string, default_owner: string) =>
-      json<GithubStatus>('/integrations/github/config', {
-        method: 'POST',
-        body: JSON.stringify({ token, default_owner }),
-      }),
-    disconnect: () => fetch(BASE + '/integrations/github/config', { method: 'DELETE' }),
-  },
-  phoneus: {
-    getConfig: () => json<PhoneusStatus>('/integrations/phoneus/config'),
-    // Logs in with the credentials once; only the resulting token is stored.
-    connect: (base_url: string, email: string, password: string) =>
-      json<PhoneusStatus>('/integrations/phoneus/config', {
-        method: 'POST',
-        body: JSON.stringify({ base_url, email, password }),
-      }),
-    disconnect: () =>
-      fetch(BASE + '/integrations/phoneus/config', { method: 'DELETE' }),
-  },
+  // Named instances of helpdesk/phoneus/github (multiple allowed per kind).
+  // Tokens stay server-side; create/update run the credential exchange.
+  list: () => json<{ integrations: IntegrationView[] }>('/integrations'),
+  create: (body: IntegrationInput) =>
+    json<IntegrationView>('/integrations', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: IntegrationInput) =>
+    json<IntegrationView>(`/integrations/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  remove: (id: string) => fetch(BASE + `/integrations/${id}`, { method: 'DELETE' }),
+  setDefault: (id: string) => fetch(BASE + `/integrations/${id}/default`, { method: 'POST' }),
 }
 
-export interface HelpdeskStatus {
-  connected: boolean
+export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github'
+
+export interface IntegrationView {
+  id: string
+  kind: IntegrationKind
+  name: string
+  is_default: boolean
+  /** helpdesk/phoneus email, or GitHub login. */
+  account: string
   base_url: string
-  email: string
-}
-
-export interface PhoneusStatus {
-  connected: boolean
-  base_url: string
-  email: string
-}
-
-export interface GithubStatus {
-  connected: boolean
-  login: string
   default_owner: string
+}
+
+export interface IntegrationInput {
+  kind: IntegrationKind
+  name: string
+  is_default?: boolean
+  base_url?: string
+  email?: string
+  password?: string
+  token?: string
+  default_owner?: string
 }
 
 // Auth

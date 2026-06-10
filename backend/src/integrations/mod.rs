@@ -6,5 +6,6 @@ pub mod helpdesk;
 pub mod microsoft;
 pub mod phoneus;
 pub mod push;
+pub mod registry;
 pub mod websearch;
 pub mod webpush;

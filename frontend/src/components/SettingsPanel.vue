@@ -81,9 +81,7 @@ onMounted(async () => {
   await loadTimezone()
   await loadEmailConfig()
   await loadCategorizer()
-  await loadHelpdeskConfig()
-  await loadPhoneusConfig()
-  await loadGithubConfig()
+  await loadIntegrations()
   if (emailConfig.value.connected) await loadSignatures()
 })
 
@@ -475,123 +473,66 @@ function connectEmail() {
   window.location.href = '/api/integrations/email/connect'
 }
 
-// ── Helpdesk integration ────────────────────────────────────────────────────────
-const hdConfig = ref<api.HelpdeskStatus>({ connected: false, base_url: '', email: '' })
-const hdForm = ref({ base_url: '', email: '', password: '' })
-const hdMsg = ref('')
-const hdSaving = ref(false)
-
-async function loadHelpdeskConfig() {
-  try {
-    hdConfig.value = await api.integrations.helpdesk.getConfig()
-    if (hdConfig.value.connected) {
-      hdForm.value.base_url = hdConfig.value.base_url
-      hdForm.value.email = hdConfig.value.email
-    }
-  } catch { /* not connected */ }
+// ── Integrations (helpdesk / phoneus / github) — multiple named instances ─────
+const INTEGRATION_KINDS = [
+  { kind: 'helpdesk' as const, label: 'Helpdesk', auth: 'login' as const, blurb: 'Tickets, replies, and time logging from chat' },
+  { kind: 'phoneus' as const, label: 'PhoneUs', auth: 'login' as const, blurb: 'Customer balances, services, contacts, and SMS' },
+  { kind: 'github' as const, label: 'GitHub', auth: 'token' as const, blurb: 'Read commits, files, and pull requests' },
+]
+function kindMeta(kind: string) {
+  return INTEGRATION_KINDS.find((k) => k.kind === kind) ?? INTEGRATION_KINDS[0]
 }
 
-async function connectHelpdesk() {
-  hdSaving.value = true
-  hdMsg.value = ''
-  try {
-    hdConfig.value = await api.integrations.helpdesk.connect(
-      hdForm.value.base_url.trim(),
-      hdForm.value.email.trim(),
-      hdForm.value.password,
-    )
-    hdForm.value.password = ''
-    hdMsg.value = 'Connected.'
-  } catch (e: unknown) {
-    hdMsg.value = e instanceof Error ? e.message : 'Connection failed.'
-  } finally {
-    hdSaving.value = false
+const integrations = ref<api.IntegrationView[]>([])
+// The modal's working copy; `id` set = editing, else adding.
+type IntegrationDraft = api.IntegrationInput & { id?: string }
+const intDraft = ref<IntegrationDraft | null>(null)
+const intMsg = ref('')
+const intSaving = ref(false)
+
+async function loadIntegrations() {
+  try { integrations.value = (await api.integrations.list()).integrations } catch { /* none */ }
+}
+
+function openAddIntegration() {
+  intMsg.value = ''
+  intDraft.value = { kind: 'helpdesk', name: '', base_url: '', email: '', password: '', token: '', default_owner: '', is_default: false }
+}
+
+function openEditIntegration(row: api.IntegrationView) {
+  intMsg.value = ''
+  intDraft.value = {
+    id: row.id, kind: row.kind, name: row.name, is_default: row.is_default,
+    base_url: row.base_url, email: row.account, password: '', token: '', default_owner: row.default_owner,
   }
 }
 
-async function disconnectHelpdesk() {
-  await api.integrations.helpdesk.disconnect()
-  hdConfig.value = { connected: false, base_url: '', email: '' }
-  hdForm.value.password = ''
-  hdMsg.value = ''
-}
-
-// ── PhoneUs integration ──────────────────────────────────────────────────────
-const puConfig = ref<api.PhoneusStatus>({ connected: false, base_url: '', email: '' })
-const puForm = ref({ base_url: '', email: '', password: '' })
-const puMsg = ref('')
-const puSaving = ref(false)
-
-async function loadPhoneusConfig() {
+async function saveIntegration() {
+  const d = intDraft.value
+  if (!d || !d.name.trim()) { intMsg.value = 'Name is required.'; return }
+  intSaving.value = true
+  intMsg.value = ''
   try {
-    puConfig.value = await api.integrations.phoneus.getConfig()
-    if (puConfig.value.connected) {
-      puForm.value.base_url = puConfig.value.base_url
-      puForm.value.email = puConfig.value.email
-    }
-  } catch { /* not connected */ }
-}
-
-async function connectPhoneus() {
-  puSaving.value = true
-  puMsg.value = ''
-  try {
-    puConfig.value = await api.integrations.phoneus.connect(
-      puForm.value.base_url.trim(),
-      puForm.value.email.trim(),
-      puForm.value.password,
-    )
-    puForm.value.password = ''
-    puMsg.value = 'Connected.'
+    if (d.id) await api.integrations.update(d.id, d)
+    else await api.integrations.create(d)
+    await loadIntegrations()
+    intDraft.value = null
   } catch (e: unknown) {
-    puMsg.value = e instanceof Error ? e.message : 'Connection failed.'
+    intMsg.value = e instanceof Error ? e.message : 'Save failed.'
   } finally {
-    puSaving.value = false
+    intSaving.value = false
   }
 }
 
-async function disconnectPhoneus() {
-  await api.integrations.phoneus.disconnect()
-  puConfig.value = { connected: false, base_url: '', email: '' }
-  puForm.value.password = ''
-  puMsg.value = ''
+async function removeIntegration(row: api.IntegrationView) {
+  if (!confirm(`Remove ${kindMeta(row.kind).label} "${row.name}"?`)) return
+  await api.integrations.remove(row.id)
+  await loadIntegrations()
 }
 
-// ── GitHub integration ──────────────────────────────────────────────────────────
-const ghConfig = ref<api.GithubStatus>({ connected: false, login: '', default_owner: '' })
-const ghForm = ref({ token: '', default_owner: '' })
-const ghMsg = ref('')
-const ghSaving = ref(false)
-
-async function loadGithubConfig() {
-  try {
-    ghConfig.value = await api.integrations.github.getConfig()
-    if (ghConfig.value.connected) ghForm.value.default_owner = ghConfig.value.default_owner
-  } catch { /* not connected */ }
-}
-
-async function connectGithub() {
-  ghSaving.value = true
-  ghMsg.value = ''
-  try {
-    ghConfig.value = await api.integrations.github.connect(
-      ghForm.value.token.trim(),
-      ghForm.value.default_owner.trim(),
-    )
-    ghForm.value.token = ''
-    ghMsg.value = 'Connected.'
-  } catch (e: unknown) {
-    ghMsg.value = e instanceof Error ? e.message : 'Connection failed.'
-  } finally {
-    ghSaving.value = false
-  }
-}
-
-async function disconnectGithub() {
-  await api.integrations.github.disconnect()
-  ghConfig.value = { connected: false, login: '', default_owner: '' }
-  ghForm.value.token = ''
-  ghMsg.value = ''
+async function makeDefaultIntegration(row: api.IntegrationView) {
+  await api.integrations.setDefault(row.id)
+  await loadIntegrations()
 }
 
 // ── Shared mailboxes ────────────────────────────────────────────────────────────
@@ -1546,148 +1487,89 @@ async function logout() {
           </template>
         </section>
 
-        <!-- Helpdesk card -->
-        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('helpdesk', !hdConfig.connected)">
-            <div class="flex items-center gap-2.5">
-              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/>
-              </svg>
-              <div>
-                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Helpdesk</div>
-                <div class="text-[0.72rem] text-[var(--c-585858)]">Tickets, replies, and time logging from chat</div>
-              </div>
+        <!-- Integrations (helpdesk / phoneus / github) — multiple named instances -->
+        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">Integrations</div>
+              <div class="text-[0.72rem] text-[var(--c-585858)]">Connect one or more Helpdesk, PhoneUs, or GitHub accounts. The AI uses the default of each kind, or asks which when several exist.</div>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <div v-if="hdConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]" :title="hdConfig.email">
-                Connected — {{ hdConfig.email }}
-              </div>
-              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
-                Not connected
-              </div>
-              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('helpdesk', !hdConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </div>
+            <button class="shrink-0 flex items-center gap-[0.35rem] bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-2.5 py-1 text-xs font-[inherit] cursor-pointer hover:bg-[var(--c-254880)]" @click="openAddIntegration">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add integration
+            </button>
           </div>
 
-          <form v-if="cardOpen('helpdesk', !hdConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectHelpdesk">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Helpdesk URL
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.base_url" placeholder="https://helpdesk.example.com" required />
-            </label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Agent email
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.email" type="email" autocomplete="off" required />
-            </label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Password
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="hdForm.password" type="password" autocomplete="new-password" :placeholder="hdConfig.connected ? 'Enter to reconnect' : ''" required />
-            </label>
-            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
-              The password is exchanged for an API token and never stored. Ticket creation, customer replies, and time logging ask for approval in chat before running (change under Settings → Tools).
-            </p>
-            <div class="flex items-center gap-2">
-              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="hdSaving">
-                {{ hdSaving ? 'Connecting…' : hdConfig.connected ? 'Reconnect' : 'Connect' }}
+          <p v-if="integrations.length === 0" class="text-[0.775rem] text-[var(--c-585858)]">No integrations yet — add a Helpdesk, PhoneUs, or GitHub connection.</p>
+          <div v-else class="flex flex-col gap-1.5">
+            <div v-for="row in integrations" :key="row.id" class="flex items-center gap-3 bg-[var(--c-0d0d0d)] border border-[var(--c-1e1e1e)] rounded px-3 py-2">
+              <span class="text-[0.62rem] font-semibold uppercase tracking-[0.04em] px-1.5 py-[0.1rem] rounded border text-[var(--c-7ab0ff)] border-[var(--c-2a4a8a)]">{{ kindMeta(row.kind).label }}</span>
+              <div class="flex-1 min-w-0">
+                <div class="text-[0.8125rem] text-fg truncate">
+                  {{ row.name }}
+                  <span v-if="row.is_default" class="ml-1 text-[0.58rem] uppercase tracking-[0.04em] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)] rounded px-1 py-[0.05rem]">default</span>
+                </div>
+                <div class="text-[0.68rem] text-[var(--c-585858)] truncate">{{ row.account }}<template v-if="row.base_url"> · {{ row.base_url }}</template></div>
+              </div>
+              <button v-if="!row.is_default" class="text-[0.7rem] text-[var(--c-808080)] hover:text-[var(--c-c0c0c0)] bg-none border-none cursor-pointer font-[inherit]" title="Use this one by default" @click="makeDefaultIntegration(row)">Make default</button>
+              <button class="text-[var(--c-606060)] hover:text-[var(--c-a0c0ff)] p-1 cursor-pointer bg-none border-none" title="Edit" @click="openEditIntegration(row)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg>
               </button>
-              <button v-if="hdConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectHelpdesk">Disconnect</button>
-              <span v-if="hdMsg" class="text-[0.775rem]" :class="hdMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ hdMsg }}</span>
-            </div>
-          </form>
-        </section>
-
-        <!-- PhoneUs card -->
-        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('phoneus', !puConfig.connected)">
-            <div class="flex items-center gap-2.5">
-              <svg class="text-[var(--c-7ab0ff)]" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>
-              </svg>
-              <div>
-                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">PhoneUs</div>
-                <div class="text-[0.72rem] text-[var(--c-585858)]">Customer balances, services, contacts, and SMS from chat</div>
-              </div>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <div v-if="puConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]" :title="puConfig.email">
-                Connected — {{ puConfig.email }}
-              </div>
-              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
-                Not connected
-              </div>
-              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('phoneus', !puConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+              <button class="text-[var(--c-606060)] hover:text-[var(--c-d08080)] p-1 cursor-pointer bg-none border-none" title="Remove" @click="removeIntegration(row)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           </div>
-
-          <form v-if="cardOpen('phoneus', !puConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectPhoneus">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              PhoneUs URL
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.base_url" placeholder="https://portal.phoneus.example" required />
-            </label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Email
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.email" type="email" autocomplete="off" required />
-            </label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Password
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="puForm.password" type="password" autocomplete="new-password" :placeholder="puConfig.connected ? 'Enter to reconnect' : ''" required />
-            </label>
-            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
-              The password is exchanged for an API token and never stored. Sending an SMS asks for approval in chat before it goes out (change under Settings → Tools).
-            </p>
-            <div class="flex items-center gap-2">
-              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="puSaving">
-                {{ puSaving ? 'Connecting…' : puConfig.connected ? 'Reconnect' : 'Connect' }}
-              </button>
-              <button v-if="puConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectPhoneus">Disconnect</button>
-              <span v-if="puMsg" class="text-[0.775rem]" :class="puMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ puMsg }}</span>
-            </div>
-          </form>
         </section>
 
-        <!-- GitHub card -->
-        <section class="bg-[var(--c-111111)] border border-[var(--c-222222)] rounded-lg p-3.5 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-1 p-1 rounded" @click="toggleCard('github', !ghConfig.connected)">
-            <div class="flex items-center gap-2.5">
-              <svg class="text-[var(--c-c0c0c0)]" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.11-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/>
-              </svg>
-              <div>
-                <div class="text-[0.8125rem] text-[var(--c-d0d0d0)] font-medium">GitHub</div>
-                <div class="text-[0.72rem] text-[var(--c-585858)]">Look at commits, files, and PRs from chat — read-only</div>
-              </div>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <div v-if="ghConfig.connected" class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-[var(--c-0d2a1a)] text-[var(--c-4caf6e)] border border-[var(--c-1a4a2e)]">
-                Connected — {{ ghConfig.login }}
-              </div>
-              <div v-else class="text-[0.72rem] px-[0.55rem] py-[0.2rem] rounded-full whitespace-nowrap bg-surface text-[var(--c-484848)] border border-[var(--c-282828)]">
-                Not connected
-              </div>
-              <svg :class="['text-[var(--c-505050)] transition-transform duration-150', cardOpen('github', !ghConfig.connected) ? 'rotate-180' : '']" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        <!-- Add / edit integration modal -->
+        <div v-if="intDraft" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="intDraft = null">
+          <div class="w-full max-w-md bg-[var(--c-141414)] border border-[var(--c-2a2a2a)] rounded-lg p-4 flex flex-col gap-3">
+            <div class="text-[0.85rem] text-fg font-medium">{{ intDraft.id ? 'Edit integration' : 'Add integration' }}</div>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Type
+              <select v-model="intDraft.kind" :disabled="!!intDraft.id" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] disabled:opacity-60">
+                <option v-for="k in INTEGRATION_KINDS" :key="k.kind" :value="k.kind">{{ k.label }} — {{ k.blurb }}</option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
+              Name
+              <input v-model="intDraft.name" placeholder="e.g. ASG Portal" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+            </label>
+
+            <template v-if="intDraft.kind === 'helpdesk' || intDraft.kind === 'phoneus'">
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">URL
+                <input v-model="intDraft.base_url" placeholder="https://portal.example.com" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              </label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Email
+                <input v-model="intDraft.email" type="email" autocomplete="off" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              </label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Password
+                <input v-model="intDraft.password" type="password" autocomplete="new-password" :placeholder="intDraft.id ? 'Enter to re-authenticate' : ''" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              </label>
+            </template>
+
+            <template v-else>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Personal access token
+                <input v-model="intDraft.token" type="password" autocomplete="off" :placeholder="intDraft.id ? 'Enter to replace' : 'github_pat_… or ghp_…'" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              </label>
+              <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">Default owner <span class="text-[var(--c-585858)]">(optional)</span>
+                <input v-model="intDraft.default_owner" placeholder="your-org-or-username" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
+              </label>
+            </template>
+
+            <label class="flex items-center gap-2 text-[0.775rem] text-muted cursor-pointer select-none">
+              <input type="checkbox" v-model="intDraft.is_default" class="cursor-pointer" /> Default for {{ kindMeta(intDraft.kind).label }}
+            </label>
+            <p class="text-[0.7rem] text-[var(--c-585858)] leading-[1.5]">Credentials are exchanged for a token; the password/token is never stored.<template v-if="intDraft.kind === 'phoneus'"> Sending an SMS asks for approval in chat.</template></p>
+            <div class="flex items-center gap-2">
+              <button class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded px-3 py-1.5 text-[0.8rem] font-[inherit] cursor-pointer hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="intSaving" @click="saveIntegration">{{ intSaving ? 'Saving…' : 'Save' }}</button>
+              <button class="bg-transparent text-[var(--c-585858)] border-none px-2 py-1.5 text-[0.8rem] font-[inherit] cursor-pointer hover:text-muted" @click="intDraft = null">Cancel</button>
+              <span v-if="intMsg" class="text-[0.775rem] text-[var(--c-c06060)]">{{ intMsg }}</span>
             </div>
           </div>
+        </div>
 
-          <form v-if="cardOpen('github', !ghConfig.connected)" class="flex flex-col gap-2 bg-[var(--c-0d0d0d)] p-3.5 rounded-lg border border-[var(--c-1e1e1e)]" @submit.prevent="connectGithub">
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Personal access token
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="ghForm.token" type="password" autocomplete="off" :placeholder="ghConfig.connected ? 'Enter to reconnect' : 'github_pat_… or ghp_…'" required />
-            </label>
-            <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">
-              Default owner <span class="text-[var(--c-585858)]">(optional)</span>
-              <input class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" v-model="ghForm.default_owner" placeholder="your-org-or-username" />
-            </label>
-            <p class="text-[0.72rem] text-[var(--c-585858)] leading-[1.5]">
-              Use a fine-grained token with read-only <strong>Contents</strong> access to the repos you want the assistant to see — only the token is stored. With a default owner set, you can refer to a repo by its bare name. The assistant can read commits, files, and PRs; it never writes.
-            </p>
-            <div class="flex items-center gap-2">
-              <button type="submit" class="bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] transition-[background] duration-[120ms] hover:not-disabled:bg-[var(--c-254880)] disabled:opacity-50" :disabled="ghSaving">
-                {{ ghSaving ? 'Connecting…' : ghConfig.connected ? 'Reconnect' : 'Connect' }}
-              </button>
-              <button v-if="ghConfig.connected" type="button" class="bg-[var(--c-1e1010)] text-[var(--c-a06060)] border-none rounded px-3 py-1.5 cursor-pointer text-[0.8rem] font-[inherit] hover:bg-[var(--c-2a1515)] hover:text-[var(--c-d08080)]" @click="disconnectGithub">Disconnect</button>
-              <span v-if="ghMsg" class="text-[0.775rem]" :class="ghMsg === 'Connected.' ? 'text-[var(--c-4caf6e)]' : 'text-[var(--c-c06060)]'">{{ ghMsg }}</span>
-            </div>
-          </form>
-        </section>
       </div>
 
       <!-- Appearance -->
