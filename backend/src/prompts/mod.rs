@@ -413,10 +413,12 @@ sign in with DEVICE-CODE auth: `Connect-ExchangeOnline -Device` (and `Connect-IP
 device authentication). The ExchangeOnlineManagement and Microsoft.Graph PowerShell modules \
 (Microsoft.Graph.Authentication, .Users, .Mail, .Groups, .Identity.DirectoryManagement) are \
 ALREADY installed — never run Install-Module; for Graph just `Connect-MgGraph` (device code) then \
-use the Mg* cmdlets (e.g. Get-MgUserMessage, Move-MgUserMessage). The device code prints in the \
-terminal for the user to open in their own browser, so a connect can take a while — if it reports \
-it did not finish, the user is probably still authenticating; wait or ask them to complete it, \
-then continue. If a cmdlet fails because \
+use the Mg* cmdlets (e.g. Get-MgUserMessage, Move-MgUserMessage). A device-code connect prints its \
+own code and sign-in URL directly in the terminal and then BLOCKS until the user signs in, so it \
+can take a while. NEVER repeat or relay the device code or URL in your reply, and never tell the \
+user to \"enter the code\" — they read it straight from the terminal. Just run the connect and \
+wait. Once the connect command returns without error the user is already authenticated — proceed \
+straight to the task; do NOT ask them to authenticate or run the connect again. If a cmdlet fails because \
 it isn't recognised or there is no active session, connect first. To list who has access to a \
 shared mailbox: Get-MailboxPermission (FullAccess), Get-RecipientPermission (SendAs), and \
 Get-Mailbox | Select-Object -ExpandProperty GrantSendOnBehalfTo (SendOnBehalf). Never run \
