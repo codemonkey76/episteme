@@ -223,6 +223,70 @@ impl TermSession {
 
 const OUTPUT_CAP: usize = 20_000;
 
+/// Strip sequences that are unsafe to REPLAY as saved scrollback: terminal
+/// queries that solicit a response (DSR `ESC[…n`, DA `ESC[…c`) — xterm would
+/// answer them back to the *live* shell, corrupting the prompt (the `…;…R`
+/// junk) — and OSC 633 shell-integration markers / OSC colour queries (which
+/// would re-trigger command recording or solicit replies). Colours and cursor
+/// motion are kept, so restored history still looks right.
+pub fn strip_replay_hazards(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == 0x1b && i + 1 < raw.len() && raw[i + 1] == b'[' {
+            // CSI: ESC [ params/intermediates … final (0x40..=0x7e).
+            let mut j = i + 2;
+            while j < raw.len() && !(0x40..=0x7e).contains(&raw[j]) {
+                j += 1;
+            }
+            match raw.get(j) {
+                Some(&fin) => {
+                    if !matches!(fin, b'n' | b'c') {
+                        out.extend_from_slice(&raw[i..=j]);
+                    }
+                    i = j + 1;
+                }
+                None => {
+                    out.extend_from_slice(&raw[i..]);
+                    break;
+                }
+            }
+        } else if raw[i] == 0x1b && i + 1 < raw.len() && raw[i + 1] == b']' {
+            // OSC: ESC ] … terminated by BEL (0x07) or ST (ESC \).
+            let mut j = i + 2;
+            let mut seq_end = None;
+            while j < raw.len() {
+                if raw[j] == 0x07 {
+                    seq_end = Some(j);
+                    break;
+                }
+                if raw[j] == 0x1b && raw.get(j + 1) == Some(&b'\\') {
+                    seq_end = Some(j + 1);
+                    break;
+                }
+                j += 1;
+            }
+            match seq_end {
+                Some(end) => {
+                    let body = &raw[i + 2..j];
+                    if !(body.starts_with(b"633;") || body.contains(&b'?')) {
+                        out.extend_from_slice(&raw[i..=end]);
+                    }
+                    i = end + 1;
+                }
+                None => {
+                    out.extend_from_slice(&raw[i..]);
+                    break;
+                }
+            }
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;
@@ -261,4 +325,24 @@ fn clean_output(raw: &[u8], command: &str) -> String {
         out = format!("{kept}\n…(output truncated)");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_replay_hazards;
+
+    #[test]
+    fn strips_queries_and_633_keeps_colour() {
+        // DSR (ESC[6n) and DA (ESC[c) are dropped; SGR colour is kept.
+        let input = b"\x1b[6nhello \x1b[31mred\x1b[0m\x1b[c world";
+        assert_eq!(strip_replay_hazards(input), b"hello \x1b[31mred\x1b[0m world");
+
+        // OSC 633 shell-integration markers and OSC colour queries are dropped.
+        let osc = b"a\x1b]633;A\x07b\x1b]11;?\x07c";
+        assert_eq!(strip_replay_hazards(osc), b"abc");
+
+        // Plain text and a normal OSC title pass through untouched.
+        let keep = b"plain\x1b]0;my title\x07text";
+        assert_eq!(strip_replay_hazards(keep), keep);
+    }
 }

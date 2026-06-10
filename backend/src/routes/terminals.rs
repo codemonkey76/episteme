@@ -108,7 +108,9 @@ async fn handle_socket(
     let saved =
         db::terminal_output::restore_tail(&state.db, &user_id, &session_id).await.unwrap_or_default();
     if !saved.is_empty() {
-        let _ = ws_tx.send(Message::Binary(saved)).await;
+        // Drop query/shell-integration sequences so replaying scrollback can't
+        // make xterm talk back to the fresh shell (the `…R` prompt corruption).
+        let _ = ws_tx.send(Message::Binary(crate::terminal::strip_replay_hazards(&saved))).await;
         let when = chrono::Utc::now()
             .with_timezone(&state.home_tz(&user_id).await)
             .format("%a %-d %b %Y, %-I:%M %p");
@@ -166,8 +168,24 @@ async fn handle_socket(
     }
 
     session.kill();
-    state.terminal_sessions.lock().await.remove(&session_id);
-    state.terminal_agent_history.lock().await.remove(&session_id);
+    // Only deregister if a newer connection hasn't already replaced us: stable
+    // session ids mean a refresh registers a new session under the same key, and
+    // this (older) socket's teardown fires just after — without this guard it
+    // would delete the fresh session and break the AI sidebar ("400 not
+    // connected").
+    let still_ours = {
+        let mut sessions = state.terminal_sessions.lock().await;
+        match sessions.get(&session_id) {
+            Some(s) if Arc::ptr_eq(s, &session) => {
+                sessions.remove(&session_id);
+                true
+            }
+            _ => false,
+        }
+    };
+    if still_ours {
+        state.terminal_agent_history.lock().await.remove(&session_id);
+    }
     send_task.abort();
     // Stop the capture task and let it write out whatever it has buffered.
     cap_notify.notify_one();
