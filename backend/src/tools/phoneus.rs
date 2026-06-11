@@ -1,8 +1,9 @@
 //! PhoneUs tools — model-facing adapter over the user's PhoneUs accounts/comms
 //! platform via its Sanctum API (see `integrations::phoneus`). Covers looking up
-//! a customer, what they owe, their services/service-ids and contacts, and
-//! sending an SMS to a contact. Customers are addressed by account_number;
-//! resolve names via phoneus_list_customers first.
+//! a customer, what they owe, their services/service-ids and contacts, listing
+//! and issuing (sending) their invoices, and sending an SMS to a contact.
+//! Customers are addressed by account_number; resolve names via
+//! phoneus_list_customers first.
 
 use anyhow::{anyhow, Result};
 use reqwest::Method;
@@ -75,6 +76,31 @@ pub fn schemas() -> Vec<Value> {
                 "required": ["message"]
             }
         }),
+        json!({
+            "name": "phoneus_list_invoices",
+            "description": "List a PhoneUs customer's invoices. Returns each invoice's id, invoice_number, status, total, amount_outstanding, billing period, due_date, and can_send. Pass status=\"draft\" to find unsent invoices. Get the account_number from phoneus_list_customers first; pass an invoice's id to phoneus_send_invoice to issue it.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "account_number": { "type": "integer", "description": "The customer's PhoneUs account number." },
+                    "status": { "type": "string", "description": "Optional status filter, e.g. \"draft\", \"sent\", \"paid\", \"overdue\"." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
+                },
+                "required": ["account_number"]
+            }
+        }),
+        json!({
+            "name": "phoneus_send_invoice",
+            "description": "Issue a DRAFT invoice: marks it sent and EMAILS it to the customer (with a payment link). Only draft invoices can be sent — get the invoice_id from phoneus_list_invoices (those with can_send=true). This is a real customer-facing action and is irreversible, so confirm the right invoice first.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "invoice_id": { "type": "integer", "description": "The invoice's id (from phoneus_list_invoices)." },
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
+                },
+                "required": ["invoice_id"]
+            }
+        }),
     ]
 }
 
@@ -86,6 +112,8 @@ pub fn handles(name: &str) -> bool {
             | "phoneus_list_services"
             | "phoneus_list_contacts"
             | "phoneus_send_sms"
+            | "phoneus_list_invoices"
+            | "phoneus_send_invoice"
     )
 }
 
@@ -136,6 +164,36 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 .log("phoneus", "info", format!(
                     "SMS queued to {}",
                     res["to"].as_str().unwrap_or("?")
+                ))
+                .await;
+            Ok(res)
+        }
+        "phoneus_list_invoices" => {
+            let id = account_number(&args)?;
+            let mut path = format!("/customers/{id}/invoices");
+            if let Some(status) = args["status"].as_str().filter(|s| !s.is_empty()) {
+                path.push_str(&format!("?status={}", urlencoding::encode(status)));
+            }
+            let res = phoneus::request(state, user_id, instance, Method::GET, &path, None).await?;
+            Ok(res)
+        }
+        "phoneus_send_invoice" => {
+            let invoice_id = args["invoice_id"]
+                .as_i64()
+                .ok_or_else(|| anyhow!("invoice_id is required"))?;
+            let res = phoneus::request(
+                state,
+                user_id,
+                instance,
+                Method::POST,
+                &format!("/invoices/{invoice_id}/send"),
+                None,
+            )
+            .await?;
+            state
+                .log("phoneus", "info", format!(
+                    "invoice {} sent",
+                    res["invoice_number"].as_str().unwrap_or("?")
                 ))
                 .await;
             Ok(res)

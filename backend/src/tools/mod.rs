@@ -94,8 +94,8 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
 
 /// Default approval policy when the user hasn't configured one in Settings →
 /// Tools. Outward-facing writes (helpdesk replies email the customer; time
-/// entries feed billing; PhoneUs SMS goes to a real phone) start gated;
-/// everything else auto-executes.
+/// entries feed billing; PhoneUs SMS goes to a real phone; sending an invoice
+/// emails the customer a bill) start gated; everything else auto-executes.
 pub fn default_policy(name: &str) -> &'static str {
     match name {
         "helpdesk_create_user"
@@ -104,7 +104,8 @@ pub fn default_policy(name: &str) -> &'static str {
         | "helpdesk_log_time"
         | "helpdesk_delete_time"
         | "helpdesk_update_ticket"
-        | "phoneus_send_sms" => "ask",
+        | "phoneus_send_sms"
+        | "phoneus_send_invoice" => "ask",
         _ => "auto",
     }
 }
