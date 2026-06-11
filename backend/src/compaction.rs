@@ -21,19 +21,31 @@ use crate::db::{self, messages::Message};
 use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::state::AppState;
 
+// These budgets are sized to the chat's context window — now ~128K tokens
+// (the Ollama num_ctx cap; cloud models are larger). At ~3.5 chars/token that's
+// ~450K chars, so the old 48K threshold summarized away ~90% of usable context:
+// a session would forget tool results (e.g. a CSV it just read) long before the
+// window was anywhere near full, and tasks that need two documents in context
+// at once became impossible. The values below keep a generous slice of real
+// history verbatim and only summarize once it genuinely approaches the window.
+
 /// Messages at the tail of the history whose tool results stay verbatim.
 const TRIM_KEEP_RECENT: usize = 12;
 /// Tool results older than the recent window are clipped to this many chars.
-const TOOL_RESULT_CLIP: usize = 1_500;
+/// Large enough to hold a full document/CSV read (~10–15K chars) so a
+/// multi-file task keeps the source data in context.
+const TOOL_RESULT_CLIP: usize = 16_000;
 /// Model-facing size (chars, post-clip) past which a session is summarized.
-const COMPACT_THRESHOLD: usize = 48_000;
+/// ~220K chars ≈ 60K tokens of history — leaving ample room for tool schemas,
+/// injected memory, and the reply within a 128K-token window.
+const COMPACT_THRESHOLD: usize = 220_000;
 /// Messages kept verbatim by a compaction (the boundary then snaps back to a
 /// user message, so the kept window may grow a little).
 const COMPACT_KEEP_RECENT: usize = 12;
 /// Per-message cap in the transcript rendered for the summarizer.
-const RENDER_MSG_CAP: usize = 1_200;
+const RENDER_MSG_CAP: usize = 2_000;
 /// Total transcript cap for one summarizer call (newest part kept).
-const RENDER_TOTAL_CAP: usize = 80_000;
+const RENDER_TOTAL_CAP: usize = 160_000;
 
 /// Clip fat tool results outside the recent window — the cheap, every-turn
 /// layer. Operates on the in-memory history `run_turn` built (tool messages
@@ -254,24 +266,27 @@ mod tests {
 
     #[test]
     fn old_tool_results_clip_but_recent_stay_verbatim() {
-        // 13 tool messages: only the first falls outside the 12-message window.
-        let mut history: Vec<ChatMessage> = (0..13).map(|_| tool_chat(5_000)).collect();
+        // 13 tool messages, each larger than the clip: only the first falls
+        // outside the 12-message window and gets cut.
+        let big = TOOL_RESULT_CLIP + 4_000;
+        let mut history: Vec<ChatMessage> = (0..13).map(|_| tool_chat(big)).collect();
         truncate_old_tool_results(&mut history);
 
         let len = |m: &ChatMessage| m.content["content"].as_str().unwrap().chars().count();
-        assert!(len(&history[0]) < 2_000, "old result should be clipped");
+        assert!(len(&history[0]) < big, "old result should be clipped");
+        assert!(len(&history[0]) >= TOOL_RESULT_CLIP, "clipped to the budget, not smaller");
         assert!(history[0].content["content"].as_str().unwrap().contains("truncated"));
-        assert_eq!(len(&history[1]), 5_000, "recent results stay verbatim");
-        assert_eq!(len(&history[12]), 5_000);
+        assert_eq!(len(&history[1]), big, "recent results stay verbatim");
+        assert_eq!(len(&history[12]), big);
 
         // Non-tool roles are never touched, even when old.
         let mut history = vec![ChatMessage {
             role: "assistant".to_string(),
-            content: Value::String("y".repeat(5_000)),
+            content: Value::String("y".repeat(big)),
         }];
         history.extend((0..12).map(|_| tool_chat(10)));
         truncate_old_tool_results(&mut history);
-        assert_eq!(history[0].content.as_str().unwrap().len(), 5_000);
+        assert_eq!(history[0].content.as_str().unwrap().len(), big);
     }
 
     #[test]
@@ -305,10 +320,12 @@ mod tests {
         let mm = r#"{"type":"multimodal","text":"four","images":[{"mime":"image/png","b64":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}"#;
         assert_eq!(live_size(&[msg("user", mm)]), 4);
 
-        // 13 fat tool results: the one outside the recent window counts clipped.
-        let fat = format!("\"{}\"", "x".repeat(5_000));
+        // 13 fat tool results (each over the clip): the one outside the recent
+        // window counts clipped, the 12 recent count in full.
+        let big = TOOL_RESULT_CLIP + 5_000;
+        let fat = format!("\"{}\"", "x".repeat(big));
         let msgs: Vec<Message> = (0..13).map(|_| msg("tool", &fat)).collect();
-        assert_eq!(live_size(&msgs), TOOL_RESULT_CLIP + 12 * 5_000);
+        assert_eq!(live_size(&msgs), TOOL_RESULT_CLIP + 12 * big);
     }
 
     #[test]

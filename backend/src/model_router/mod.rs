@@ -28,6 +28,10 @@ pub struct StreamChunk {
     pub tool_calls: Option<Vec<genai::chat::ToolCall>>,
     /// Token counts when the provider reports them (on the done chunk).
     pub usage: Option<TokenUsage>,
+    /// Reasoning ("thinking") deltas from a thinking model. Carried separately
+    /// from `text` so the agent can drive a "thinking…" indicator without the
+    /// trace leaking into the visible reply.
+    pub reasoning: Option<String>,
 }
 
 /// Provider-reported token counts for one request — fed into the usage table.
@@ -84,9 +88,11 @@ impl ModelRouter {
         let tool_calls = res.into_tool_calls();
 
         if let Some(text) = text.filter(|t| !t.is_empty()) {
-            tx.send(StreamChunk { text, done: false, tool_calls: None, usage: None }).await?;
+            tx.send(StreamChunk { text, done: false, tool_calls: None, usage: None, reasoning: None })
+                .await?;
         }
-        tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage }).await?;
+        tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage, reasoning: None })
+            .await?;
         Ok(())
     }
 
@@ -243,8 +249,10 @@ async fn stream_ollama(
     // from the FRONT — the system prompt (instructions, JSON schemas) vanishes
     // first. Raise the window to fit when the prompt is large; small requests
     // keep the default so they don't pay the extra VRAM.
-    if let Some(num_ctx) = ollama_num_ctx(body.to_string().len()) {
-        body["options"] = serde_json::json!({ "num_ctx": num_ctx });
+    if let Some(num_ctx) = ollama_num_ctx(body.to_string().len(), think) {
+        // Preserve any options already set above (none today, but keep this
+        // robust to future additions) rather than clobbering the object.
+        body["options"]["num_ctx"] = serde_json::json!(num_ctx);
     }
 
     // A read (not total) timeout: streaming replies can run for minutes on a
@@ -297,6 +305,23 @@ async fn stream_ollama(
                         done: false,
                         tool_calls: None,
                         usage: None,
+                        reasoning: None,
+                    })
+                    .await?;
+                }
+            }
+
+            // Reasoning deltas (thinking models): forwarded as `reasoning` so the
+            // agent can show a "thinking…" indicator. Never folded into `text` —
+            // the trace isn't the answer.
+            if let Some(thinking) = data["message"]["thinking"].as_str() {
+                if !thinking.is_empty() {
+                    tx.send(StreamChunk {
+                        text: String::new(),
+                        done: false,
+                        tool_calls: None,
+                        usage: None,
+                        reasoning: Some(thinking.to_string()),
                     })
                     .await?;
                 }
@@ -322,6 +347,16 @@ async fn stream_ollama(
                 } else {
                     Some(std::mem::take(&mut pending_tool_calls))
                 };
+                // `done_reason == "length"` means the reply hit the context
+                // window before finishing — the visible answer can come back
+                // empty (the budget was spent on the prompt and/or thinking
+                // trace). Surface it so a silent empty turn isn't a mystery.
+                if data["done_reason"].as_str() == Some("length") {
+                    tracing::warn!(
+                        "Ollama reply truncated (done_reason=length, num_ctx exhausted) for model {}",
+                        provider.model_id
+                    );
+                }
                 // Ollama reports token counts on the final message.
                 let usage = match (data["prompt_eval_count"].as_i64(), data["eval_count"].as_i64()) {
                     (None, None) => None,
@@ -330,13 +365,15 @@ async fn stream_ollama(
                         completion: c.unwrap_or(0),
                     }),
                 };
-                tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage }).await?;
+                tx.send(StreamChunk { text: String::new(), done: true, tool_calls, usage, reasoning: None })
+                    .await?;
                 return Ok(());
             }
         }
     }
 
-    tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None, usage: None }).await?;
+    tx.send(StreamChunk { text: String::new(), done: true, tool_calls: None, usage: None, reasoning: None })
+        .await?;
     Ok(())
 }
 
@@ -484,14 +521,25 @@ fn schemas_to_tools(schemas: Vec<Value>) -> Vec<Tool> {
 
 /// Context window override for an Ollama request, from the serialized request
 /// size. None = the prompt fits Ollama's 4096 default; otherwise the needed
-/// window rounded up in 4k steps, capped at 32k (Ollama clamps to the model's
+/// window rounded up in 4k steps, capped at `CAP` (Ollama clamps to the model's
 /// own maximum beyond that). Bytes/3 deliberately over-estimates tokens
 /// (English runs ~4 bytes/token) so truncation stays the rare case.
-fn ollama_num_ctx(request_bytes: usize) -> Option<usize> {
+///
+/// `think` reserves far more reply headroom: a reasoning model emits a hidden
+/// thinking trace BEFORE any visible content, often several thousand tokens. At
+/// the old 2k headroom a big prompt left no room for the trace + answer, so the
+/// window filled mid-think and the reply came back empty (done_reason=length) —
+/// a silent, blank turn. 12k headroom keeps the visible answer inside the window.
+///
+/// CAP is 128k: the hybrid-SSM Qwen3.x models advertise 256k and grow KV memory
+/// only gently with context, so 128k loads in ~26 GB (fits a 24 GB GPU with a
+/// small CPU spill). The window is still sized to the prompt — small chats stay
+/// cheap; only a genuinely large transcript asks for the full 128k.
+fn ollama_num_ctx(request_bytes: usize, think: bool) -> Option<usize> {
     const DEFAULT: usize = 4096;
-    const CAP: usize = 32_768;
-    const REPLY_HEADROOM: usize = 2048;
-    let needed = request_bytes / 3 + REPLY_HEADROOM;
+    const CAP: usize = 131_072;
+    let reply_headroom = if think { 12_288 } else { 2_048 };
+    let needed = request_bytes / 3 + reply_headroom;
     (needed > DEFAULT).then(|| needed.next_multiple_of(4096).min(CAP))
 }
 
@@ -502,11 +550,23 @@ mod tests {
     #[test]
     fn ollama_num_ctx_scales_with_prompt_size() {
         // Small prompts keep Ollama's default window (no options sent).
-        assert_eq!(ollama_num_ctx(1_000), None);
-        assert_eq!(ollama_num_ctx(6_000), None);
+        assert_eq!(ollama_num_ctx(1_000, false), None);
+        assert_eq!(ollama_num_ctx(6_000, false), None);
         // A deep-research synthesis prompt (~30k bytes) needs ~12k tokens.
-        assert_eq!(ollama_num_ctx(30_000), Some(12_288));
-        // Huge prompts cap at 32k.
-        assert_eq!(ollama_num_ctx(500_000), Some(32_768));
+        assert_eq!(ollama_num_ctx(30_000, false), Some(12_288));
+        // Huge prompts cap at 128k.
+        assert_eq!(ollama_num_ctx(500_000, false), Some(131_072));
+    }
+
+    #[test]
+    fn ollama_num_ctx_reserves_headroom_for_thinking() {
+        // Thinking turns reserve 12k tokens for the (hidden) trace + answer, so
+        // the same prompt asks for a much larger window than a non-thinking one.
+        assert_eq!(ollama_num_ctx(30_000, true), Some(24_576));
+        // The 12k headroom alone clears the 4096 default, so even a tiny prompt
+        // now gets an explicit window (333 + 12288 -> 16384).
+        assert_eq!(ollama_num_ctx(1_000, true), Some(16_384));
+        // Big prompts cap at 128k just the same.
+        assert_eq!(ollama_num_ctx(500_000, true), Some(131_072));
     }
 }
