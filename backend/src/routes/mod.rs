@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use axum::{
+    http::{header, HeaderValue},
     middleware,
     routing::{delete, get, post, put},
     Router,
 };
+use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::state::AppState;
 
@@ -216,13 +219,32 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route_layer(middleware::from_fn(auth::require_admin))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
+    // Content-hashed bundles (/assets/index-<hash>.js etc.) are immutable for a
+    // given name, so cache them for a year. Everything else under the SPA
+    // fallback — index.html, sw.js, icons — is served `no-cache` (revalidate on
+    // every load) so a new deploy is picked up immediately instead of the
+    // browser serving a stale app shell until the user hard-refreshes.
+    let assets_service = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ))
+        .service(ServeDir::new(format!("{static_dir}/assets")));
+    let spa_service = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
+        .service(
+            ServeDir::new(&static_dir)
+                .not_found_service(ServeFile::new(format!("{static_dir}/index.html"))),
+        );
+
     public
         .merge(protected)
         .merge(admin)
         .layer(cors)
         .with_state(state)
-        .fallback_service(
-            ServeDir::new(&static_dir)
-                .not_found_service(ServeFile::new(format!("{static_dir}/index.html"))),
-        )
+        .nest_service("/assets", assets_service)
+        .fallback_service(spa_service)
 }
