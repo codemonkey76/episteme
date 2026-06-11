@@ -33,6 +33,10 @@ const input = ref('')
 const providers = ref<api.ProviderConfig[]>([])
 const provider = ref('')
 const sending = ref(false)
+// True while a reasoning model is producing its (hidden) thinking trace, before
+// any visible token arrives — drives the "thinking…" indicator. Cleared as soon
+// as real output (token/tool) or the turn's end lands.
+const thinking = ref(false)
 const error = ref<string | null>(null)
 const messagesEl = ref<HTMLElement>()
 
@@ -142,6 +146,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
   let tasksTouched = false
   let notesTouched = false
   sending.value = true
+  thinking.value = false
   error.value = null
 
   store.appendMessage({
@@ -166,9 +171,10 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
       store.activeSession.id,
       text,
       provider.value,
-      (tok) => { store.appendToken(tok); scrollToBottom() },
+      (tok) => { thinking.value = false; store.appendToken(tok); scrollToBottom() },
       () => {
         sending.value = false
+        thinking.value = false
         scrollToBottom()
         logs.info('Chat', 'Response complete')
         // If a calendar/task tool ran this turn, refresh any open window.
@@ -177,6 +183,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (notesTouched) { notesStore.notifyChanged(); notesTouched = false }
       },
       (actionId, toolName, toolArgs) => {
+        thinking.value = false
         logs.warn('Chat', `Tool approval required: ${toolName}`)
         approvalsStore.addPending({
           id: actionId,
@@ -189,6 +196,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         scrollToBottom()
       },
       (name) => {
+        thinking.value = false
         store.appendToolCall(name)
         scrollToBottom()
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
@@ -196,6 +204,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
       },
       (title) => { if (store.activeSession) store.setSessionTitle(store.activeSession.id, title) },
+      () => { thinking.value = true; scrollToBottom() },
       abortController.signal,
       images,
     )
@@ -207,12 +216,14 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
       logs.info('Chat', 'Stream cancelled')
     }
     sending.value = false
+    thinking.value = false
   }
 }
 
 function cancel() {
   abortController?.abort()
   sending.value = false
+  thinking.value = false
 }
 
 // Auto-scroll only while the user is parked at (or near) the bottom. Scrolling
@@ -334,6 +345,15 @@ function toolCallLabels(content: string): string[] {
           </div>
         </div>
       </template>
+
+      <!-- Reasoning indicator: the model is thinking before it emits anything
+           visible, so a long pause doesn't read as a stalled turn. -->
+      <div v-if="thinking" class="self-start flex items-center gap-2 text-[0.78rem] text-[var(--c-7a9ec0)] py-0.5">
+        <svg class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+        <span>Thinking…</span>
+      </div>
 
       <!-- Inline approval cards: the turn is paused until decided. -->
       <ApprovalCard

@@ -35,11 +35,17 @@ details). Resolve relative times (\"tomorrow\", \"next Friday at 3pm\") against 
 current time and output times as RFC3339 with the user's UTC offset ({offset}). For \
 reminders, set reminder_minutes_before. After acting, briefly confirm what you did \
 in plain language.\n\
-When you decide to use a tool, call it in the SAME response — do not announce or \
-describe a tool action (\"I'll update the ticket\", \"Let me do both steps now\") and \
-then stop. Either perform the action by calling the tool now, or, if you genuinely \
-need the user to decide something first, ask them a direct question. Never end your \
-turn with only a description of what you are about to do.",
+Act, don't narrate: when you decide to use a tool, call it in the SAME response — \
+never announce or describe a tool action (\"I'll update the ticket\", \"Now let me \
+look up the next batch\") and then stop.\n\
+There are exactly three ways to end a turn. (1) DONE — you've completed everything \
+the user asked AND verified it actually happened (the event exists, the message \
+sent, the invoice issued); give a brief plain-language confirmation. (2) BLOCKED or \
+NEEDS A DECISION — you genuinely can't proceed without the user; ask one direct \
+question or state plainly what's blocking you. (3) KEEP GOING — there's an obvious \
+next step; call the tool to do it now rather than describing it. The only wrong \
+moves are ending a turn with only a description of what you are about to do, and \
+repeating a tool call you have already made.",
     },
     PromptDef {
         key: "memory_inject",

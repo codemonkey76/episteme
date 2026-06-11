@@ -108,6 +108,8 @@ pub async fn stream(
         let event = match rx.recv().await? {
             AgentEvent::Token(text) => Event::default()
                 .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
+            AgentEvent::Thinking => Event::default()
+                .data(serde_json::json!({ "type": "thinking" }).to_string()),
             AgentEvent::ToolCall { name } => Event::default()
                 .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
             AgentEvent::Title(title) => Event::default()

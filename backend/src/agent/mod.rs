@@ -12,6 +12,9 @@ pub mod approval;
 #[derive(Debug)]
 pub enum AgentEvent {
     Token(String),
+    /// A reasoning model is producing its (hidden) thinking trace — drives the
+    /// "thinking…" indicator so a long pre-answer pause doesn't look like a stall.
+    Thinking,
     /// A native tool is about to run — surfaced in the chat UI.
     ToolCall { name: String },
     /// The session was auto-named from its first exchange; update the UI live.
@@ -114,6 +117,18 @@ pub async fn run_turn(
     // Cap tool round-trips so a misbehaving model can't loop forever.
     let mut iterations = 0;
 
+    // Reasoning is on by default (reasoning models won't act otherwise — see
+    // the ModelRouter::stream call below). Flipped off for a one-shot retry when
+    // a turn comes back completely empty (the classic Ollama context-window
+    // exhaustion, where the whole budget went to the hidden thinking trace).
+    let mut think = true;
+    let mut retried_empty = false;
+    // One-shot backstop for the "narrate-and-stop" failure: a weak model ends a
+    // turn by only describing the next step ("Now let me look up the rest:")
+    // instead of calling the tool. When that's detected we nudge it once to act
+    // and loop again, rather than leaving the user to type "continue".
+    let mut nudged_continuation = false;
+
     loop {
         iterations += 1;
         if iterations > 6 {
@@ -149,14 +164,17 @@ pub async fn run_turn(
             let provider2 = provider.clone();
             let hist = history.clone();
             let schemas = tool_schemas.clone();
+            let think_now = think;
             tokio::spawn(async move {
                 // think=true: let reasoning models (e.g. qwen3) reason before
                 // answering. With thinking disabled, qwen3 reliably narrates its
                 // plan as a text-only message and stops without calling the tool
                 // — the user then has to say "continue". Reasoning fixes that at
                 // the cost of a brief pause (the think trace isn't streamed) before
-                // the visible reply.
-                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, true, chunk_tx).await {
+                // the visible reply. The empty-completion guard below flips this
+                // off for a single retry when reasoning swallows the whole reply.
+                if let Err(e) = ModelRouter::stream(&provider2, hist, schemas, think_now, chunk_tx).await
+                {
                     tracing::error!("model_router error: {e}");
                 }
             });
@@ -174,6 +192,10 @@ pub async fn run_turn(
                     turn_usage.prompt += u.prompt;
                     turn_usage.completion += u.completion;
                 }
+            } else if chunk.reasoning.is_some() {
+                // Hidden reasoning trace — pulse the "thinking…" indicator only;
+                // the trace itself is never shown or stored.
+                let _ = tx.send(AgentEvent::Thinking).await;
             } else {
                 assistant_text.push_str(&chunk.text);
                 iter_text.push_str(&chunk.text);
@@ -183,6 +205,58 @@ pub async fn run_turn(
 
         match tool_calls_from_model {
             None => {
+                // Empty completion with no tool call: the model produced nothing
+                // visible. Most often this is Ollama exhausting the context
+                // window on the hidden thinking trace (done_reason=length), which
+                // would otherwise end the turn as silent dead air.
+                if iter_text.trim().is_empty() {
+                    if think && !retried_empty {
+                        // Retry once with reasoning off so the budget goes to a
+                        // visible answer instead of a discarded trace.
+                        tracing::warn!("empty model completion; retrying once with thinking disabled");
+                        think = false;
+                        retried_empty = true;
+                        continue;
+                    }
+                    // Even the no-think retry was empty — surface it rather than
+                    // leaving the user staring at a finished-but-blank turn.
+                    let note = "_(The model returned an empty response — it likely ran out of \
+                                context. Try a shorter request or start a new chat.)_";
+                    let _ = tx.send(AgentEvent::Token(note.to_string())).await;
+                    iter_text.push_str(note);
+                    assistant_text.push_str(note);
+                } else if !nudged_continuation && looks_like_cliffhanger(&iter_text) {
+                    // Narrate-and-stop: the model described the next step but
+                    // didn't call the tool. Persist what it streamed, then nudge
+                    // it once to actually act and loop again — instead of ending
+                    // the turn and making the user type "continue".
+                    nudged_continuation = true;
+                    state.log("agent", "info", "nudging model past a narrate-and-stop ending").await;
+                    let _ = db::messages::insert(
+                        &state.db,
+                        &session_id,
+                        "assistant",
+                        &serde_json::to_string(&iter_text).unwrap_or_default(),
+                        None,
+                        None,
+                    )
+                    .await;
+                    history.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: Value::String(iter_text.clone()),
+                    });
+                    history.push(ChatMessage {
+                        role: "system".to_string(),
+                        content: Value::String(
+                            "You ended your turn by only describing the next step. Don't narrate — \
+                             do it now by calling the appropriate tool. If you genuinely need the \
+                             user to decide something first, ask one direct question instead. Do \
+                             not repeat a tool call you have already made."
+                                .to_string(),
+                        ),
+                    });
+                    continue;
+                }
                 // Model returned a final text answer. Auto-name a still-default
                 // session from this first exchange before closing the turn.
                 if let Some(title) =
@@ -444,6 +518,42 @@ fn clean_title(raw: &str) -> String {
     }
 }
 
+/// Heuristic: does this final reply only ANNOUNCE the next step instead of
+/// taking it? Catches the "narrate-and-stop" failure of weaker models — a reply
+/// that breaks off with a colon ("let me pull the next batch:") or whose last
+/// line opens with an intent-to-act lead. Deliberately conservative: common
+/// sign-offs ("let me know if…") are excluded so finished turns aren't re-run.
+fn looks_like_cliffhanger(text: &str) -> bool {
+    let t = text.trim_end();
+    if t.is_empty() {
+        return false;
+    }
+    // Strongest signal: the reply breaks off mid-announcement with a colon.
+    if t.ends_with(':') {
+        return true;
+    }
+    let last = t
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    // "let me …" that's a sign-off, not a promise of action.
+    const SIGNOFFS: &[&str] = &[
+        "let me know", "let me explain", "let me clarify", "let me summarize",
+        "let me summarise", "let me recap",
+    ];
+    if SIGNOFFS.iter().any(|p| last.starts_with(p)) {
+        return false;
+    }
+    const LEADS: &[&str] = &[
+        "let me ", "let's ", "i'll ", "i will ", "now i'll ", "i'm going to ",
+        "i am going to ", "next, i'll ", "next i'll ",
+    ];
+    LEADS.iter().any(|p| last.starts_with(p))
+}
+
 /// Execute one tool call — native registry or MCP — returning the raw result.
 /// Shared by the agent loop and the approval-resume path, so a parked call
 /// executes exactly the way a live one would have.
@@ -470,7 +580,21 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::clean_title;
+    use super::{clean_title, looks_like_cliffhanger};
+
+    #[test]
+    fn cliffhanger_detection_catches_narrate_and_stop() {
+        // Trailing colon — the "Sent those three. Now let me pull the rest:" case.
+        assert!(looks_like_cliffhanger("Sent those three. Now let me pull the rest:"));
+        // Last line opens with an intent-to-act lead (no colon).
+        assert!(looks_like_cliffhanger("Let me build the comparison now. I'll parse both CSVs."));
+        assert!(looks_like_cliffhanger("I'll look up the next batch of customers."));
+        // Finished answers and sign-offs are NOT cliffhangers.
+        assert!(!looks_like_cliffhanger("Done — all three invoices are sent."));
+        assert!(!looks_like_cliffhanger("Let me know if you'd like anything else."));
+        assert!(!looks_like_cliffhanger("I checked the calendar and you're free Friday."));
+        assert!(!looks_like_cliffhanger(""));
+    }
 
     #[test]
     fn clean_title_strips_quotes_punctuation_and_caps() {

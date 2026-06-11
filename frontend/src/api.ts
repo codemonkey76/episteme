@@ -121,6 +121,7 @@ export async function streamChat(
   onApproval: (actionId: string, toolName: string, toolArgs: unknown) => void,
   onTool: (name: string) => void,
   onTitle: (title: string) => void,
+  onThinking: () => void,
   signal?: AbortSignal,
   images?: ChatImage[],
 ): Promise<void> {
@@ -155,6 +156,8 @@ export async function streamChat(
 
       if (data.type === 'token' && data.text != null) {
         onToken(data.text)
+      } else if (data.type === 'thinking') {
+        onThinking()
       } else if (data.type === 'tool' && data.name) {
         onTool(data.name)
       } else if (data.type === 'title' && data.title) {
