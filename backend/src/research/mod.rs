@@ -251,6 +251,9 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     }
 
     // ── ITERATIVE ROUNDS: think → gather → evolve → decide (IterResearch) ────
+    // Highest round actually completed — surfaced in the report's stats bar.
+    // Seeded from the resume point so a resumed run still counts prior rounds.
+    let mut rounds_done = start_round - 1;
     for round in start_round..=max_rounds {
         // THINK: queries from the plan + what the draft already covers (gaps).
         let mut queries =
@@ -298,6 +301,8 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
             compactions_left -= 1;
             compact_memo(state, job, &worker, &topic, &mut memo, &mut memo_chars, &sources).await;
         }
+        // This round did its gather/evolve work — count it for the stats bar.
+        rounds_done = round;
 
         // CHECKPOINT: snapshot the gathered state so a restart resumes from here.
         let snapshot = Checkpoint {
@@ -351,7 +356,14 @@ pub async fn run(state: &Arc<AppState>, job: &Job, provider: ProviderConfig) -> 
     // ── RENDER + PERSIST ───────────────────────────────────────────────────
     let tz = state.home_tz(&job.user_id).await;
     let generated = chrono::Utc::now().with_timezone(&tz).format("%-d %B %Y").to_string();
-    let html = render::render_report(&doc, &sources, &images, &generated);
+    let stats = render::ReportStats {
+        depth: depth.clone(),
+        rounds: rounds_done,
+        queries: all_queries.len(),
+        sources: sources.len(),
+        model: writer.model_id.clone(),
+    };
+    let html = render::render_report(&doc, &category, &stats, &sources, &images, &generated);
     let title = if doc.title.trim().is_empty() { topic.clone() } else { doc.title.clone() };
     db::reports::insert(&state.db, &job.user_id, Some(&job.id), &title, &html).await?;
 

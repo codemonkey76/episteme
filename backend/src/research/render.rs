@@ -1,12 +1,19 @@
 //! Pure HTML renderer for research reports. Consumes the structured output of
-//! the synthesize stage and produces one self-contained document: inline CSS
-//! (light/dark via prefers-color-scheme), per-claim citation anchors, styled
-//! comparison tables, inline-SVG bar charts (no JavaScript anywhere), embedded
-//! data-URI images, and a numbered sources list.
+//! the synthesize stage and produces one self-contained document: a sticky
+//! table-of-contents sidebar, an editorial hero + run-stats bar, category-aware
+//! theming, per-claim citation anchors, styled comparison tables (with
+//! server-classified win/lose cells), inline-SVG bar charts, embedded data-URI
+//! images, and a numbered sources list.
+//!
+//! JavaScript: exactly one small inline script drives the TOC active-section
+//! highlight (IntersectionObserver). It is built only from code and references
+//! only ids we generate — it never touches model text.
 //!
 //! Security invariant: every model-provided string passes through [`escape`]
-//! before entering the document. Structure (tags, anchors, SVG) is built only
-//! from code — model text can never inject live HTML.
+//! before entering the document. Structure (tags, anchors, SVG, the script) is
+//! built only from code — model text can never inject live HTML.
+
+use std::collections::HashMap;
 
 use serde::Deserialize;
 
@@ -96,6 +103,19 @@ pub struct EmbeddedImage {
     pub data_uri: String,
 }
 
+/// Run statistics surfaced in the report's stats bar. All fields are optional —
+/// a zero/empty field is simply omitted from the bar.
+#[derive(Debug, Default)]
+pub struct ReportStats {
+    /// "quick" | "standard" | "deep" — shown capitalised.
+    pub depth: String,
+    pub rounds: usize,
+    pub queries: usize,
+    pub sources: usize,
+    /// Writer model id (e.g. claude-opus-4-8).
+    pub model: String,
+}
+
 /// HTML-escape model-provided text. `&` first, then the rest.
 pub fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -103,6 +123,65 @@ pub fn escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// A URL-safe, unique anchor slug for a heading. Lowercases, turns runs of
+/// non-alphanumerics into single hyphens, and disambiguates repeats with a
+/// numeric suffix so two identically-named sections still get distinct ids.
+fn slugify(text: &str, seen: &mut HashMap<String, usize>) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in text.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let base = slug.trim_matches('-').to_string();
+    let base = if base.is_empty() { "section".to_string() } else { base };
+    let n = seen.entry(base.clone()).or_insert(0);
+    let out = if *n == 0 { base.clone() } else { format!("{base}-{n}") };
+    *n += 1;
+    out
+}
+
+/// Title-case the first letter of a single word (for the depth label).
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Classify a comparison-table cell as positive / negative / neutral by its
+/// leading word, so winning and losing cells colour themselves. Done in code
+/// (we build the `<td>`s) so no model markup is ever trusted. Empty = no class.
+fn comparison_cell_class(text: &str) -> &'static str {
+    let t = text.trim().to_lowercase();
+    let first = t.split([' ', '/', ',', '(', '-']).next().unwrap_or("");
+    const POS: &[&str] = &[
+        "yes", "excellent", "best", "great", "strong", "fast", "high", "superior", "winner",
+        "free", "unlimited", "native", "full", "advanced", "✓", "✅", "⭐",
+    ];
+    const NEG: &[&str] = &[
+        "no", "none", "poor", "weak", "slow", "low", "limited", "lacking", "missing", "basic",
+        "minimal", "✗", "❌",
+    ];
+    const MID: &[&str] =
+        &["moderate", "average", "fair", "partial", "some", "decent", "okay", "mixed", "varies", "depends"];
+    if POS.contains(&first) {
+        "cmp-pos"
+    } else if NEG.contains(&first) || t == "n/a" {
+        "cmp-neg"
+    } else if MID.contains(&first) {
+        "cmp-mid"
+    } else {
+        ""
+    }
 }
 
 /// Superscript citation links for a paragraph: [1][3] → anchors into Sources.
@@ -167,20 +246,74 @@ fn bar_chart_svg(chart: &Chart) -> String {
 
 const CSS: &str = r#"
 :root{--bg:#fdfdfb;--fg:#1d1d1f;--muted:#6b6b70;--rule:#e4e4e2;--surface:#f3f3f0;
---accent:#2456a6;--bar:#5b8def;color-scheme:light dark}
+--accent:#2456a6;--accent-bg:rgba(36,86,166,.07);--bar:#5b8def;--max-w:760px;
+--sidebar-w:220px;color-scheme:light dark}
 @media (prefers-color-scheme:dark){:root{--bg:#121214;--fg:#dededf;--muted:#8d8d93;
---rule:#2c2c30;--surface:#1c1c1f;--accent:#7ab0ff;--bar:#3a6adf}}
+--rule:#2c2c30;--surface:#1c1c1f;--accent:#7ab0ff;--accent-bg:rgba(122,176,255,.10);--bar:#3a6adf}}
+
+/* Per-category accents — only the colour shifts, so each report type reads as
+   its own publication while the structure stays consistent. */
+body.category-product{--accent:#2a8a8c;--accent-bg:rgba(42,138,140,.08);--bar:#3fb0b2}
+body.category-comparison{--accent:#7a4cb8;--accent-bg:rgba(122,76,184,.08);--bar:#9d76d0}
+body.category-howto{--accent:#3d8a3d;--accent-bg:rgba(61,138,61,.08);--bar:#62b162}
+body.category-factcheck{--accent:#b8543a;--accent-bg:rgba(184,84,58,.08);--bar:#d97a5e}
+@media (prefers-color-scheme:dark){
+body.category-product{--accent:#5cc8cb;--accent-bg:rgba(92,200,203,.12);--bar:#5cc8cb}
+body.category-comparison{--accent:#b896e8;--accent-bg:rgba(184,150,232,.12);--bar:#b896e8}
+body.category-howto{--accent:#82c882;--accent-bg:rgba(130,200,130,.12);--bar:#82c882}
+body.category-factcheck{--accent:#e88f73;--accent-bg:rgba(232,143,115,.12);--bar:#e88f73}}
+
 *{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:1.5rem}
 body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.6 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}
-main{max-width:760px;margin:0 auto;padding:2.5rem 1.25rem 4rem}
-header{border-bottom:1px solid var(--rule);padding-bottom:1.25rem;margin-bottom:1.5rem}
-h1{font-size:1.7rem;line-height:1.25;margin:0 0 .4rem}
-.meta{color:var(--muted);font-size:.82rem}
-.intro{font-size:1.05rem;color:var(--fg)}
-h2{font-size:1.18rem;margin:2rem 0 .6rem;padding-top:.4rem}
+
+/* ── Hero ─────────────────────────────────────────────── */
+.hero{text-align:center;padding:3.2rem 1.25rem 2rem;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;inset:0;pointer-events:none;
+background:radial-gradient(ellipse 70% 70% at 50% 30%,var(--accent-bg) 0%,transparent 70%)}
+.hero-label{position:relative;text-transform:uppercase;letter-spacing:.26em;font-size:.66rem;
+font-weight:600;color:var(--accent);opacity:.85;margin-bottom:1rem}
+.hero h1{position:relative;font-size:clamp(1.7rem,3.5vw,2.5rem);line-height:1.18;margin:0 auto;
+max-width:720px;letter-spacing:-.02em;font-weight:650}
+.hero .meta{position:relative;color:var(--muted);font-size:.8rem;margin-top:.7rem}
+
+/* ── Stats bar ────────────────────────────────────────── */
+.stats-bar{display:flex;justify-content:center;gap:1.4rem;flex-wrap:wrap;
+padding:.8rem 1.25rem;background:var(--surface);border-top:1px solid var(--rule);
+border-bottom:1px solid var(--rule);font-size:.78rem;color:var(--muted)}
+.stat{display:flex;align-items:center;gap:.35rem}
+.stat-value{font-weight:600;color:var(--fg)}
+
+/* ── Layout: sticky TOC + content ─────────────────────── */
+.layout{display:grid;grid-template-columns:var(--sidebar-w) 1fr;
+max-width:calc(var(--max-w) + var(--sidebar-w) + 60px);margin:0 auto;gap:0}
+.toc-sidebar{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+padding:2.4rem 1rem 2rem 1.4rem;font-size:.8rem}
+.toc-sidebar nav{display:flex;flex-direction:column;gap:1px}
+.toc-sidebar a{position:relative;display:block;color:var(--muted);text-decoration:none;
+padding:.36rem .6rem;border-radius:6px;line-height:1.35;
+transition:color .15s,background .15s,padding-left .15s}
+.toc-sidebar a::before{content:'';position:absolute;left:0;top:50%;width:2px;height:0;
+background:var(--accent);transform:translateY(-50%);border-radius:1px;
+transition:height .15s,opacity .15s;opacity:0}
+.toc-sidebar a:hover{color:var(--fg);background:var(--accent-bg);padding-left:.8rem}
+.toc-sidebar a:hover::before{height:55%;opacity:1}
+.toc-sidebar a.active{color:var(--accent);font-weight:600;background:var(--accent-bg)}
+.toc-sidebar a.active::before{height:75%;opacity:1}
+.toc-sources{margin-top:.6rem;border-top:1px solid var(--rule);padding-top:.6rem!important}
+
+main.content{max-width:var(--max-w);padding:2.4rem 1.25rem 4rem}
+main.nocols{margin:0 auto}
+
+h2{font-size:1.22rem;margin:2.1rem 0 .6rem;padding-top:.3rem;
+border-bottom:1px solid transparent;border-image:linear-gradient(90deg,var(--accent) 0%,transparent 60%) 1;
+padding-bottom:.4rem;scroll-margin-top:1.5rem}
+h2:first-child{margin-top:0}
+.intro{font-size:1.05rem}
 p{margin:.6rem 0}
 sup a{color:var(--accent);text-decoration:none;font-size:.72em;padding:0 .08em}
+a{color:var(--accent)}
 figure{margin:1.4rem 0}
 figcaption{color:var(--muted);font-size:.82rem;margin-top:.35rem;text-align:center}
 figure img{max-width:100%;border-radius:8px;display:block;margin:0 auto}
@@ -188,6 +321,11 @@ table{border-collapse:collapse;width:100%;margin:1.2rem 0;font-size:.9rem}
 caption{caption-side:top;text-align:left;font-weight:600;padding-bottom:.45rem}
 th,td{border:1px solid var(--rule);padding:.45rem .6rem;text-align:left;vertical-align:top}
 th{background:var(--surface)}
+td.cmp-pos{color:#2e7d32;font-weight:600;background:rgba(76,175,80,.10)}
+td.cmp-neg{color:#c62828;font-weight:600;background:rgba(244,67,54,.08)}
+td.cmp-mid{color:#e68a00;background:rgba(255,167,38,.08)}
+@media (prefers-color-scheme:dark){
+td.cmp-pos{color:#82c882}td.cmp-neg{color:#e88f73}td.cmp-mid{color:#e8c05a}}
 .chart{margin:1.4rem 0;background:var(--surface);border:1px solid var(--rule);
 border-radius:8px;padding:1rem}
 .chart h3{margin:0 0 .6rem;font-size:.95rem}
@@ -195,13 +333,41 @@ border-radius:8px;padding:1rem}
 .bar-label{font-size:12px;fill:var(--fg)}
 .bar-value{font-size:12px;fill:var(--muted)}
 .sources{border-top:1px solid var(--rule);margin-top:2.5rem;padding-top:1rem}
-.sources h2{margin-top:0}
+.sources h2{margin-top:0;border-image:none}
 .sources ol{padding-left:1.4rem;font-size:.88rem}
 .sources li{margin:.3rem 0}
 .sources a{color:var(--accent)}
 .src-kind{color:var(--muted)}
-footer{color:var(--muted);font-size:.75rem;margin-top:3rem}
+footer{color:var(--muted);font-size:.75rem;text-align:center;padding:2rem 1.25rem;
+border-top:1px solid var(--rule)}
+
+@media (max-width:900px){
+.layout{grid-template-columns:1fr}
+.toc-sidebar{display:none}}
+@media print{.toc-sidebar{display:none}.layout{grid-template-columns:1fr}}
 "#;
+
+/// The lone inline script: highlights the TOC entry for whichever heading is
+/// currently in view. References only ids we generated; contains no model text.
+const TOC_JS: &str = r##"
+(function(){
+  var links=document.querySelectorAll('.toc-sidebar a[href^="#"]');
+  if(!links.length||!('IntersectionObserver' in window))return;
+  var map={};links.forEach(function(l){map[l.getAttribute('href').slice(1)]=l;});
+  var heads=document.querySelectorAll('.content h2[id],#sources');
+  if(!heads.length)return;
+  var active=null;
+  function setActive(id){if(id===active)return;
+    if(active&&map[active])map[active].classList.remove('active');
+    if(id&&map[id])map[id].classList.add('active');active=id;}
+  var vis={};
+  var io=new IntersectionObserver(function(es){
+    es.forEach(function(e){vis[e.target.id]=e.isIntersecting;});
+    for(var i=0;i<heads.length;i++){if(vis[heads[i].id]){setActive(heads[i].id);break;}}
+  },{rootMargin:'-10% 0px -75% 0px',threshold:0});
+  heads.forEach(function(h){io.observe(h);});
+})();
+"##;
 
 /// Plain-markdown rendering of a report for the documents-RAG corpus: the
 /// substance (title, intro, sections, tables, chart values) without the HTML
@@ -247,33 +413,111 @@ pub fn render_markdown(doc: &ReportDoc, sources: &[Source]) -> String {
     out
 }
 
+/// One `<div class="stat">` per non-empty stat, or an empty string if there's
+/// nothing to show (so the bar is omitted entirely).
+fn stats_bar(stats: &ReportStats) -> String {
+    let mut items: Vec<(String, &str)> = Vec::new();
+    if !stats.depth.trim().is_empty() {
+        items.push((capitalize(stats.depth.trim()), "Depth"));
+    }
+    if stats.rounds > 0 {
+        items.push((stats.rounds.to_string(), "Rounds"));
+    }
+    if stats.queries > 0 {
+        items.push((stats.queries.to_string(), "Queries"));
+    }
+    if stats.sources > 0 {
+        items.push((stats.sources.to_string(), "Sources"));
+    }
+    if !stats.model.trim().is_empty() {
+        items.push((stats.model.trim().to_string(), "Model"));
+    }
+    if items.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from("<div class=\"stats-bar\">");
+    for (value, label) in items {
+        html.push_str(&format!(
+            "<div class=\"stat\"><span class=\"stat-value\">{}</span> {}</div>",
+            escape(&value),
+            label
+        ));
+    }
+    html.push_str("</div>");
+    html
+}
+
 /// Render the complete self-contained report document.
 pub fn render_report(
     doc: &ReportDoc,
+    category: &str,
+    stats: &ReportStats,
     sources: &[Source],
     images: &[EmbeddedImage],
     generated: &str,
 ) -> String {
     let title = if doc.title.trim().is_empty() { "Research report" } else { doc.title.trim() };
+
+    // Category drives only a body class (CSS retints from there); "general" /
+    // empty stay on the default palette.
+    let body_attr = match category.trim() {
+        "" | "general" => String::new(),
+        cat => format!(" class=\"category-{}\"", escape(cat)),
+    };
+
     let mut html = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>{}</title><style>{CSS}</style></head><body><main>",
+         <title>{}</title><style>{CSS}</style></head><body{body_attr}>",
         escape(title)
     );
 
+    // Hero header (full-width, above the layout grid).
     html.push_str(&format!(
-        "<header><h1>{}</h1><div class=\"meta\">{} · generated by episteme deep research</div></header>",
+        "<header class=\"hero\"><div class=\"hero-label\">Episteme · Deep Research</div>\
+         <h1>{}</h1><div class=\"meta\">{} · generated by episteme deep research</div></header>",
         escape(title),
         escape(generated),
     ));
+
+    html.push_str(&stats_bar(stats));
+
+    // Stable, unique anchor slug per section — shared by the TOC and the <h2>.
+    let mut seen = HashMap::new();
+    let section_slugs: Vec<String> =
+        doc.sections.iter().map(|s| slugify(&s.heading, &mut seen)).collect();
+    let has_toc = doc.sections.iter().any(|s| !s.heading.trim().is_empty());
+
+    if has_toc {
+        html.push_str("<div class=\"layout\"><aside class=\"toc-sidebar\"><nav>");
+        for (i, section) in doc.sections.iter().enumerate() {
+            if !section.heading.trim().is_empty() {
+                html.push_str(&format!(
+                    "<a href=\"#{}\">{}</a>",
+                    section_slugs[i],
+                    escape(&section.heading)
+                ));
+            }
+        }
+        if !sources.is_empty() {
+            html.push_str("<a href=\"#sources\" class=\"toc-sources\">Sources</a>");
+        }
+        html.push_str("</nav></aside><main class=\"content\">");
+    } else {
+        html.push_str("<main class=\"content nocols\">");
+    }
+
     if !doc.intro.trim().is_empty() {
         html.push_str(&format!("<p class=\"intro\">{}</p>", escape(&doc.intro)));
     }
 
-    for section in &doc.sections {
+    for (i, section) in doc.sections.iter().enumerate() {
         if !section.heading.trim().is_empty() {
-            html.push_str(&format!("<h2>{}</h2>", escape(&section.heading)));
+            html.push_str(&format!(
+                "<h2 id=\"{}\">{}</h2>",
+                section_slugs[i],
+                escape(&section.heading)
+            ));
         }
         for para in &section.paragraphs {
             html.push_str(&format!(
@@ -284,6 +528,7 @@ pub fn render_report(
         }
     }
 
+    let is_comparison = category.trim() == "comparison";
     for table in &doc.tables {
         html.push_str("<table>");
         if !table.title.trim().is_empty() {
@@ -299,8 +544,19 @@ pub fn render_report(
         html.push_str("<tbody>");
         for row in &table.rows {
             html.push_str("<tr>");
-            for cell in row {
-                html.push_str(&format!("<td>{}</td>", escape(cell)));
+            for (col_idx, cell) in row.iter().enumerate() {
+                // In comparison reports, colour the data cells (not the first,
+                // which names the row) by their verdict.
+                let class = if is_comparison && col_idx > 0 {
+                    comparison_cell_class(cell)
+                } else {
+                    ""
+                };
+                if class.is_empty() {
+                    html.push_str(&format!("<td>{}</td>", escape(cell)));
+                } else {
+                    html.push_str(&format!("<td class=\"{class}\">{}</td>", escape(cell)));
+                }
             }
             html.push_str("</tr>");
         }
@@ -329,7 +585,7 @@ pub fn render_report(
     }
 
     if !sources.is_empty() {
-        html.push_str("<div class=\"sources\"><h2>Sources</h2><ol>");
+        html.push_str("<div class=\"sources\" id=\"sources\"><h2>Sources</h2><ol>");
         for (i, src) in sources.iter().enumerate() {
             let body = match &src.url {
                 Some(url) => format!(
@@ -348,8 +604,14 @@ pub fn render_report(
         html.push_str("</ol></div>");
     }
 
+    html.push_str("</main>");
+    if has_toc {
+        html.push_str("</div>");
+    }
+
     html.push_str("<footer>Self-contained report — no external scripts or trackers.</footer>");
-    html.push_str("</main></body></html>");
+    html.push_str(&format!("<script>{TOC_JS}</script>"));
+    html.push_str("</body></html>");
     html
 }
 
@@ -407,6 +669,17 @@ mod tests {
     }
 
     #[test]
+    fn slugify_is_url_safe_and_deduped() {
+        let mut seen = HashMap::new();
+        assert_eq!(slugify("Best Overall — The Pick!", &mut seen), "best-overall-the-pick");
+        assert_eq!(slugify("Frigate", &mut seen), "frigate");
+        // Repeat headings disambiguate with a numeric suffix.
+        assert_eq!(slugify("Frigate", &mut seen), "frigate-1");
+        // All-punctuation falls back rather than producing an empty id.
+        assert_eq!(slugify("!!!", &mut seen), "section");
+    }
+
+    #[test]
     fn model_text_never_becomes_live_html() {
         let doc = ReportDoc {
             title: "<script>alert(1)</script>".into(),
@@ -417,11 +690,89 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render_report(&doc, &[], &[], "7 Jun 2026");
+        let html = render_report(&doc, "", &ReportStats::default(), &[], &[], "7 Jun 2026");
         assert!(!html.contains("<script>alert"));
         assert!(!html.contains("<img onerror"));
         assert!(!html.contains("<iframe>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        // The one legitimate script we emit is our own TOC highlighter.
+        assert!(html.contains("IntersectionObserver"));
+    }
+
+    #[test]
+    fn toc_sidebar_anchors_match_section_ids() {
+        let doc = ReportDoc {
+            title: "T".into(),
+            sections: vec![
+                Section { heading: "Setup".into(), paragraphs: vec![] },
+                Section { heading: "Setup".into(), paragraphs: vec![] },
+            ],
+            ..Default::default()
+        };
+        let html = render_report(&doc, "howto", &ReportStats::default(), &sources(), &[], "today");
+        // Layout + sidebar present, body retinted by category.
+        assert!(html.contains("class=\"category-howto\""));
+        assert!(html.contains("<div class=\"layout\">"));
+        assert!(html.contains("<aside class=\"toc-sidebar\">"));
+        // Duplicate headings get distinct ids, and the TOC links match them.
+        assert!(html.contains("<a href=\"#setup\">Setup</a>"));
+        assert!(html.contains("<a href=\"#setup-1\">Setup</a>"));
+        assert!(html.contains("<h2 id=\"setup\">Setup</h2>"));
+        assert!(html.contains("<h2 id=\"setup-1\">Setup</h2>"));
+        // Sources gets a TOC entry + matching anchor.
+        assert!(html.contains("<a href=\"#sources\""));
+        assert!(html.contains("id=\"sources\""));
+    }
+
+    #[test]
+    fn no_headings_means_no_sidebar() {
+        let doc = ReportDoc { title: "T".into(), intro: "Body only.".into(), ..Default::default() };
+        let html = render_report(&doc, "", &ReportStats::default(), &[], &[], "today");
+        // The class lives in the CSS regardless; assert the *element* isn't built.
+        assert!(!html.contains("<aside class=\"toc-sidebar\">"));
+        assert!(!html.contains("<div class=\"layout\">"));
+        assert!(html.contains("class=\"content nocols\""));
+    }
+
+    #[test]
+    fn stats_bar_shows_only_present_values() {
+        let stats = ReportStats {
+            depth: "deep".into(),
+            rounds: 4,
+            queries: 12,
+            sources: 0, // omitted
+            model: "claude-opus-4-8".into(),
+        };
+        let doc = ReportDoc { title: "T".into(), ..Default::default() };
+        let html = render_report(&doc, "", &stats, &[], &[], "today");
+        assert!(html.contains("stats-bar"));
+        // Depth is capitalised; present stats render, zero ones are omitted.
+        assert!(html.contains("<span class=\"stat-value\">Deep</span> Depth"));
+        assert!(html.contains("<span class=\"stat-value\">12</span> Queries"));
+        assert!(html.contains("<span class=\"stat-value\">claude-opus-4-8</span> Model"));
+        // sources == 0 → no "Sources" stat anywhere in the document.
+        assert!(!html.contains("Sources"));
+    }
+
+    #[test]
+    fn comparison_tables_colour_their_cells() {
+        let doc = ReportDoc {
+            title: "T".into(),
+            tables: vec![Table {
+                title: "Face-off".into(),
+                columns: vec!["Tool".into(), "Cost".into(), "Speed".into()],
+                rows: vec![vec!["A".into(), "Free".into(), "Slow".into()]],
+            }],
+            ..Default::default()
+        };
+        let html = render_report(&doc, "comparison", &ReportStats::default(), &[], &[], "today");
+        // First column (row name) is never coloured; data cells are.
+        assert!(html.contains("<td>A</td>"));
+        assert!(html.contains("<td class=\"cmp-pos\">Free</td>"));
+        assert!(html.contains("<td class=\"cmp-neg\">Slow</td>"));
+        // Non-comparison categories leave the same cells plain.
+        let plain = render_report(&doc, "", &ReportStats::default(), &[], &[], "today");
+        assert!(plain.contains("<td>Free</td>"));
     }
 
     #[test]
@@ -437,7 +788,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let html = render_report(&doc, &sources(), &[], "7 Jun 2026");
+        let html = render_report(&doc, "", &ReportStats::default(), &sources(), &[], "7 Jun 2026");
         // doc:contract.pdf is source #2, S1 is #1; unknown ids render nothing.
         assert!(html.contains("<sup><a href=\"#src-2\">[2]</a></sup>"));
         assert!(html.contains("<sup><a href=\"#src-1\">[1]</a></sup>"));
@@ -484,7 +835,7 @@ mod tests {
         assert_eq!(doc.title, "X");
         assert!(doc.sections[0].paragraphs.is_empty());
         assert!(doc.tables.is_empty());
-        let html = render_report(&doc, &[], &[], "today");
-        assert!(html.contains("<h2>H</h2>"));
+        let html = render_report(&doc, "", &ReportStats::default(), &[], &[], "today");
+        assert!(html.contains("<h2 id=\"h\">H</h2>"));
     }
 }
