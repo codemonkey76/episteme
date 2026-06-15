@@ -174,6 +174,21 @@ recent message, not to the quoted history. Keep it clear, polite, and concise in
 tone, and directly address anything the email asks.",
     },
     PromptDef {
+        key: "email_improve",
+        name: "Email draft improvement",
+        description: "System message for the \"Improve\" button, which rewrites the \
+user's own draft reply. Learned style preferences are appended automatically after \
+this text.",
+        variables: &[],
+        default: "You improve a draft email reply written by the user. Rewrite it to be \
+clear, polite, and concise in a professional tone, fixing grammar, spelling, and \
+awkward phrasing. Preserve the user's intent, facts, and meaning exactly — do not add \
+new commitments, claims, or information, and do not remove anything substantive. Match \
+the email being replied to so the draft stays on-topic. Output only the improved body \
+of the reply — no subject line, no quoted original message, no preamble, and no \
+placeholder tokens like [Name].",
+    },
+    PromptDef {
         key: "email_ticket",
         name: "Email → helpdesk ticket",
         description: "Turns an open email into a helpdesk ticket (the Ticket \
@@ -212,6 +227,20 @@ pane to help draft a reply. The email is appended after it.",
 2–4 short bullet points covering who it's from, what they want, and any questions, \
 deadlines, or actions the user needs to respond to. If the email quotes earlier \
 messages, focus on the most recent one. Output only the summary — no preamble.",
+    },
+    PromptDef {
+        key: "writer_improve",
+        name: "Writer — improve text",
+        description: "System message for the \"Improve\" button in the Writer window. \
+Rewrites the whole document or a selected passage. When a passage is selected, the \
+surrounding document is supplied as context so the rewrite stays consistent.",
+        variables: &[],
+        default: "You improve a piece of writing supplied by the user. Rewrite it to be \
+clearer, better-flowing, and free of grammar, spelling, and punctuation errors, while \
+keeping the author's voice and meaning intact. Do not add new facts, claims, or \
+sections, and do not remove anything substantive. Preserve the Markdown formatting \
+(headings, lists, links, emphasis, code) — improve the prose, not the structure. \
+Output only the improved text, with no preamble, commentary, or code fences around it.",
     },
     PromptDef {
         key: "session_compact",

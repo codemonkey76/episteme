@@ -47,6 +47,9 @@ async fn main() -> Result<()> {
     let state = Arc::new(state);
     integrations::microsoft::migrate_legacy(&state).await;
     integrations::microsoft::migrate_shared_to_per_user(&state).await;
+    // Fold the legacy single-connection M365 (per-user keys) into a default
+    // `microsoft` integration instance, so existing users keep working.
+    integrations::microsoft::migrate_email_to_integration(&state).await;
     categorizer::spawn_worker(state.clone());
     scheduler::spawn_worker(state.clone());
     jobs::spawn_worker(state.clone(), job_rx);

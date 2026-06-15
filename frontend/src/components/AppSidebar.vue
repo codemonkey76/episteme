@@ -2,13 +2,16 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useWindowsStore } from '../stores/windows'
 import { useAuthStore } from '../stores/auth'
+import { useNotificationsStore } from '../stores/notifications'
 
 const winStore = useWindowsStore()
 const auth = useAuthStore()
+const notifStore = useNotificationsStore()
 const collapsed = ref(false)
 const sidebarEl = ref<HTMLElement>()
 
 let resizeObserver: ResizeObserver | null = null
+let notifTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
   const saved = localStorage.getItem('sidebar-collapsed')
@@ -20,9 +23,16 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => winStore.reflow())
     resizeObserver.observe(sidebarEl.value)
   }
+
+  // Keep the unread badge fresh (push notifications arrive server-side).
+  notifStore.refresh()
+  notifTimer = setInterval(() => notifStore.refresh(), 60_000)
 })
 
-onUnmounted(() => resizeObserver?.disconnect())
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  if (notifTimer) clearInterval(notifTimer)
+})
 
 function toggle() {
   collapsed.value = !collapsed.value
@@ -116,6 +126,29 @@ function toggleSettings(tab: string) {
           <polyline points="10 9 9 9 8 9"/>
         </svg>
         <span v-if="!collapsed">Notes</span>
+      </button>
+
+      <!-- Writer -->
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('writer') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Writer' : ''" :aria-pressed="isOpen('writer')" @click="toggleKey('writer')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>
+        </svg>
+        <span v-if="!collapsed">Writer</span>
+      </button>
+
+      <!-- Notifications -->
+      <button :class="['relative flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('notifications') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Notifications' : ''" :aria-pressed="isOpen('notifications')" @click="toggleKey('notifications')">
+        <span class="relative flex-shrink-0">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <!-- Dot badge when collapsed (no room for a number) -->
+          <span v-if="collapsed && notifStore.unread > 0" class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[var(--c-3a6adf)] ring-2 ring-[var(--c-161616)]" />
+        </span>
+        <span v-if="!collapsed" class="flex-1">Notifications</span>
+        <span v-if="!collapsed && notifStore.unread > 0" class="ml-auto text-[0.65rem] leading-none bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] rounded-full px-1.5 py-[0.2rem] font-medium">{{ notifStore.unread > 99 ? '99+' : notifStore.unread }}</span>
       </button>
 
       <!-- Logs -->

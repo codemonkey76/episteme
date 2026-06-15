@@ -90,7 +90,15 @@ pub async fn run(state: Arc<AppState>, job: Job) {
             state
                 .log("jobs", "info", format!("'{}' finished: {}", job.name, clip(&summary, 120)))
                 .await;
-            push::notify(&state, &job.user_id, &job.name, &summary).await;
+            push::notify_linked(
+                &state,
+                &job.user_id,
+                &job.name,
+                &summary,
+                "agent",
+                Some(push::Link { kind: "session", id: &job.session_id }),
+            )
+            .await;
         }
         Ok(TurnOutcome::Suspended { pending }) => {
             let tool = db::pending_actions::list_pending(&state.db, &job.session_id)
@@ -106,11 +114,13 @@ pub async fn run(state: Arc<AppState>, job: Job) {
                     format!("'{}' suspended: {pending} action(s) await approval", job.name),
                 )
                 .await;
-            push::notify(
+            push::notify_linked(
                 &state,
                 &job.user_id,
                 &format!("{} needs approval", job.name),
                 &format!("Waiting on: {tool} — open episteme to approve or deny"),
+                "approval",
+                Some(push::Link { kind: "session", id: &job.session_id }),
             )
             .await;
         }
@@ -118,8 +128,15 @@ pub async fn run(state: Arc<AppState>, job: Job) {
             let _ =
                 db::jobs::set_status(&state.db, &job.id, "failed", None, Some(&e.to_string())).await;
             state.log("jobs", "error", format!("'{}' failed: {e}", job.name)).await;
-            push::notify(&state, &job.user_id, &format!("{} failed", job.name), &e.to_string())
-                .await;
+            push::notify_linked(
+                &state,
+                &job.user_id,
+                &format!("{} failed", job.name),
+                &e.to_string(),
+                "error",
+                Some(push::Link { kind: "session", id: &job.session_id }),
+            )
+            .await;
         }
     }
 }

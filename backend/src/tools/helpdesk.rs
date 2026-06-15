@@ -65,7 +65,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_create_ticket",
-            "description": "Create a new helpdesk ticket. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
+            "description": "Create a new helpdesk ticket — in one call you also set its priority and, optionally, assign it to yourself. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Set assign_to_me=true to assign the new ticket to the connected agent (you) as it's created — no separate update call is needed. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -74,6 +74,7 @@ pub fn schemas() -> Vec<Value> {
                     "subject": { "type": "string" },
                     "description": { "type": "string", "description": "Full description of the issue." },
                     "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                    "assign_to_me": { "type": "boolean", "description": "If true, assign the new ticket to the connected agent (yourself) on creation. Default false." },
                     "silent": { "type": "boolean", "description": "If true, suppress all customer-facing email for this ticket. Default false." }
                 },
                 "required": ["client_id", "user_id", "subject", "description", "priority"]
@@ -227,7 +228,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             Ok(json!({ "created": res["data"] }))
         }
         "helpdesk_create_ticket" => {
-            let body = json!({
+            let mut body = json!({
                 "client_id": args["client_id"].as_i64().ok_or_else(|| anyhow!("client_id is required"))?,
                 "user_id": args["user_id"].as_i64().ok_or_else(|| anyhow!("user_id is required"))?,
                 "subject": args["subject"].as_str().ok_or_else(|| anyhow!("subject is required"))?,
@@ -236,6 +237,16 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "silent": args["silent"].as_bool().unwrap_or(false),
                 "source": "api",
             });
+            // Assign to the connected agent on creation, so create + assign is a
+            // single approved call. Resolve "me" via the same /user lookup the
+            // update tool uses.
+            if args["assign_to_me"].as_bool().unwrap_or(false) {
+                let me = helpdesk::request(state, user_id, instance, Method::GET, "/user", None).await?;
+                let agent_id = me["data"]["id"]
+                    .as_i64()
+                    .ok_or_else(|| anyhow!("could not determine the connected agent's id"))?;
+                body["assigned_agent_id"] = json!(agent_id);
+            }
             let res = helpdesk::request(state, user_id, instance, Method::POST, "/tickets", Some(&body)).await?;
             state
                 .log("helpdesk", "info", format!(

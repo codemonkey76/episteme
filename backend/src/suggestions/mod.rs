@@ -164,11 +164,13 @@ Email the user sent ({context}):\n\n{body_capped}{replied}",
                 state
                     .log("suggestions", "info", format!("detected commitment ({kind}): {title}"))
                     .await;
-                crate::integrations::push::notify(
+                crate::integrations::push::notify_linked(
                     state,
                     user_id,
                     "Commitment detected",
                     &format!("{title} — open episteme to add it as a {kind}"),
+                    "suggestion",
+                    None,
                 )
                 .await;
             }

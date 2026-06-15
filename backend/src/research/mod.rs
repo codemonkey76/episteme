@@ -662,6 +662,7 @@ async fn gather_internal(
         let Ok(body) = graph_get(
             state,
             user_id,
+            None,
             &format!("{GRAPH}/me/messages"),
             &[
                 ("$search", &format!("\"{}\"", probe.replace('"', "")) as &str),
@@ -698,6 +699,7 @@ async fn gather_internal(
             match graph_get(
                 state,
                 user_id,
+                None,
                 &format!("{GRAPH}/me/messages/{id}"),
                 &[("$select", "body")],
             )

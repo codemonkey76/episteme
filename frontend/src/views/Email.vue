@@ -25,25 +25,33 @@ const aiProvider = ref('')
 const providersList = ref<api.ProviderConfig[]>([])
 const providerMenuOpen = ref(false)
 
-// ── Mailbox selection (own vs shared) ──────────────────────────────────────────
-// '' = the user's own mailbox; otherwise a shared mailbox address. Threaded
-// into every Graph-backed call so the whole window operates on the choice.
+// ── Account + mailbox selection ─────────────────────────────────────────────────
+// `accounts` are the connected Microsoft 365 instances. The switcher picks one
+// (`currentAccount` = its id); under it `currentMailbox` selects the own mailbox
+// ('') or one of that account's shared mailboxes. Both thread into every
+// Graph-backed call via `sel`.
+const accounts = ref<api.IntegrationView[]>([])
+const currentAccount = ref('')   // integration id; '' before load
 const sharedMailboxes = ref<api.SharedMailbox[]>([])
 const currentMailbox = ref('')
-// undefined (not '') is what the API layer expects for "own mailbox".
-const mbox = computed(() => currentMailbox.value || undefined)
+const sel = computed<api.MailboxSel>(() => ({
+  account: currentAccount.value || undefined,
+  mailbox: currentMailbox.value || undefined,
+}))
 
 onMounted(async () => {
   try {
-    const cfg = await api.integrations.email.getConfig()
-    connected.value = cfg.connected
+    const { integrations } = await api.integrations.list()
+    accounts.value = integrations.filter(i => i.kind === 'microsoft' && i.connected)
+    // Prefer the default account, else the first connected one.
+    const def = accounts.value.find(a => a.is_default) ?? accounts.value[0]
+    currentAccount.value = def?.id ?? ''
+    connected.value = !!def
   } finally {
     checkingConnection.value = false
   }
   if (connected.value) {
-    try {
-      sharedMailboxes.value = (await api.integrations.email.listShared()).mailboxes
-    } catch { /* none, or transient — switcher just shows the own mailbox */ }
+    await loadSharedMailboxes()
     await loadFolders()
   }
   try {
@@ -55,21 +63,44 @@ onMounted(async () => {
     try {
       signatures.value = await api.email.getSignatures()
     } catch { /* none saved yet */ }
+    // Pick up suggestions left over from earlier sends.
+    await loadSuggestions()
   }
-  // Pick up suggestions left over from earlier sends.
-  if (connected.value) await loadSuggestions()
 })
 
-// Switch the active mailbox: reset the reading state and reload folders.
-async function switchMailbox(address: string) {
-  if (address === currentMailbox.value) return
-  currentMailbox.value = address
+async function loadSharedMailboxes() {
+  sharedMailboxes.value = []
+  if (!currentAccount.value) return
+  try {
+    sharedMailboxes.value = (await api.integrations.listShared(currentAccount.value)).mailboxes
+  } catch { /* none, or transient — switcher just shows the own mailbox */ }
+}
+
+// Reset the reading state (shared by account/mailbox switches).
+function resetReadingState() {
   selectedFolder.value = null
   selectedMessage.value = null
   view.value = 'none'
   searchQuery.value = ''
   searchResults.value = []
   searchNextLink.value = null
+}
+
+// Switch the active O365 account: reset mailbox + reading state, reload.
+async function switchAccount(id: string) {
+  if (id === currentAccount.value) return
+  currentAccount.value = id
+  currentMailbox.value = ''
+  resetReadingState()
+  await loadSharedMailboxes()
+  await loadFolders()
+}
+
+// Switch the active mailbox within the current account.
+async function switchMailbox(address: string) {
+  if (address === currentMailbox.value) return
+  currentMailbox.value = address
+  resetReadingState()
   await loadFolders()
 }
 
@@ -86,7 +117,7 @@ async function loadFolders() {
   folderError.value = ''
   logs.debug('Email', 'Loading mail folders')
   try {
-    const res = await api.email.listFolders(mbox.value)
+    const res = await api.email.listFolders(sel.value)
     folders.value = [...res.value].sort((a, b) => {
       const ai = FOLDER_ORDER.indexOf(a.displayName)
       const bi = FOLDER_ORDER.indexOf(b.displayName)
@@ -140,7 +171,7 @@ async function loadMessages(folderId: string, skip = 0) {
   const folder = folders.value.find(f => f.id === folderId)
   logs.debug('Email', `Loading messages for "${folder?.displayName ?? folderId}" (skip=${skip})`)
   try {
-    const res = await api.email.listMessages(folderId, skip, PAGE, mbox.value)
+    const res = await api.email.listMessages(folderId, skip, PAGE, sel.value)
     const fresh = sentDraftIds.size
       ? res.value.filter(m => !sentDraftIds.has(m.id))
       : res.value
@@ -168,7 +199,7 @@ async function markAllRead() {
   if (!folder || markingAllRead.value) return
   markingAllRead.value = true
   try {
-    const res = await api.email.markAllRead(folder.id, mbox.value)
+    const res = await api.email.markAllRead(folder.id, sel.value)
     // Reflect locally without a full reload.
     messages.value = messages.value.map(m => ({ ...m, isRead: true }))
     searchResults.value = searchResults.value.map(m => ({ ...m, isRead: true }))
@@ -241,7 +272,7 @@ async function deleteIds(ids: string[]): Promise<boolean> {
   if (!ids.length || deleting.value) return false
   deleting.value = true
   try {
-    const res = await api.email.deleteMessages(ids, mbox.value)
+    const res = await api.email.deleteMessages(ids, sel.value)
     logs.info('Email', `Deleted ${res.deleted} message(s)`)
     const gone = new Set(ids)
     const folder = folders.value.find(f => f.id === selectedFolder.value?.id)
@@ -302,7 +333,7 @@ function onFolderDrop(f: api.MailFolder) {
 async function moveIds(ids: string[], dest: api.MailFolder) {
   if (!ids.length) return
   try {
-    const res = await api.email.moveMessages(ids, dest.id, mbox.value)
+    const res = await api.email.moveMessages(ids, dest.id, sel.value)
     logs.info('Email', `Moved ${res.moved} message(s) to ${dest.displayName}`)
     const gone = new Set(ids)
     const from = folders.value.find(f => f.id === selectedFolder.value?.id)
@@ -417,7 +448,7 @@ function openAttachment(att: api.Attachment) {
     title: att.name,
     component: AttachmentViewer,
     props: {
-      url: api.email.attachmentUrl(m.id, att.id, mbox.value),
+      url: api.email.attachmentUrl(m.id, att.id, sel.value),
       name: att.name,
       contentType: att.contentType,
     },
@@ -483,7 +514,7 @@ const cidResolution = computed(() => {
   }
 
   for (const [cid, att] of assigned) {
-    urlMap.set(cid, api.email.attachmentUrl(m.id, att.id, mbox.value))
+    urlMap.set(cid, api.email.attachmentUrl(m.id, att.id, sel.value))
     inlineIds.add(att.id)
   }
   return { urlMap, inlineIds }
@@ -518,7 +549,7 @@ async function selectMessage(summary: api.MessageSummary) {
   loadingMessage.value = true
   attachments.value = []
   try {
-    const detail = await api.email.getMessage(summary.id, mbox.value)
+    const detail = await api.email.getMessage(summary.id, sel.value)
     selectedMessage.value = detail
     // Fetch attachment metadata in the background so the body renders right away.
     // NOTE: Graph's `hasAttachments` is false when a message has ONLY inline
@@ -527,12 +558,12 @@ async function selectMessage(summary: api.MessageSummary) {
       detail.body?.contentType?.toLowerCase() === 'html' && detail.body.content.includes('cid:')
     if (summary.hasAttachments || hasInlineCid) {
       api.email
-        .listAttachments(summary.id, mbox.value)
+        .listAttachments(summary.id, sel.value)
         .then(r => { if (selectedMessage.value?.id === summary.id) attachments.value = r.value })
         .catch(() => { /* attachments are non-critical */ })
     }
     if (!summary.isRead) {
-      api.email.markRead(summary.id, mbox.value)
+      api.email.markRead(summary.id, sel.value)
       const idx = messages.value.findIndex(m => m.id === summary.id)
       if (idx !== -1) {
         messages.value[idx] = { ...messages.value[idx], isRead: true }
@@ -722,6 +753,7 @@ function openCompose() {
   pendingFiles.value = []
   showCcBcc.value = false
   sendMsg.value = ''
+  improveBackup.value = null
 }
 
 /// Open an existing draft in the composer for editing (rather than the read
@@ -734,12 +766,13 @@ async function openDraft(summary: api.MessageSummary) {
   editingDraftId.value = summary.id
   sendMsg.value = ''
   pendingFiles.value = []
+  improveBackup.value = null
   // Show something immediately; fill in once the body loads.
   composeForm.value = { to: '', cc: '', bcc: '', subject: summary.subject ?? '', body: '' }
   const addrs = (list?: { emailAddress: api.GraphEmailAddress }[]) =>
     (list ?? []).map(r => r.emailAddress.address).filter(Boolean).join(', ')
   try {
-    const d = await api.email.getMessage(summary.id, mbox.value)
+    const d = await api.email.getMessage(summary.id, sel.value)
     // A racing click on another row wins.
     if (editingDraftId.value !== summary.id) return
     composeForm.value = {
@@ -786,6 +819,13 @@ function replyAllCc(m: api.MessageDetail): string {
 
 const aiDrafting = ref(false)
 const aiWarming = ref(false)
+
+// "Improve" rewrites the user's own draft in place. While streaming, `improving`
+// is true; once done, `improveBackup` holds the pre-improve body so the user can
+// accept (clear it) or revert (restore it). Non-null backup = preview active.
+const improving = ref(false)
+const improveWarming = ref(false)
+const improveBackup = ref<string | null>(null)
 
 // Extract just the newest message from an email, dropping quoted thread history
 // so the AI replies to the latest message rather than to quoted prior replies.
@@ -892,6 +932,84 @@ async function aiReply() {
   }
 }
 
+// Improve the user's own draft: send their current text (plus the email being
+// replied to as context) to the AI and stream a polished version back into the
+// composer. The original is stashed so they can revert. The signature is held
+// out of the rewrite and re-appended.
+async function improveDraft() {
+  if (improving.value) return
+  if (!aiProvider.value) {
+    sendMsg.value = 'No AI provider configured — add one in Settings.'
+    return
+  }
+  const sig = sigBlock()
+  const fullBody = composeForm.value.body
+  // Improve only the user's prose, not the signature block.
+  const userHtml = sig && fullBody.endsWith(sig) ? fullBody.slice(0, -sig.length) : fullBody
+  const draftText = htmlToText(userHtml).trim()
+  if (!draftText) {
+    sendMsg.value = 'Nothing to improve — write something first.'
+    return
+  }
+
+  improveBackup.value = fullBody
+  improving.value = true
+  improveWarming.value = false
+  sendMsg.value = ''
+  let firstToken = false
+  const t0 = Date.now()
+  const warmTimer = setTimeout(() => { if (!firstToken) improveWarming.value = true }, 4000)
+  logs.info('Email', `Draft improve requested via "${aiProvider.value}"`)
+
+  const m = selectedMessage.value
+  let improved = ''
+  composeForm.value.body = sig
+  try {
+    await api.streamImprove(
+      {
+        provider: aiProvider.value,
+        draft: draftText,
+        from: m?.from?.emailAddress
+          ? `${m.from.emailAddress.name} <${m.from.emailAddress.address}>`
+          : '',
+        subject: m?.subject ?? composeForm.value.subject ?? '',
+        body: m ? latestMessageText(m) : '',
+      },
+      (text) => {
+        if (!firstToken) {
+          firstToken = true
+          improveWarming.value = false
+          logs.info('Email', `Improve started after ${((Date.now() - t0) / 1000).toFixed(1)}s`)
+        }
+        improved += text
+        composeForm.value.body = textToHtml(improved) + sig
+      },
+    )
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Improve failed'
+    sendMsg.value = `Improve failed: ${msg}`
+    logs.error('Email', `Improve failed: ${msg}`)
+    // Restore what the user had — a failed improve shouldn't lose their draft.
+    if (improveBackup.value != null) composeForm.value.body = improveBackup.value
+    improveBackup.value = null
+  } finally {
+    clearTimeout(warmTimer)
+    improveWarming.value = false
+    improving.value = false
+  }
+}
+
+// Keep the improved text and drop the undo snapshot.
+function acceptImprove() {
+  improveBackup.value = null
+}
+
+// Discard the improved text and put back what the user originally wrote.
+function cancelImprove() {
+  if (improveBackup.value != null) composeForm.value.body = improveBackup.value
+  improveBackup.value = null
+}
+
 // ── AI Summary ──────────────────────────────────────────────────────────────────
 // An inline, toggleable summary of the open email to help draft a reply.
 // Replaces the old "Ask AI" chat hand-off. Streamed; cached per message so
@@ -926,7 +1044,7 @@ async function runSummary() {
   try {
     await api.streamSummary(
       m.id,
-      { provider: aiProvider.value, mailbox: mbox.value },
+      { provider: aiProvider.value, ...sel.value },
       (t) => { summaryText.value += t },
       summaryAbort.signal,
     )
@@ -1040,7 +1158,7 @@ async function markDone() {
   markingDone.value = true
   const next = neighbourOf(m.id)
   try {
-    const res = await api.email.markDone(m.id, mbox.value)
+    const res = await api.email.markDone(m.id, sel.value)
     if (!res.ok) throw new Error(`${res.status}`)
     logs.info('Email', `Marked done: ${m.subject ?? '(no subject)'}`)
     await loadFolders()
@@ -1073,7 +1191,7 @@ async function previewTicket() {
   try {
     ticketDraft.value = await api.email.ticketPreview(m.id, {
       provider: aiProvider.value,
-      mailbox: mbox.value,
+      ...sel.value,
     })
     ticketState.value = 'review'
   } catch (e: unknown) {
@@ -1096,7 +1214,7 @@ async function submitTicket() {
   try {
     const res = await api.email.createTicket(ticketDraft.value, {
       message_id: selectedMessage.value.id,
-      mailbox: mbox.value,
+      ...sel.value,
     })
     ticketState.value = 'done'
     ticketDraft.value = null
@@ -1140,6 +1258,7 @@ function startReply(mode: ReplyMode) {
   sendMsg.value = ''
   showCcBcc.value = false
   aiDraftOriginal.value = ''
+  improveBackup.value = null
   pendingFiles.value = []
   const subject = m.subject ?? ''
   const body = sigBlock()
@@ -1200,7 +1319,8 @@ async function sendEmail() {
       cc: parseAddrs(composeForm.value.cc),
       bcc: parseAddrs(composeForm.value.bcc),
       body: html,
-      mailbox: mbox.value,
+      account: currentAccount.value || undefined,
+      mailbox: currentMailbox.value || undefined,
     }
     if (attachments.length) payload.attachments = attachments
     if (showReply.value && selectedMessage.value) {
@@ -1265,6 +1385,7 @@ async function sendEmail() {
     pendingFiles.value = []
     showCcBcc.value = false
     aiDraftOriginal.value = ''
+    improveBackup.value = null
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Send failed'
     sendMsg.value = `Failed: ${msg}`
@@ -1345,7 +1466,7 @@ async function runSearch(q: string, nextLink?: string | null) {
   searchError.value = ''
   if (!nextLink) logs.info('Email', `Searching for "${q}"`)
   try {
-    const res = await api.email.search(q, nextLink, mbox.value)
+    const res = await api.email.search(q, nextLink, sel.value)
     if (nextLink) {
       searchResults.value.push(...res.value)
     } else {
@@ -1472,7 +1593,19 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
           </svg>
         </button>
       </div>
-      <!-- Mailbox switcher: own + any shared mailboxes the user has added. -->
+      <!-- Account switcher: pick which connected Microsoft 365 account is in view. -->
+      <div v-if="accounts.length > 1" class="relative mb-1">
+        <select
+          :value="currentAccount"
+          class="w-full bg-[var(--c-15233f)] text-[var(--c-cfe0ff)] border border-[var(--c-2a4a8a)] rounded-md pl-2 pr-6 py-[0.4rem] text-[0.75rem] font-[inherit] cursor-pointer appearance-none focus:outline-none focus:border-[var(--c-3a6adf)] truncate"
+          title="Switch account"
+          @change="switchAccount(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}{{ a.account ? ` — ${a.account}` : '' }}</option>
+        </select>
+        <svg class="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--c-7ab0ff)]" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+      <!-- Mailbox switcher: the account's own + any shared mailboxes. -->
       <div v-if="sharedMailboxes.length" class="relative mb-1">
         <select
           :value="currentMailbox"
@@ -1627,6 +1760,18 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
             <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               Attach
+            </button>
+            <template v-if="improveBackup != null && !improving">
+              <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-15401e)] text-[var(--c-7ad08a)] border border-[var(--c-1e5a2a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-1a4d24)]" @click="acceptImprove">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                Keep
+              </button>
+              <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="cancelImprove">Revert</button>
+            </template>
+            <button v-else type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-[var(--c-7ab0ff)] border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:not-disabled:bg-[var(--c-222222)] disabled:opacity-50" :disabled="improving || sending" :title="aiProvider ? `Improve your draft with ${aiProvider}` : 'Improve your draft'" @click="improveDraft">
+              <span v-if="improving" class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 14l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+              {{ improving ? (improveWarming ? 'Loading model…' : 'Improving…') : 'Improve' }}
             </button>
             <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="view = 'none'">Cancel</button>
             <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)] ml-auto truncate">{{ sendMsg }}</span>
@@ -1890,6 +2035,18 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
               <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-muted border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" @click="fileInput?.click()">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                 Attach
+              </button>
+              <template v-if="improveBackup != null && !improving">
+                <button type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-15401e)] text-[var(--c-7ad08a)] border border-[var(--c-1e5a2a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-1a4d24)]" @click="acceptImprove">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Keep
+                </button>
+                <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="cancelImprove">Revert</button>
+              </template>
+              <button v-else type="button" class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-surface text-[var(--c-7ab0ff)] border border-raised rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:not-disabled:bg-[var(--c-222222)] disabled:opacity-50" :disabled="improving || sending || aiDrafting" :title="aiProvider ? `Improve your draft with ${aiProvider}` : 'Improve your draft'" @click="improveDraft">
+                <span v-if="improving" class="inline-block w-[11px] h-[11px] border-2 border-[var(--c-2a4a8a)] border-t-[var(--c-7ab0ff)] rounded-full animate-[spin_0.7s_linear_infinite]" />
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 14l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+                {{ improving ? (improveWarming ? 'Loading model…' : 'Improving…') : 'Improve' }}
               </button>
               <button type="button" class="bg-transparent text-[var(--c-585858)] border-none py-[0.375rem] px-2 cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:text-muted" @click="showReply = false">Cancel</button>
               <span v-if="sendMsg" class="text-[0.775rem] text-[var(--c-707070)]">{{ sendMsg }}</span>

@@ -9,6 +9,8 @@ import Calendar from '../views/Calendar.vue'
 import Documents from '../views/Documents.vue'
 import Jobs from '../views/Jobs.vue'
 import Notes from '../views/Notes.vue'
+import Writer from '../views/Writer.vue'
+import Notifications from '../views/Notifications.vue'
 import Reports from '../views/Reports.vue'
 import Logs from '../views/Logs.vue'
 import Tasks from '../views/Tasks.vue'
@@ -35,6 +37,8 @@ export const windowRegistry: Record<string, WindowDef> = {
   email: { title: 'Email', component: markRaw(Email), width: 1100, height: 660 },
   calendar: { title: 'Calendar', component: markRaw(Calendar), width: 800, height: 560 },
   notes: { title: 'Notes', component: markRaw(Notes), width: 680, height: 520 },
+  writer: { title: 'Writer', component: markRaw(Writer), width: 920, height: 640 },
+  notifications: { title: 'Notifications', component: markRaw(Notifications), width: 520, height: 560 },
   documents: { title: 'Documents', component: markRaw(Documents), width: 680, height: 520 },
   jobs: { title: 'Jobs', component: markRaw(Jobs), width: 620, height: 560 },
   reports: { title: 'Reports', component: markRaw(Reports), width: 960, height: 660 },

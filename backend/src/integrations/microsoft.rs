@@ -49,14 +49,82 @@ pub struct MicrosoftUserTokens {
     pub connected_email: Option<String>,
 }
 
-pub async fn app_config(
-    state: &crate::state::AppState,
+// ── Instance-based model ───────────────────────────────────────────────────────
+// Each connected O365 account is an `integrations` row (kind "microsoft"). The
+// row's `config` JSON holds app creds + connected mailbox + shared mailboxes +
+// AI-sort config; the volatile OAuth tokens live in a separate settings key
+// (`microsoft_tokens:{integration_id}`) so token refreshes never clobber a
+// concurrent config edit (e.g. the categorizer worker saving state).
+
+use crate::db::integrations::Integration;
+use crate::state::AppState;
+
+/// Per-instance OAuth token store key.
+pub fn tokens_key(integration_id: &str) -> String {
+    format!("microsoft_tokens:{integration_id}")
+}
+
+/// The `config` JSON of a `microsoft` integration row.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MicrosoftConfig {
+    pub tenant_id: String,
+    pub client_id: String,
+    pub client_secret: String,
+    /// The mailbox this instance is connected as (set on OAuth callback).
+    pub connected_email: Option<String>,
+    pub shared_mailboxes: Vec<SharedMailbox>,
+    /// AI auto-sort config for this account (own + shared mailboxes).
+    pub categorizer: crate::categorizer::CategorizerConfig,
+}
+
+/// Volatile OAuth tokens, stored apart from the editable config.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MicrosoftTokens {
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub token_expires_at: Option<i64>,
+}
+
+/// Resolve the microsoft instance for this user. `account` selects by id/name;
+/// absent falls back to the sole/default instance (see `registry::resolve`).
+pub async fn resolve(
+    state: &AppState,
     user_id: &str,
-) -> anyhow::Result<MicrosoftAppConfig> {
-    crate::db::settings::get::<MicrosoftAppConfig>(&state.db, &app_key(user_id))
-        .await?
-        .filter(|c| !c.client_id.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Microsoft integration not configured"))
+    account: Option<&str>,
+) -> anyhow::Result<Integration> {
+    crate::integrations::registry::resolve(&state.db, user_id, "microsoft", account).await
+}
+
+/// Resolve the instance and parse its config.
+pub async fn load(
+    state: &AppState,
+    user_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<(Integration, MicrosoftConfig)> {
+    let integ = resolve(state, user_id, account).await?;
+    let cfg = integ.parse_config::<MicrosoftConfig>().unwrap_or_default();
+    Ok((integ, cfg))
+}
+
+/// Persist an instance's config JSON (preserving its name).
+pub async fn save_config(
+    state: &AppState,
+    integ: &Integration,
+    cfg: &MicrosoftConfig,
+) -> anyhow::Result<()> {
+    let json = serde_json::to_string(cfg)?;
+    crate::db::integrations::update(&state.db, &integ.user_id, &integ.id, &integ.name, Some(&json))
+        .await
+}
+
+pub async fn save_tokens(
+    state: &AppState,
+    integration_id: &str,
+    tokens: &MicrosoftTokens,
+) -> anyhow::Result<()> {
+    crate::db::settings::set(&state.db, &tokens_key(integration_id), tokens).await
 }
 
 /// One-time startup migration from the single-user era: split the shared app
@@ -112,16 +180,28 @@ pub async fn migrate_shared_to_per_user(state: &crate::state::AppState) {
     let _ = db::settings::delete(&state.db, KEY_MICROSOFT_APP).await;
 }
 
-/// Returns a valid access token for the given user, refreshing transparently
-/// when it's expired or close to expiry.
+/// Returns a valid access token for the given user's selected microsoft
+/// instance, refreshing transparently when it's expired or close to expiry.
+/// `account` selects the instance (None = default/sole).
 pub async fn get_valid_token(
-    state: &crate::state::AppState,
+    state: &AppState,
     user_id: &str,
+    account: Option<&str>,
+) -> anyhow::Result<String> {
+    let (integ, cfg) = load(state, user_id, account).await?;
+    get_valid_token_for(state, &integ.id, &cfg).await
+}
+
+/// Token resolution for an already-resolved instance.
+pub async fn get_valid_token_for(
+    state: &AppState,
+    integration_id: &str,
+    cfg: &MicrosoftConfig,
 ) -> anyhow::Result<String> {
     use crate::db;
 
-    let key = user_key(user_id);
-    let tokens = db::settings::get::<MicrosoftUserTokens>(&state.db, &key)
+    let key = tokens_key(integration_id);
+    let tokens = db::settings::get::<MicrosoftTokens>(&state.db, &key)
         .await?
         .ok_or_else(|| anyhow::anyhow!("not_connected"))?;
 
@@ -141,15 +221,14 @@ pub async fn get_valid_token(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("not_connected"))?;
 
-    let app = app_config(state, user_id).await?;
     let token_url = format!(
         "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-        app.tenant_id
+        cfg.tenant_id
     );
 
     let form = [
-        ("client_id", app.client_id.as_str()),
-        ("client_secret", app.client_secret.as_str()),
+        ("client_id", cfg.client_id.as_str()),
+        ("client_secret", cfg.client_secret.as_str()),
         ("refresh_token", refresh_token.as_str()),
         ("grant_type", "refresh_token"),
     ];
@@ -180,14 +259,189 @@ pub async fn get_valid_token(
 
     let expires_in = res["expires_in"].as_i64().unwrap_or(3600);
 
-    let updated = MicrosoftUserTokens {
+    let updated = MicrosoftTokens {
         access_token: Some(new_access.clone()),
         refresh_token: new_refresh,
         token_expires_at: Some(now + expires_in),
-        connected_email: tokens.connected_email,
     };
 
     db::settings::set(&state.db, &key, &updated).await?;
 
     Ok(new_access)
+}
+
+/// One-time migration folding the legacy single-connection M365 (per-user
+/// settings keys) into a default `microsoft` integration instance, so existing
+/// users keep working with no reconnect. Runs after `migrate_legacy` /
+/// `migrate_shared_to_per_user` have populated the per-user app/token keys.
+/// Idempotent: skips any user who already has a `microsoft` instance.
+pub async fn migrate_email_to_integration(state: &AppState) {
+    use crate::db;
+
+    let users = db::auth::list_users(&state.db).await.unwrap_or_default();
+    for u in users {
+        if db::integrations::count_by_kind(&state.db, &u.id, "microsoft").await.unwrap_or(0) > 0 {
+            continue;
+        }
+        // Only migrate users who actually configured an Azure app.
+        let app = match db::settings::get::<MicrosoftAppConfig>(&state.db, &app_key(&u.id)).await {
+            Ok(Some(a)) if !a.client_id.is_empty() => a,
+            _ => continue,
+        };
+        let legacy_tokens = db::settings::get::<MicrosoftUserTokens>(&state.db, &user_key(&u.id))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let shared: Vec<SharedMailbox> = db::settings::get(&state.db, &shared_key(&u.id))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let categorizer = crate::categorizer::get_config(&state.db, &u.id)
+            .await
+            .unwrap_or_default();
+
+        let cfg = MicrosoftConfig {
+            tenant_id: app.tenant_id,
+            client_id: app.client_id,
+            client_secret: app.client_secret,
+            connected_email: legacy_tokens.connected_email.clone(),
+            shared_mailboxes: shared.clone(),
+            categorizer,
+        };
+        let json = match serde_json::to_string(&cfg) {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
+        let integ = match db::integrations::insert(
+            &state.db,
+            &u.id,
+            "microsoft",
+            "Microsoft 365",
+            true,
+            &json,
+        )
+        .await
+        {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::warn!("M365 migration failed for {}: {e}", u.id);
+                continue;
+            }
+        };
+
+        // Carry over the live tokens so the mailbox keeps working.
+        if legacy_tokens.access_token.is_some() {
+            let mt = MicrosoftTokens {
+                access_token: legacy_tokens.access_token,
+                refresh_token: legacy_tokens.refresh_token,
+                token_expires_at: legacy_tokens.token_expires_at,
+            };
+            let _ = save_tokens(state, &integ.id, &mt).await;
+        }
+
+        // Carry over the categorizer's processed-id state (own + shared) so the
+        // first post-migration run doesn't re-flag already-handled mail.
+        crate::categorizer::migrate_state_owner(
+            &state.db,
+            &u.id,
+            &integ.id,
+            shared.iter().map(|m| m.address.as_str()),
+        )
+        .await;
+
+        // Drop the legacy keys now they're folded in.
+        let _ = db::settings::delete(&state.db, &app_key(&u.id)).await;
+        let _ = db::settings::delete(&state.db, &user_key(&u.id)).await;
+        let _ = db::settings::delete(&state.db, &shared_key(&u.id)).await;
+        tracing::info!("migrated Microsoft 365 connection for {} into an integration", u.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::state::AppState;
+
+    async fn test_state() -> AppState {
+        let pool = db::init("sqlite::memory:").await.expect("migrations should run");
+        sqlx::query("INSERT INTO auth_users (id, username, password_hash, role, created_at) VALUES ('u1','t','x','admin','2026-01-01')")
+            .execute(&pool).await.unwrap();
+        AppState::new(pool).0
+    }
+
+    // A microsoft instance's config round-trips through the integrations row, and
+    // resolve()/load() find it by id and as the default.
+    #[tokio::test]
+    async fn instance_config_round_trip() {
+        let state = test_state().await;
+        let cfg = MicrosoftConfig {
+            tenant_id: "tid".into(),
+            client_id: "cid".into(),
+            client_secret: "sec".into(),
+            connected_email: Some("me@corp.com".into()),
+            shared_mailboxes: vec![SharedMailbox { address: "support@corp.com".into(), name: None }],
+            ..Default::default()
+        };
+        let row = db::integrations::insert(
+            &state.db, "u1", "microsoft", "Work", true, &serde_json::to_string(&cfg).unwrap(),
+        ).await.unwrap();
+
+        // Resolve by id and as the sole/default instance.
+        let (by_default, loaded) = load(&state, "u1", None).await.unwrap();
+        assert_eq!(by_default.id, row.id);
+        assert_eq!(loaded.connected_email.as_deref(), Some("me@corp.com"));
+        assert_eq!(loaded.shared_mailboxes.len(), 1);
+        let (by_id, _) = load(&state, "u1", Some(&row.id)).await.unwrap();
+        assert_eq!(by_id.id, row.id);
+
+        // save_config persists edits.
+        let (integ, mut cfg2) = load(&state, "u1", None).await.unwrap();
+        cfg2.shared_mailboxes.push(SharedMailbox { address: "team@corp.com".into(), name: Some("Team".into()) });
+        save_config(&state, &integ, &cfg2).await.unwrap();
+        let (_i, reread) = load(&state, "u1", None).await.unwrap();
+        assert_eq!(reread.shared_mailboxes.len(), 2);
+    }
+
+    // The legacy single-connection keys fold into a default instance with tokens,
+    // shared mailboxes and AI-sort carried over, and the legacy keys removed.
+    #[tokio::test]
+    async fn migration_folds_legacy_keys() {
+        let state = test_state().await;
+        db::settings::set(&state.db, &app_key("u1"), &MicrosoftAppConfig {
+            tenant_id: "tid".into(), client_id: "cid".into(), client_secret: "sec".into(),
+        }).await.unwrap();
+        db::settings::set(&state.db, &user_key("u1"), &MicrosoftUserTokens {
+            access_token: Some("at".into()),
+            refresh_token: Some("rt".into()),
+            token_expires_at: Some(99),
+            connected_email: Some("me@corp.com".into()),
+        }).await.unwrap();
+        db::settings::set(&state.db, &shared_key("u1"), &vec![
+            SharedMailbox { address: "support@corp.com".into(), name: None },
+        ]).await.unwrap();
+
+        migrate_email_to_integration(&state).await;
+
+        // One default microsoft instance with the folded config.
+        let rows = db::integrations::list_by_kind(&state.db, "u1", "microsoft").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_default);
+        let cfg: MicrosoftConfig = rows[0].parse_config().unwrap();
+        assert_eq!(cfg.client_id, "cid");
+        assert_eq!(cfg.connected_email.as_deref(), Some("me@corp.com"));
+        assert_eq!(cfg.shared_mailboxes.len(), 1);
+
+        // Tokens carried into the per-instance store.
+        let tokens: MicrosoftTokens =
+            db::settings::get(&state.db, &tokens_key(&rows[0].id)).await.unwrap().unwrap();
+        assert_eq!(tokens.access_token.as_deref(), Some("at"));
+
+        // Legacy keys removed; migration is idempotent.
+        assert!(db::settings::get::<MicrosoftAppConfig>(&state.db, &app_key("u1")).await.unwrap().is_none());
+        migrate_email_to_integration(&state).await;
+        assert_eq!(db::integrations::count_by_kind(&state.db, "u1", "microsoft").await.unwrap(), 1);
+    }
 }

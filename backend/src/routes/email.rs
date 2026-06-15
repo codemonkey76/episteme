@@ -33,9 +33,13 @@ pub fn mailbox_seg(mailbox: Option<&str>) -> AppResult<String> {
     graph::mailbox_seg(mailbox).map_err(|e| AppError::BadRequest(e.to_string()))
 }
 
-/// Optional `?mailbox=<address>` selecting a shared mailbox (absent = own).
+/// `?account=<id>` selects which connected Microsoft 365 instance (absent =
+/// default), and `?mailbox=<address>` selects a shared mailbox under it (absent
+/// = that account's own mailbox).
 #[derive(Deserialize)]
 pub struct MailboxQuery {
+    #[serde(default)]
+    account: Option<String>,
     #[serde(default)]
     mailbox: Option<String>,
 }
@@ -45,6 +49,7 @@ pub struct MailboxQuery {
 pub async fn ensure_folder(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     name: &str,
 ) -> AppResult<String> {
@@ -52,6 +57,7 @@ pub async fn ensure_folder(
     let existing = graph_get(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/mailFolders"),
         &[("$top", "100"), ("$select", "id,displayName")],
     )
@@ -70,6 +76,7 @@ pub async fn ensure_folder(
     let created = graph_post(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/mailFolders"),
         &serde_json::json!({ "displayName": name }),
     )
@@ -85,6 +92,7 @@ pub async fn ensure_folder(
 pub async fn move_message(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     message_id: &str,
     dest_folder_id: &str,
@@ -93,6 +101,7 @@ pub async fn move_message(
     graph_post(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}/move"),
         &serde_json::json!({ "destinationId": dest_folder_id }),
     )
@@ -104,31 +113,34 @@ pub async fn move_message(
 pub async fn flag_message(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     message_id: &str,
 ) -> AppResult<()> {
-    set_flag_status(state, user_id, mailbox, message_id, "flagged").await
+    set_flag_status(state, user_id, account, mailbox, message_id, "flagged").await
 }
 
 /// Mark a message's follow-up flag as completed (✓ in Outlook).
 pub async fn complete_flag(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     message_id: &str,
 ) -> AppResult<()> {
-    set_flag_status(state, user_id, mailbox, message_id, "complete").await
+    set_flag_status(state, user_id, account, mailbox, message_id, "complete").await
 }
 
 async fn set_flag_status(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     message_id: &str,
     status: &str,
 ) -> AppResult<()> {
     let seg = mailbox_seg(mailbox)?;
-    let token = microsoft::get_valid_token(state, user_id)
+    let token = microsoft::get_valid_token(state, user_id, account)
         .await
         .map_err(AppError::Internal)?;
 
@@ -155,12 +167,13 @@ async fn set_flag_status(
 async fn file_replied_message(
     state: Arc<AppState>,
     user_id: String,
+    account: Option<String>,
     mailbox: Option<String>,
     message_id: String,
 ) {
     // Only file mail that's actually in the Inbox — replying to something in
     // another folder (search results, sorted mail) shouldn't relocate it.
-    let _ = process_message(&state, &user_id, mailbox.as_deref(), &message_id, true).await;
+    let _ = process_message(&state, &user_id, account.as_deref(), mailbox.as_deref(), &message_id, true).await;
 }
 
 /// Complete the follow-up flag (when flagged) and move the message to the
@@ -170,6 +183,7 @@ async fn file_replied_message(
 async fn process_message(
     state: &Arc<AppState>,
     user_id: &str,
+    account: Option<&str>,
     mailbox: Option<&str>,
     message_id: &str,
     inbox_only: bool,
@@ -178,6 +192,7 @@ async fn process_message(
     let msg = match graph_get(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "parentFolderId,flag,subject")],
     )
@@ -194,13 +209,13 @@ async fn process_message(
     let subject = msg["subject"].as_str().unwrap_or("(no subject)").to_string();
 
     if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
-        match complete_flag(state, user_id, mailbox, message_id).await {
+        match complete_flag(state, user_id, account, mailbox, message_id).await {
             Ok(()) => state.log("email", "info", format!("Flag completed: {subject}")).await,
             Err(_) => state.log("email", "warn", format!("Flag completion failed: {subject}")).await,
         }
     }
 
-    let folder_id = match ensure_folder(state, user_id, mailbox, "Processed").await {
+    let folder_id = match ensure_folder(state, user_id, account, mailbox, "Processed").await {
         Ok(id) => id,
         Err(_) => {
             state.log("email", "warn", "filing: Processed folder unavailable").await;
@@ -215,6 +230,7 @@ async fn process_message(
         let inbox = match graph_get(
             state,
             user_id,
+            account,
             &format!("{GRAPH}/{seg}/mailFolders/inbox"),
             &[("$select", "id")],
         )
@@ -228,7 +244,7 @@ async fn process_message(
         }
     }
 
-    match move_message(state, user_id, mailbox, message_id, &folder_id).await {
+    match move_message(state, user_id, account, mailbox, message_id, &folder_id).await {
         Ok(()) => {
             state.log("email", "info", format!("Filed to Processed: {subject}")).await;
             Ok(())
@@ -249,7 +265,7 @@ pub async fn mark_done(
     Query(q): Query<MailboxQuery>,
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
-    process_message(&state, user_id, q.mailbox.as_deref(), &message_id, false)
+    process_message(&state, user_id, q.account.as_deref(), q.mailbox.as_deref(), &message_id, false)
         .await
         .map_err(|()| AppError::Internal(anyhow::anyhow!("filing failed — see Logs")))?;
     Ok(StatusCode::NO_CONTENT)
@@ -266,6 +282,7 @@ pub async fn list_folders(
     let res = graph_get(
         &state,
         user_id,
+        q.account.as_deref(),
         &format!("{GRAPH}/{seg}/mailFolders"),
         &[
             ("$top", "30"),
@@ -283,6 +300,8 @@ pub struct SearchQuery {
     next_link: Option<String>,
     top: Option<u32>,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -292,7 +311,7 @@ pub async fn search_messages(
     Query(params): Query<SearchQuery>,
 ) -> AppResult<Json<Value>> {
     let user_id = user.id.as_str();
-    let token = microsoft::get_valid_token(&state, user_id)
+    let token = microsoft::get_valid_token(&state, user_id, params.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
 
@@ -347,6 +366,8 @@ pub struct MessagesQuery {
     skip: Option<u32>,
     top: Option<u32>,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -364,6 +385,7 @@ pub async fn list_messages(
     let res = graph_get(
         &state,
         user_id,
+        q.account.as_deref(),
         &format!("{GRAPH}/{seg}/mailFolders/{folder_id}/messages"),
         &[
             ("$select", "id,subject,from,toRecipients,bodyPreview,receivedDateTime,isRead,hasAttachments,isDraft,flag"),
@@ -391,6 +413,7 @@ pub async fn get_message(
     let res = graph_get(
         &state,
         user_id,
+        q.account.as_deref(),
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "id,subject,from,toRecipients,ccRecipients,bccRecipients,body,receivedDateTime,isRead,hasAttachments,isDraft")],
     )
@@ -415,6 +438,7 @@ pub async fn list_attachments(
     let res = graph_get(
         &state,
         user_id,
+        q.account.as_deref(),
         &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
@@ -432,7 +456,7 @@ pub async fn get_attachment_raw(
 ) -> AppResult<Response> {
     let user_id = user.id.as_str();
     let seg = mailbox_seg(q.mailbox.as_deref())?;
-    let token = microsoft::get_valid_token(&state, user_id)
+    let token = microsoft::get_valid_token(&state, user_id, q.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
 
@@ -506,7 +530,7 @@ pub async fn mark_read(
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
     let seg = mailbox_seg(q.mailbox.as_deref())?;
-    let token = microsoft::get_valid_token(&state, user_id)
+    let token = microsoft::get_valid_token(&state, user_id, q.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
 
@@ -546,6 +570,7 @@ pub async fn mark_all_read(
         let page = graph_get(
             &state,
             user_id,
+            q.account.as_deref(),
             &format!("{GRAPH}/{seg}/mailFolders/{folder_id}/messages"),
             &[("$filter", "isRead eq false"), ("$select", "id"), ("$top", "100")],
         )
@@ -575,6 +600,7 @@ pub async fn mark_all_read(
             let res = graph_post(
                 &state,
                 user_id,
+                q.account.as_deref(),
                 &format!("{GRAPH}/$batch"),
                 &serde_json::json!({ "requests": requests }),
             )
@@ -608,6 +634,8 @@ pub async fn mark_all_read(
 pub struct DeleteMessagesBody {
     ids: Vec<String>,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -640,6 +668,7 @@ pub async fn delete_messages(
         let res = graph_post(
             &state,
             user_id,
+            payload.account.as_deref(),
             &format!("{GRAPH}/$batch"),
             &serde_json::json!({ "requests": requests }),
         )
@@ -665,6 +694,8 @@ pub async fn delete_messages(
 pub struct MoveMessagesBody {
     ids: Vec<String>,
     destination: String,
+    #[serde(default)]
+    account: Option<String>,
     #[serde(default)]
     mailbox: Option<String>,
 }
@@ -702,6 +733,7 @@ pub async fn move_messages(
         let res = graph_post(
             &state,
             user_id,
+            payload.account.as_deref(),
             &format!("{GRAPH}/$batch"),
             &serde_json::json!({ "requests": requests }),
         )
@@ -754,6 +786,9 @@ pub struct SendBody {
     /// Plain text of the message being replied to — context for commitment
     /// detection so short replies ("I'll get this done tonight") resolve.
     reply_context: Option<String>,
+    /// Which connected Microsoft 365 account to send from (absent = default).
+    #[serde(default)]
+    account: Option<String>,
     /// Shared mailbox address to send as (absent = the user's own mailbox).
     #[serde(default)]
     mailbox: Option<String>,
@@ -783,6 +818,7 @@ const UPLOAD_CHUNK: usize = 10 * 320 * 1024;
 async fn add_attachment(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     seg: &str,
     draft_id: &str,
     att: &AttachmentUpload,
@@ -803,7 +839,7 @@ async fn add_attachment(
         if let Some(cid) = &att.content_id {
             body["contentId"] = Value::String(cid.clone());
         }
-        graph_post(state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}/attachments"), &body)
+        graph_post(state, user_id, account, &format!("{GRAPH}/{seg}/messages/{draft_id}/attachments"), &body)
             .await?;
         return Ok(());
     }
@@ -821,6 +857,7 @@ async fn add_attachment(
     let session = graph_post(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{draft_id}/attachments/createUploadSession"),
         &serde_json::json!({ "AttachmentItem": item }),
     )
@@ -881,6 +918,7 @@ pub async fn send_email(
 ) -> AppResult<StatusCode> {
     let user_id = user.id.as_str();
     let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    let account = payload.account.clone();
 
     // Pulled out before `payload` is partially moved below.
     let mailbox = payload.mailbox.clone();
@@ -932,7 +970,7 @@ pub async fn send_email(
         if let Some(s) = payload.subject.as_deref() {
             patch["subject"] = Value::String(s.to_string());
         }
-        graph_patch(&state, user_id, &format!("{GRAPH}/{seg}/messages/{existing}"), &patch).await?;
+        graph_patch(&state, user_id, account.as_deref(), &format!("{GRAPH}/{seg}/messages/{existing}"), &patch).await?;
         existing.to_string()
     } else if let Some(reply_id) = &payload.reply_to_message_id {
         let verb = match payload.action.as_deref() {
@@ -943,6 +981,7 @@ pub async fn send_email(
         let draft = graph_post(
             &state,
             user_id,
+            account.as_deref(),
             &format!("{GRAPH}/{seg}/messages/{reply_id}/{verb}"),
             &serde_json::json!({}),
         )
@@ -963,12 +1002,13 @@ pub async fn send_email(
         let draft_id = draft["id"]
             .as_str()
             .ok_or_else(|| AppError::Internal(anyhow::anyhow!("draft missing id")))?;
-        graph_patch(&state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch).await?;
+        graph_patch(&state, user_id, account.as_deref(), &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch).await?;
         draft_id.to_string()
     } else {
         let draft = graph_post(
             &state,
             user_id,
+            account.as_deref(),
             &format!("{GRAPH}/{seg}/messages"),
             &serde_json::json!({
                 "subject": payload.subject.clone().unwrap_or_default(),
@@ -989,11 +1029,12 @@ pub async fn send_email(
     // half-built messages don't pile up in Drafts.
     let result: AppResult<()> = async {
         for att in &payload.attachments {
-            add_attachment(&state, user_id, &seg, &draft_id, att).await?;
+            add_attachment(&state, user_id, account.as_deref(), &seg, &draft_id, att).await?;
         }
         graph_post(
             &state,
             user_id,
+            account.as_deref(),
             &format!("{GRAPH}/{seg}/messages/{draft_id}/send"),
             &serde_json::json!({}),
         )
@@ -1002,7 +1043,7 @@ pub async fn send_email(
     }
     .await;
     if let Err(e) = result {
-        let _ = graph_delete(&state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}")).await;
+        let _ = graph_delete(&state, user_id, account.as_deref(), &format!("{GRAPH}/{seg}/messages/{draft_id}")).await;
         return Err(e);
     }
 
@@ -1013,7 +1054,7 @@ pub async fn send_email(
     //  - commitment detection on what was sent ("I'll do X on Saturday…")
     if let Some(id) = replied_id {
         let st = Arc::clone(&state);
-        tokio::spawn(file_replied_message(st, user.id.clone(), mailbox.clone(), id));
+        tokio::spawn(file_replied_message(st, user.id.clone(), account.clone(), mailbox.clone(), id));
     }
     if let Some(provider_name) = ai_provider {
         let providers: Vec<ProviderConfig> =
@@ -1145,12 +1186,122 @@ previous drafts:\n",
     Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }
 
+// POST /api/email/improve — rewrite the user's own draft reply, streaming the
+// improved text back so they can accept it or revert to what they had.
+#[derive(Deserialize)]
+pub struct ImproveBody {
+    provider: String,
+    /// The user's current draft text (plain text, signature stripped client-side).
+    draft: String,
+    /// Context of the email being replied to (empty for a fresh compose).
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    subject: String,
+    #[serde(default)]
+    body: String,
+}
+
+pub async fn improve(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(payload): Json<ImproveBody>,
+) -> AppResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>>>> {
+    let user_id = user.id.as_str();
+    let providers: Vec<ProviderConfig> = db::settings::get(&state.db, "providers")
+        .await
+        .map_err(AppError::Internal)?
+        .unwrap_or_default();
+    let provider = providers
+        .into_iter()
+        .find(|p| p.name == payload.provider)
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider))
+        })?;
+
+    let mut system = crate::prompts::get(&state.db, "email_improve").await;
+
+    // Apply the same style lessons learned from the user's past edits to drafts.
+    let style_memories = db::memories::list(&state.db, user_id, Some("style"), None, 20)
+        .await
+        .unwrap_or_default();
+    if !style_memories.is_empty() {
+        system.push_str(
+            "\n\nApply these writing-style preferences, learned from how the user edited \
+previous drafts:\n",
+        );
+        for m in &style_memories {
+            system.push_str(&format!("- {}\n", m.content));
+        }
+    }
+
+    // Give the model the original email as context (when replying), then the
+    // draft to improve.
+    let context = if payload.body.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "This reply is to the following email — keep the improved draft on-topic:\n\n\
+From: {}\nSubject: {}\n\n{}\n\n---\n\n",
+            payload.from, payload.subject, payload.body
+        )
+    };
+    let user = format!("{context}Improve this draft reply:\n\n{}", payload.draft);
+
+    let history = vec![
+        ChatMessage { role: "system".to_string(), content: Value::String(system) },
+        ChatMessage { role: "user".to_string(), content: Value::String(user) },
+    ];
+
+    let (ev_tx, ev_rx) = mpsc::channel::<String>(64);
+    let pool = state.db.clone();
+    let uid = user_id.to_string();
+    let prov_meta = provider.clone();
+    tokio::spawn(async move {
+        let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
+        let model_task =
+            tokio::spawn(async move { ModelRouter::stream(&provider, history, Vec::new(), false, tx).await });
+
+        let mut used = None;
+        while let Some(chunk) = rx.recv().await {
+            if chunk.usage.is_some() {
+                used = chunk.usage;
+            }
+            let data = if chunk.done {
+                serde_json::json!({ "type": "done" }).to_string()
+            } else {
+                serde_json::json!({ "type": "token", "text": chunk.text }).to_string()
+            };
+            if ev_tx.send(data).await.is_err() {
+                return; // client disconnected
+            }
+        }
+        db::usage::record(&pool, &uid, &prov_meta, "email-ai", used).await;
+
+        if let Ok(Err(e)) = model_task.await {
+            tracing::error!("improve stream error: {e}");
+            let _ = ev_tx
+                .send(serde_json::json!({ "type": "error", "message": e.to_string() }).to_string())
+                .await;
+        }
+    });
+
+    let event_stream = stream::unfold(ev_rx, |mut rx| async move {
+        let data = rx.recv().await?;
+        Some((Ok::<Event, Infallible>(Event::default().data(data)), rx))
+    });
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
+}
+
 // POST /api/email/messages/:id/summarize — stream a short summary of the email
 // to help the user draft a reply. Inline and ephemeral: no chat session, no DB
 // writes, unlike "Ask AI" which seeds a full conversation.
 #[derive(Deserialize)]
 pub struct SummarizeBody {
     provider: String,
+    #[serde(default)]
+    account: Option<String>,
     #[serde(default)]
     mailbox: Option<String>,
 }
@@ -1175,6 +1326,7 @@ pub async fn summarize(
     let msg = graph_get(
         &state,
         user_id,
+        payload.account.as_deref(),
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "subject,from,body")],
     )
@@ -1247,6 +1399,8 @@ pub async fn summarize(
 pub struct TicketFromEmailBody {
     provider: String,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -1264,6 +1418,7 @@ pub async fn ticket_preview(
     let msg = graph_get(
         &state,
         user_id,
+        payload.account.as_deref(),
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "subject,from,body")],
     )
@@ -1363,7 +1518,7 @@ pub async fn ticket_preview(
     };
 
     // How many image attachments will ride along — shown in the review panel.
-    let attachment_count = image_attachment_count(&state, user_id, &seg, &message_id).await;
+    let attachment_count = image_attachment_count(&state, user_id, payload.account.as_deref(), &seg, &message_id).await;
 
     // Return the draft for review — creation happens in ticket_create once the
     // user has (optionally) edited it.
@@ -1379,10 +1534,11 @@ pub async fn ticket_preview(
 }
 
 /// Count image attachments on a message (cheap — metadata only).
-async fn image_attachment_count(state: &AppState, user_id: &str, seg: &str, message_id: &str) -> usize {
+async fn image_attachment_count(state: &AppState, user_id: &str, account: Option<&str>, seg: &str, message_id: &str) -> usize {
     let res = graph_get(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[("$select", "contentType")],
     )
@@ -1404,6 +1560,7 @@ async fn image_attachment_count(state: &AppState, user_id: &str, seg: &str, mess
 async fn fetch_image_attachments(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     seg: &str,
     message_id: &str,
 ) -> Vec<(String, String, Vec<u8>)> {
@@ -1413,6 +1570,7 @@ async fn fetch_image_attachments(
     let res = match graph_get(
         state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[],
     )
@@ -1462,6 +1620,8 @@ pub struct CreateTicketBody {
     #[serde(default)]
     message_id: Option<String>,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -1484,7 +1644,7 @@ pub async fn ticket_create(
     // fetch failure still creates the ticket, just without the images).
     let images = if let Some(mid) = body.message_id.as_deref().filter(|s| !s.is_empty()) {
         let seg = mailbox_seg(body.mailbox.as_deref())?;
-        fetch_image_attachments(&state, user_id, &seg, mid).await
+        fetch_image_attachments(&state, user_id, body.account.as_deref(), &seg, mid).await
     } else {
         Vec::new()
     };
@@ -1541,6 +1701,8 @@ pub struct AdviseBody {
     provider: String,
     instruction: Option<String>,
     #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
     mailbox: Option<String>,
 }
 
@@ -1567,10 +1729,12 @@ pub async fn advise(
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("provider '{}' not found", payload.provider)))?;
 
     let seg = mailbox_seg(payload.mailbox.as_deref())?;
+    let account = payload.account.as_deref();
     // Message metadata + body.
     let msg = graph_get(
         &state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[("$select", "subject,from,body")],
     )
@@ -1589,6 +1753,7 @@ pub async fn advise(
     let attachments = graph_get(
         &state,
         user_id,
+        account,
         &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
         &[("$select", "id,name,contentType,size,isInline")],
     )
@@ -1609,6 +1774,7 @@ pub async fn advise(
             let full = graph_get(
                 &state,
                 user_id,
+                account,
                 &format!("{GRAPH}/{seg}/messages/{message_id}/attachments/{att_id}"),
                 &[],
             )
@@ -1717,32 +1883,36 @@ pub async fn put_signatures(
 
 // ── Auto-categorizer config / manual run ───────────────────────────────────────
 
-// GET /api/email/categorizer
+// GET /api/email/categorizer?account=… — that account's AI-sort config.
 pub async fn get_categorizer(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(q): Query<MailboxQuery>,
 ) -> AppResult<Json<crate::categorizer::CategorizerConfig>> {
-    let user_id = user.id.as_str();
-    let cfg = crate::categorizer::get_config(&state.db, user_id)
+    let (_integ, cfg) = microsoft::load(&state, &user.id, q.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
-    Ok(Json(cfg))
+    Ok(Json(cfg.categorizer))
 }
 
-// PUT /api/email/categorizer
+// PUT /api/email/categorizer?account=… — store that account's AI-sort config.
 pub async fn put_categorizer(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(cfg): Json<crate::categorizer::CategorizerConfig>,
+    Query(q): Query<MailboxQuery>,
+    Json(categorizer): Json<crate::categorizer::CategorizerConfig>,
 ) -> AppResult<Json<crate::categorizer::CategorizerConfig>> {
-    let user_id = user.id.as_str();
-    crate::categorizer::set_config(&state.db, user_id, &cfg)
+    let (integ, mut cfg) = microsoft::load(&state, &user.id, q.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
-    Ok(Json(cfg))
+    cfg.categorizer = categorizer;
+    microsoft::save_config(&state, &integ, &cfg)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(cfg.categorizer))
 }
 
-// POST /api/email/categorizer/run?mailbox=… — run one mailbox's sort now.
+// POST /api/email/categorizer/run?account=…&mailbox=… — run one mailbox's sort now.
 pub async fn run_categorizer(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
@@ -1750,15 +1920,23 @@ pub async fn run_categorizer(
 ) -> AppResult<Json<crate::categorizer::RunSummary>> {
     let user_id = user.id.as_str();
     let mailbox = q.mailbox.unwrap_or_default();
-    // Use the provider configured for that mailbox's task (empty → first available).
-    let cfg = crate::categorizer::get_config(&state.db, user_id)
+    let (integ, cfg) = microsoft::load(&state, user_id, q.account.as_deref())
         .await
         .map_err(AppError::Internal)?;
-    let task = cfg.tasks.iter().find(|t| t.mailbox == mailbox);
+    // Use the provider configured for that mailbox's task (empty → first available).
+    let task = cfg.categorizer.tasks.iter().find(|t| t.mailbox == mailbox);
     let provider = task.map(|t| t.provider.clone()).unwrap_or_default();
     let instructions = task.map(|t| t.instructions.clone()).unwrap_or_default();
-    let summary = crate::categorizer::run_mailbox(&state, user_id, &mailbox, &provider, &instructions)
-        .await
-        .map_err(AppError::Internal)?;
+    let summary = crate::categorizer::run_mailbox(
+        &state,
+        user_id,
+        &integ.id,
+        &mailbox,
+        &provider,
+        &instructions,
+        cfg.categorizer.batch_limit,
+    )
+    .await
+    .map_err(AppError::Internal)?;
     Ok(Json(summary))
 }

@@ -11,7 +11,7 @@ use axum::Extension;
 
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::integrations::microsoft::{self, MicrosoftAppConfig, MicrosoftUserTokens};
+use crate::integrations::microsoft::{self, MicrosoftConfig, MicrosoftTokens};
 use crate::routes::auth::CurrentUser;
 use crate::state::AppState;
 
@@ -24,23 +24,6 @@ const GRAPH_SCOPES: &str = "openid email profile offline_access \
     https://graph.microsoft.com/Mail.Send.Shared \
     https://graph.microsoft.com/Calendars.ReadWrite \
     https://graph.microsoft.com/User.Read";
-
-#[derive(Serialize)]
-pub struct EmailConfigStatus {
-    configured: bool,
-    connected: bool,
-    tenant_id: String,
-    client_id: String,
-    connected_email: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct SaveConfigBody {
-    tenant_id: String,
-    client_id: String,
-    /// Omit or send empty string to keep the existing secret.
-    client_secret: Option<String>,
-}
 
 #[derive(Deserialize)]
 pub struct OAuthCallbackQuery {
@@ -55,107 +38,45 @@ fn redirect_uri_from_host(host: &str) -> String {
     } else {
         "https"
     };
+    // Stable across every account/Azure app — each app registers this exact URI.
     format!("{scheme}://{host}/api/integrations/email/callback")
 }
 
-// GET /api/integrations/email/config — app credentials are shared; the
-// connection (tokens/mailbox) is the calling user's own.
-pub async fn get_config(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<Json<EmailConfigStatus>> {
-    let app: Option<MicrosoftAppConfig> = db::settings::get(&state.db, &microsoft::app_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
-    let tokens: Option<MicrosoftUserTokens> =
-        db::settings::get(&state.db, &microsoft::user_key(&user.id))
-            .await
-            .map_err(AppError::Internal)?;
+// ── Microsoft 365: per-instance OAuth connect / callback / disconnect ───────────
 
-    let app = app.unwrap_or_default();
-    let configured =
-        !app.tenant_id.is_empty() && !app.client_id.is_empty() && !app.client_secret.is_empty();
-    let tokens = tokens.unwrap_or_default();
-    // Each user owns their own Azure app registration, so return their own
-    // identifiers (the secret is never sent back to the client).
-    Ok(Json(EmailConfigStatus {
-        configured,
-        connected: tokens.access_token.is_some(),
-        tenant_id: app.tenant_id,
-        client_id: app.client_id,
-        connected_email: tokens.connected_email,
-    }))
-}
-
-// POST /api/integrations/email/config — the caller's own Azure app credentials.
-pub async fn save_config(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Json(body): Json<SaveConfigBody>,
-) -> AppResult<StatusCode> {
-    let key = microsoft::app_key(&user.id);
-    let existing: Option<MicrosoftAppConfig> = db::settings::get(&state.db, &key)
-        .await
-        .map_err(AppError::Internal)?;
-
-    let existing_secret = existing.as_ref().map(|c| c.client_secret.as_str()).unwrap_or("");
-    let new_secret_raw = body.client_secret.as_deref().unwrap_or("").trim().to_string();
-    let client_secret = if new_secret_raw.is_empty() {
-        existing_secret.to_string()
-    } else {
-        new_secret_raw
-    };
-
-    let config = MicrosoftAppConfig {
-        tenant_id: body.tenant_id,
-        client_id: body.client_id,
-        client_secret,
-    };
-    db::settings::set(&state.db, &key, &config)
-        .await
-        .map_err(AppError::Internal)?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// DELETE /api/integrations/email/config — disconnect the caller's mailbox.
-pub async fn disconnect(
-    State(state): State<Arc<AppState>>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-) -> AppResult<StatusCode> {
-    db::settings::delete(&state.db, &microsoft::user_key(&user.id))
-        .await
-        .map_err(AppError::Internal)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-// GET /api/integrations/email/connect  — redirects browser to Microsoft login
+// GET /api/integrations/:id/connect — start Microsoft OAuth for one M365 instance.
+// The registered redirect URI is constant; the CSRF state carries the user +
+// which instance is being connected so the callback can route the tokens back.
 pub async fn connect(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     headers: HeaderMap,
+    Path(id): Path<String>,
 ) -> AppResult<Redirect> {
-    let config = microsoft::app_config(&state, &user.id).await.map_err(AppError::Internal)?;
+    let (_integ, cfg) = microsoft::load(&state, &user.id, Some(&id))
+        .await
+        .map_err(AppError::Internal)?;
+    if cfg.client_id.is_empty() || cfg.tenant_id.is_empty() {
+        return Err(AppError::BadRequest("Save tenant and client id first.".into()));
+    }
 
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:3000");
-
+    let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("localhost:3000");
     let redirect_uri = redirect_uri_from_host(host);
-    // CSRF state doubles as the user binding for the callback.
     let csrf_state = uuid::Uuid::new_v4().to_string();
-    state.oauth_state.lock().await.insert(csrf_state.clone(), user.id.clone());
+    state
+        .oauth_state
+        .lock()
+        .await
+        .insert(csrf_state.clone(), format!("{}\t{}", user.id, id));
 
     let mut auth_url = url::Url::parse(&format!(
         "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
-        config.tenant_id
+        cfg.tenant_id
     ))
     .map_err(|e| AppError::Internal(anyhow::anyhow!("invalid tenant ID in URL: {e}")))?;
-
     auth_url
         .query_pairs_mut()
-        .append_pair("client_id", &config.client_id)
+        .append_pair("client_id", &cfg.client_id)
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &redirect_uri)
         .append_pair("scope", GRAPH_SCOPES)
@@ -165,7 +86,7 @@ pub async fn connect(
     Ok(Redirect::temporary(auth_url.as_str()))
 }
 
-// GET /api/integrations/email/callback  — Microsoft redirects here after login
+// GET /api/integrations/email/callback — Microsoft redirects here after login.
 pub async fn callback(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -188,12 +109,9 @@ async fn callback_inner(
     if let Some(err) = params.error {
         anyhow::bail!("Microsoft returned error: {err}");
     }
+    let code = params.code.ok_or_else(|| anyhow::anyhow!("no authorization code in callback"))?;
 
-    let code = params
-        .code
-        .ok_or_else(|| anyhow::anyhow!("no authorization code in callback"))?;
-
-    let user_id = {
+    let binding = {
         let mut states = state.oauth_state.lock().await;
         params
             .state
@@ -201,47 +119,33 @@ async fn callback_inner(
             .and_then(|s| states.remove(s))
             .ok_or_else(|| anyhow::anyhow!("CSRF state mismatch — possible replay attack"))?
     };
+    let (user_id, integration_id) = binding
+        .split_once('\t')
+        .ok_or_else(|| anyhow::anyhow!("malformed oauth state"))?;
 
-    let config = microsoft::app_config(&state, &user_id).await?;
+    let (integ, mut cfg) = microsoft::load(&state, user_id, Some(integration_id)).await?;
 
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:3000");
+    let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("localhost:3000");
     let redirect_uri = redirect_uri_from_host(host);
-
-    let token_url = format!(
-        "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-        config.tenant_id
-    );
-
+    let token_url =
+        format!("https://login.microsoftonline.com/{}/oauth2/v2.0/token", cfg.tenant_id);
     let form = [
-        ("client_id", config.client_id.as_str()),
-        ("client_secret", config.client_secret.as_str()),
+        ("client_id", cfg.client_id.as_str()),
+        ("client_secret", cfg.client_secret.as_str()),
         ("code", code.as_str()),
         ("redirect_uri", redirect_uri.as_str()),
         ("grant_type", "authorization_code"),
     ];
-
-    let token_res: serde_json::Value = state
-        .http_client
-        .post(&token_url)
-        .form(&form)
-        .send()
-        .await?
-        .json()
-        .await?;
-
+    let token_res: serde_json::Value =
+        state.http_client.post(&token_url).form(&form).send().await?.json().await?;
     if let Some(err) = token_res["error"].as_str() {
         let desc = token_res["error_description"].as_str().unwrap_or("");
         anyhow::bail!("token endpoint error: {err} — {desc}");
     }
-
     let access_token = token_res["access_token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no access_token in response: {token_res}"))?
         .to_string();
-
     let refresh_token = token_res["refresh_token"].as_str().map(|s| s.to_string());
     let expires_in = token_res["expires_in"].as_i64().unwrap_or(3600);
     let token_expires_at = chrono::Utc::now().timestamp() + expires_in;
@@ -254,29 +158,47 @@ async fn callback_inner(
         .await?
         .json()
         .await?;
+    let connected_email =
+        me["mail"].as_str().or_else(|| me["userPrincipalName"].as_str()).map(|s| s.to_string());
 
-    let connected_email = me["mail"]
-        .as_str()
-        .or_else(|| me["userPrincipalName"].as_str())
-        .map(|s| s.to_string());
-
-    let updated = MicrosoftUserTokens {
-        access_token: Some(access_token),
-        refresh_token,
-        token_expires_at: Some(token_expires_at),
-        connected_email,
-    };
-
-    db::settings::set(&state.db, &microsoft::user_key(&user_id), &updated).await?;
+    // Volatile tokens kept apart from the editable config; connected mailbox
+    // recorded on the instance for the table's status + account label.
+    microsoft::save_tokens(
+        &state,
+        &integ.id,
+        &MicrosoftTokens {
+            access_token: Some(access_token),
+            refresh_token,
+            token_expires_at: Some(token_expires_at),
+        },
+    )
+    .await?;
+    cfg.connected_email = connected_email;
+    microsoft::save_config(&state, &integ, &cfg).await?;
 
     Ok(Redirect::temporary("/?integration=email&status=connected"))
 }
 
-// ── Shared mailboxes ────────────────────────────────────────────────────────────
-// Microsoft Graph can't enumerate the shared mailboxes a user has delegated
-// access to, so users add them by address. We verify access by listing the
-// target mailbox's folders with the user's own token (succeeds only when they
-// actually hold delegated rights), then remember it per user.
+// DELETE /api/integrations/:id/connection — disconnect (clear tokens), keep creds.
+pub async fn disconnect(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    let (integ, mut cfg) =
+        microsoft::load(&state, &user.id, Some(&id)).await.map_err(AppError::Internal)?;
+    db::settings::delete(&state.db, &microsoft::tokens_key(&id))
+        .await
+        .map_err(AppError::Internal)?;
+    cfg.connected_email = None;
+    microsoft::save_config(&state, &integ, &cfg).await.map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Shared mailboxes (per Microsoft 365 instance) ──────────────────────────────
+// Graph can't enumerate delegated shared mailboxes, so users add them by address.
+// We verify access by opening the target's inbox with this instance's token, then
+// remember it on the instance config.
 
 #[derive(Deserialize)]
 pub struct AddSharedBody {
@@ -285,44 +207,41 @@ pub struct AddSharedBody {
     name: Option<String>,
 }
 
-async fn shared_list(state: &AppState, user_id: &str) -> AppResult<Vec<microsoft::SharedMailbox>> {
-    Ok(db::settings::get(&state.db, &microsoft::shared_key(user_id))
-        .await
-        .map_err(AppError::Internal)?
-        .unwrap_or_default())
-}
-
-// GET /api/integrations/email/shared — the caller's saved shared mailboxes.
+// GET /api/integrations/:id/shared
 pub async fn list_shared(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let mailboxes = shared_list(&state, &user.id).await?;
-    Ok(Json(serde_json::json!({ "mailboxes": mailboxes })))
+    let (_integ, cfg) =
+        microsoft::load(&state, &user.id, Some(&id)).await.map_err(AppError::Internal)?;
+    Ok(Json(serde_json::json!({ "mailboxes": cfg.shared_mailboxes })))
 }
 
-// POST /api/integrations/email/shared — verify access, then add.
+// POST /api/integrations/:id/shared — verify access, then add.
 pub async fn add_shared(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<String>,
     Json(body): Json<AddSharedBody>,
 ) -> AppResult<Json<serde_json::Value>> {
     let address = body.address.trim().to_lowercase();
-    if address.is_empty() || !address.contains('@') || address.contains('/')
+    if address.is_empty()
+        || !address.contains('@')
+        || address.contains('/')
         || address.contains(char::is_whitespace)
     {
         return Err(AppError::BadRequest("Enter a valid mailbox email address.".into()));
     }
+    let (integ, mut cfg) =
+        microsoft::load(&state, &user.id, Some(&id)).await.map_err(AppError::Internal)?;
 
-    // Verify the caller can actually open the mailbox before saving it.
-    let token = microsoft::get_valid_token(&state, &user.id)
+    let token = microsoft::get_valid_token(&state, &user.id, Some(&id))
         .await
-        .map_err(|_| AppError::BadRequest("Connect your own mailbox first.".into()))?;
+        .map_err(|_| AppError::BadRequest("Connect this account first.".into()))?;
     let probe = state
         .http_client
-        .get(format!(
-            "https://graph.microsoft.com/v1.0/users/{address}/mailFolders/inbox"
-        ))
+        .get(format!("https://graph.microsoft.com/v1.0/users/{address}/mailFolders/inbox"))
         .query(&[("$select", "id")])
         .bearer_auth(&token)
         .send()
@@ -335,54 +254,60 @@ pub async fn add_shared(
         ));
     }
 
-    let mut mailboxes = shared_list(&state, &user.id).await?;
-    if !mailboxes.iter().any(|m| m.address.eq_ignore_ascii_case(&address)) {
-        mailboxes.push(microsoft::SharedMailbox {
+    if !cfg.shared_mailboxes.iter().any(|m| m.address.eq_ignore_ascii_case(&address)) {
+        cfg.shared_mailboxes.push(microsoft::SharedMailbox {
             address: address.clone(),
             name: body.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()),
         });
-        db::settings::set(&state.db, &microsoft::shared_key(&user.id), &mailboxes)
-            .await
-            .map_err(AppError::Internal)?;
+        microsoft::save_config(&state, &integ, &cfg).await.map_err(AppError::Internal)?;
     }
-    Ok(Json(serde_json::json!({ "mailboxes": mailboxes })))
+    Ok(Json(serde_json::json!({ "mailboxes": cfg.shared_mailboxes })))
 }
 
-// DELETE /api/integrations/email/shared/:address — forget a shared mailbox.
+// DELETE /api/integrations/:id/shared/:address
 pub async fn remove_shared(
     State(state): State<Arc<AppState>>,
     Extension(CurrentUser(user)): Extension<CurrentUser>,
-    axum::extract::Path(address): axum::extract::Path<String>,
+    Path((id, address)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
-    let mut mailboxes = shared_list(&state, &user.id).await?;
-    mailboxes.retain(|m| !m.address.eq_ignore_ascii_case(address.trim()));
-    db::settings::set(&state.db, &microsoft::shared_key(&user.id), &mailboxes)
-        .await
-        .map_err(AppError::Internal)?;
+    let (integ, mut cfg) =
+        microsoft::load(&state, &user.id, Some(&id)).await.map_err(AppError::Internal)?;
+    cfg.shared_mailboxes.retain(|m| !m.address.eq_ignore_ascii_case(address.trim()));
+    microsoft::save_config(&state, &integ, &cfg).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── Integrations registry (helpdesk / phoneus / github) ──────────────────────
+// ── Integrations registry (helpdesk / phoneus / github / microsoft) ────────────
 
 use crate::db::integrations as int_db;
 use crate::integrations::{github, helpdesk, phoneus};
 
-/// Masked view of an instance — never returns the token.
+/// Masked view of an instance — never returns secrets/tokens.
 #[derive(Serialize)]
 pub struct IntegrationView {
     id: String,
     kind: String,
     name: String,
     is_default: bool,
-    /// Account label: helpdesk/phoneus email, or GitHub login.
+    /// Account label: helpdesk/phoneus email, GitHub login, or M365 mailbox.
     account: String,
     base_url: String,
     default_owner: String,
+    /// Microsoft 365 app identifiers (non-secret), so the edit form can prefill.
+    tenant_id: String,
+    client_id: String,
+    /// Microsoft 365 only: whether the mailbox is currently connected (OAuth).
+    connected: bool,
 }
 
 fn view(i: &int_db::Integration) -> IntegrationView {
     let cfg: serde_json::Value = serde_json::from_str(&i.config).unwrap_or(serde_json::Value::Null);
-    let account = cfg["email"].as_str().or_else(|| cfg["login"].as_str()).unwrap_or("").to_string();
+    let account = cfg["email"]
+        .as_str()
+        .or_else(|| cfg["login"].as_str())
+        .or_else(|| cfg["connected_email"].as_str())
+        .unwrap_or("")
+        .to_string();
     IntegrationView {
         id: i.id.clone(),
         kind: i.kind.clone(),
@@ -391,6 +316,9 @@ fn view(i: &int_db::Integration) -> IntegrationView {
         account,
         base_url: cfg["base_url"].as_str().unwrap_or("").to_string(),
         default_owner: cfg["default_owner"].as_str().unwrap_or("").to_string(),
+        tenant_id: cfg["tenant_id"].as_str().unwrap_or("").to_string(),
+        client_id: cfg["client_id"].as_str().unwrap_or("").to_string(),
+        connected: false,
     }
 }
 
@@ -401,7 +329,19 @@ pub async fn integrations_list(
 ) -> AppResult<Json<serde_json::Value>> {
     let _ = int_db::import_legacy(&state.db, &user.id).await;
     let rows = int_db::list(&state.db, &user.id).await.map_err(AppError::Internal)?;
-    Ok(Json(serde_json::json!({ "integrations": rows.iter().map(view).collect::<Vec<_>>() })))
+    let mut views: Vec<IntegrationView> = rows.iter().map(view).collect();
+    // Microsoft rows report live connection status from the tokens store.
+    for v in views.iter_mut() {
+        if v.kind == "microsoft" {
+            v.connected = db::settings::get::<MicrosoftTokens>(&state.db, &microsoft::tokens_key(&v.id))
+                .await
+                .ok()
+                .flatten()
+                .and_then(|t| t.access_token)
+                .is_some();
+        }
+    }
+    Ok(Json(serde_json::json!({ "integrations": views })))
 }
 
 #[derive(Deserialize)]
@@ -421,10 +361,17 @@ pub struct IntegrationBody {
     token: Option<String>,
     #[serde(default)]
     default_owner: Option<String>,
+    // Microsoft 365 (Azure app registration).
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 
 /// Run the per-kind credential exchange and return the config JSON to store.
-/// On edit (`existing` set) an absent password/token keeps the current token.
+/// On edit (`existing` set) an absent password/token/secret keeps the current one.
 async fn build_config(
     state: &AppState,
     kind: &str,
@@ -472,6 +419,24 @@ async fn build_config(
             }
             let login = github::verify(state, &token).await.map_err(AppError::Internal)?;
             Ok(serde_json::json!({ "token": token, "login": login, "default_owner": default_owner }))
+        }
+        "microsoft" => {
+            // Start from existing config on edit so connection (tokens are
+            // separate), shared mailboxes and AI-sort config survive a creds edit.
+            let mut cfg: MicrosoftConfig =
+                existing.and_then(|e| e.parse_config::<MicrosoftConfig>().ok()).unwrap_or_default();
+            cfg.tenant_id = body.tenant_id.clone().unwrap_or_default().trim().to_string();
+            cfg.client_id = body.client_id.clone().unwrap_or_default().trim().to_string();
+            let secret = body.client_secret.clone().unwrap_or_default().trim().to_string();
+            if !secret.is_empty() {
+                cfg.client_secret = secret;
+            } else if existing.is_none() {
+                return Err(AppError::BadRequest("client secret is required".into()));
+            }
+            if cfg.tenant_id.is_empty() || cfg.client_id.is_empty() {
+                return Err(AppError::BadRequest("tenant id and client id are required".into()));
+            }
+            serde_json::to_value(&cfg).map_err(|e| AppError::Internal(e.into()))
         }
         other => Err(AppError::BadRequest(format!("unknown integration kind '{other}'"))),
     }
@@ -540,6 +505,8 @@ pub async fn integrations_delete(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
+    // Clean up any Microsoft tokens for this instance (best-effort).
+    let _ = db::settings::delete(&state.db, &microsoft::tokens_key(&id)).await;
     int_db::delete(&state.db, &user.id, &id).await.map_err(AppError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }

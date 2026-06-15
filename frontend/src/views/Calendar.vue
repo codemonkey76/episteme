@@ -102,7 +102,9 @@ async function load() {
 let pollTimer: number | undefined
 onMounted(async () => {
   try {
-    connected.value = (await api.integrations.email.getConfig()).connected
+    // Calendar uses the default Microsoft 365 account; show it if any is connected.
+    const { integrations } = await api.integrations.list()
+    connected.value = integrations.some(i => i.kind === 'microsoft' && i.connected)
   } finally {
     checking.value = false
   }

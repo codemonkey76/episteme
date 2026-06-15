@@ -29,6 +29,8 @@ mod scheduler;
 mod transcribe;
 mod tasks;
 mod notes;
+mod writer;
+mod notifications;
 mod suggestions;
 mod users;
 mod sessions;
@@ -95,19 +97,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/reports/:id", delete(reports::delete))
         .route("/api/approvals/:action_id/approve", post(approvals::approve))
         .route("/api/approvals/:action_id/reject", post(approvals::reject))
-        .route("/api/integrations/email/config", get(integrations::get_config))
-        .route("/api/integrations/email/config", post(integrations::save_config))
-        .route("/api/integrations/email/config", delete(integrations::disconnect))
-        .route("/api/integrations/email/connect", get(integrations::connect))
+        // Microsoft OAuth callback — stable URI registered in every Azure app.
         .route("/api/integrations/email/callback", get(integrations::callback))
-        .route("/api/integrations/email/shared", get(integrations::list_shared))
-        .route("/api/integrations/email/shared", post(integrations::add_shared))
-        .route("/api/integrations/email/shared/:address", delete(integrations::remove_shared))
         .route("/api/integrations", get(integrations::integrations_list))
         .route("/api/integrations", post(integrations::integrations_create))
         .route("/api/integrations/:id", put(integrations::integrations_update))
         .route("/api/integrations/:id", delete(integrations::integrations_delete))
         .route("/api/integrations/:id/default", post(integrations::integrations_set_default))
+        // Microsoft 365 per-instance connection + shared mailboxes.
+        .route("/api/integrations/:id/connect", get(integrations::connect))
+        .route("/api/integrations/:id/connection", delete(integrations::disconnect))
+        .route("/api/integrations/:id/shared", get(integrations::list_shared))
+        .route("/api/integrations/:id/shared", post(integrations::add_shared))
+        .route("/api/integrations/:id/shared/:address", delete(integrations::remove_shared))
         .route("/api/email/folders", get(email::list_folders))
         .route("/api/email/folders/:id/messages", get(email::list_messages))
         .route("/api/email/folders/:id/read-all", post(email::mark_all_read))
@@ -128,6 +130,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/signatures", get(email::get_signatures))
         .route("/api/email/signatures", put(email::put_signatures))
         .route("/api/email/ai-draft", post(email::ai_draft))
+        .route("/api/email/improve", post(email::improve))
         .route("/api/email/messages/:id/summarize", post(email::summarize))
         .route("/api/email/messages/:id/ticket/preview", post(email::ticket_preview))
         .route("/api/email/tickets", post(email::ticket_create))
@@ -160,6 +163,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/notes", post(notes::create))
         .route("/api/notes/:id", put(notes::update))
         .route("/api/notes/:id", delete(notes::delete))
+        .route("/api/writer/docs", get(writer::list))
+        .route("/api/writer/docs", post(writer::create))
+        .route("/api/writer/docs/:id", put(writer::update))
+        .route("/api/writer/docs/:id", delete(writer::delete))
+        .route("/api/writer/improve", post(writer::improve))
+        .route("/api/notifications", get(notifications::list))
+        .route("/api/notifications", delete(notifications::clear_all))
+        .route("/api/notifications/read-all", post(notifications::mark_all_read))
+        .route("/api/notifications/:id/read", post(notifications::mark_read))
+        .route("/api/notifications/:id", delete(notifications::delete))
         .route("/api/suggestions", get(suggestions::list_pending))
         .route("/api/suggestions/:id/accept", post(suggestions::accept))
         .route("/api/suggestions/:id/dismiss", post(suggestions::dismiss))

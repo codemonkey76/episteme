@@ -175,7 +175,7 @@ export async function streamChat(
 // Ask AI about an email — seeds a chat session server-side, then streams advice.
 export async function streamAdvise(
   messageId: string,
-  opts: { sessionId: string; provider: string; instruction?: string; mailbox?: string },
+  opts: { sessionId: string; provider: string; instruction?: string; account?: string; mailbox?: string },
   onToken: (text: string) => void,
   onDone: () => void,
   onTool: (name: string) => void,
@@ -184,7 +184,7 @@ export async function streamAdvise(
   const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/advise`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: opts.sessionId, provider: opts.provider, instruction: opts.instruction, mailbox: opts.mailbox }),
+    body: JSON.stringify({ session_id: opts.sessionId, provider: opts.provider, instruction: opts.instruction, account: opts.account, mailbox: opts.mailbox }),
     signal,
   })
   if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
@@ -366,6 +366,8 @@ export interface SendEmailPayload {
   /// Plain text of the message being replied to — context so commitment
   /// detection can resolve terse replies ("I'll get this done tonight").
   reply_context?: string
+  /// Which connected Microsoft 365 account to send from (omit = default).
+  account?: string
   /// Shared mailbox address to send as (omit for the user's own mailbox).
   mailbox?: string
 }
@@ -380,63 +382,73 @@ export interface Attachment {
   contentId?: string
 }
 
-// `mailbox` is the address of a shared mailbox to act on; omit for the user's
-// own mailbox. Appended as `?mailbox=` (or `&mailbox=`) on each request.
-function mbq(mailbox?: string, sep: '?' | '&' = '&'): string {
-  return mailbox ? `${sep}mailbox=${encodeURIComponent(mailbox)}` : ''
+// Selects which mailbox to act on: `account` is the connected Microsoft 365
+// instance id (omit = default), `mailbox` is a shared mailbox address under it
+// (omit = that account's own mailbox). Appended as query params on each request.
+export interface MailboxSel {
+  account?: string
+  mailbox?: string
+}
+function mbq(sel?: MailboxSel, sep: '?' | '&' = '&'): string {
+  const p = new URLSearchParams()
+  if (sel?.account) p.set('account', sel.account)
+  if (sel?.mailbox) p.set('mailbox', sel.mailbox)
+  const s = p.toString()
+  return s ? `${sep}${s}` : ''
 }
 
 export const email = {
-  listFolders: (mailbox?: string) =>
-    json<{ value: MailFolder[] }>(`/email/folders${mbq(mailbox, '?')}`),
-  listAttachments: (messageId: string, mailbox?: string) =>
-    json<{ value: Attachment[] }>(`/email/messages/${encodeURIComponent(messageId)}/attachments${mbq(mailbox, '?')}`),
+  listFolders: (sel?: MailboxSel) =>
+    json<{ value: MailFolder[] }>(`/email/folders${mbq(sel, '?')}`),
+  listAttachments: (messageId: string, sel?: MailboxSel) =>
+    json<{ value: Attachment[] }>(`/email/messages/${encodeURIComponent(messageId)}/attachments${mbq(sel, '?')}`),
   // Direct URL for an attachment's bytes — usable as an <img>/<iframe> src or a download link.
-  attachmentUrl: (messageId: string, attId: string, mailbox?: string) =>
-    `${BASE}/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/raw${mbq(mailbox, '?')}`,
-  listMessages: (folderId: string, skip = 0, top = 30, mailbox?: string) =>
-    json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}${mbq(mailbox)}`),
-  getMessage: (messageId: string, mailbox?: string) =>
-    json<MessageDetail>(`/email/messages/${messageId}${mbq(mailbox, '?')}`),
-  markAllRead: (folderId: string, mailbox?: string) =>
-    json<{ marked: number }>(`/email/folders/${encodeURIComponent(folderId)}/read-all${mbq(mailbox, '?')}`, {
+  attachmentUrl: (messageId: string, attId: string, sel?: MailboxSel) =>
+    `${BASE}/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attId)}/raw${mbq(sel, '?')}`,
+  listMessages: (folderId: string, skip = 0, top = 30, sel?: MailboxSel) =>
+    json<{ value: MessageSummary[] }>(`/email/folders/${folderId}/messages?skip=${skip}&top=${top}${mbq(sel)}`),
+  getMessage: (messageId: string, sel?: MailboxSel) =>
+    json<MessageDetail>(`/email/messages/${messageId}${mbq(sel, '?')}`),
+  markAllRead: (folderId: string, sel?: MailboxSel) =>
+    json<{ marked: number }>(`/email/folders/${encodeURIComponent(folderId)}/read-all${mbq(sel, '?')}`, {
       method: 'POST',
     }),
-  markRead: (messageId: string, mailbox?: string) =>
-    fetch(BASE + `/email/messages/${messageId}/read${mbq(mailbox, '?')}`, { method: 'PATCH' }),
+  markRead: (messageId: string, sel?: MailboxSel) =>
+    fetch(BASE + `/email/messages/${messageId}/read${mbq(sel, '?')}`, { method: 'PATCH' }),
   // "No response needed" — complete the flag and file to Processed.
-  markDone: (messageId: string, mailbox?: string) =>
-    fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done${mbq(mailbox, '?')}`, { method: 'POST' }),
+  markDone: (messageId: string, sel?: MailboxSel) =>
+    fetch(BASE + `/email/messages/${encodeURIComponent(messageId)}/done${mbq(sel, '?')}`, { method: 'POST' }),
   // Soft delete — move messages to Deleted Items.
-  deleteMessages: (ids: string[], mailbox?: string) =>
+  deleteMessages: (ids: string[], sel?: MailboxSel) =>
     json<{ deleted: number }>('/email/messages/delete', {
       method: 'POST',
-      body: JSON.stringify({ ids, mailbox }),
+      body: JSON.stringify({ ids, ...sel }),
     }),
   // Move messages into a folder (by id, or a well-known name) — drag-and-drop.
-  moveMessages: (ids: string[], destination: string, mailbox?: string) =>
+  moveMessages: (ids: string[], destination: string, sel?: MailboxSel) =>
     json<{ moved: number }>('/email/messages/move', {
       method: 'POST',
-      body: JSON.stringify({ ids, destination, mailbox }),
+      body: JSON.stringify({ ids, destination, ...sel }),
     }),
   // Step 1: match the sender to a helpdesk contact + AI-extract the ticket
   // fields, for the user to review/edit before creating.
-  ticketPreview: (messageId: string, payload: { provider: string; mailbox?: string }) =>
+  ticketPreview: (messageId: string, payload: { provider: string } & MailboxSel) =>
     json<TicketDraft>(
       `/email/messages/${encodeURIComponent(messageId)}/ticket/preview`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
-  // Step 2: create the (possibly edited) ticket. message_id/mailbox let the
-  // backend forward the email's image attachments onto the ticket.
-  createTicket: (draft: TicketDraft, ctx?: { message_id: string; mailbox?: string }) =>
+  // Step 2: create the (possibly edited) ticket. message_id/account/mailbox let
+  // the backend forward the email's image attachments onto the ticket.
+  createTicket: (draft: TicketDraft, ctx?: { message_id: string } & MailboxSel) =>
     json<{ reference: string; id: number; subject: string; priority: string; client: string; attached: number }>(
       '/email/tickets',
       { method: 'POST', body: JSON.stringify({ ...draft, ...ctx }) },
     ),
-  search: (q: string, nextLink?: string | null, mailbox?: string) => {
+  search: (q: string, nextLink?: string | null, sel?: MailboxSel) => {
     const params = new URLSearchParams({ q })
     if (nextLink) params.set('next_link', nextLink)
-    if (mailbox) params.set('mailbox', mailbox)
+    if (sel?.account) params.set('account', sel.account)
+    if (sel?.mailbox) params.set('mailbox', sel.mailbox)
     return json<SearchResult>(`/email/search?${params}`)
   },
   send: (payload: SendEmailPayload) =>
@@ -496,17 +508,59 @@ export async function streamAiDraft(
   }
 }
 
+// AI improve — POST returns an SSE stream of an improved version of the user's
+// own draft. Same token protocol as the AI draft stream.
+export async function streamImprove(
+  payload: { provider: string; draft: string; from?: string; subject?: string; body?: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/email/improve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw || raw === '[DONE]') continue
+
+      let data: { type: string; text?: string; message?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'error') throw new Error(data.message || 'improve failed')
+    }
+  }
+}
+
 // AI summary — POST returns an SSE stream of summary tokens (inline, no chat session).
 export async function streamSummary(
   messageId: string,
-  opts: { provider: string; mailbox?: string },
+  opts: { provider: string; account?: string; mailbox?: string },
   onToken: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/summarize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider: opts.provider, mailbox: opts.mailbox }),
+    body: JSON.stringify({ provider: opts.provider, account: opts.account, mailbox: opts.mailbox }),
     signal,
   })
 
@@ -832,6 +886,98 @@ export const notes = {
   remove: (id: string) => fetch(BASE + `/notes/${id}`, { method: 'DELETE' }),
 }
 
+// Writer — long-form markdown documents with an AI "Improve" feature.
+export interface WriterDoc {
+  id: string
+  title: string
+  content: string
+  created_at: string
+  updated_at: string
+}
+
+export const writer = {
+  list: (params?: { q?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.q) p.set('q', params.q)
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    return json<{ docs: WriterDoc[] }>(`/writer/docs?${p}`)
+  },
+  create: (title: string, content: string) =>
+    json<{ doc: WriterDoc }>('/writer/docs', {
+      method: 'POST',
+      body: JSON.stringify({ title, content }),
+    }),
+  update: (id: string, patch: Partial<{ title: string; content: string }>) =>
+    json<{ doc: WriterDoc }>(`/writer/docs/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) => fetch(BASE + `/writer/docs/${id}`, { method: 'DELETE' }),
+}
+
+// Notifications — durable record of every push notification.
+export interface Notification {
+  id: string
+  category: string // agent | approval | error | suggestion | email | info
+  title: string
+  body: string
+  link_kind: string | null // e.g. 'session'
+  link_id: string | null
+  read_at: string | null
+  created_at: string
+}
+
+export const notifications = {
+  list: (limit = 100) =>
+    json<{ notifications: Notification[]; unread: number }>(`/notifications?limit=${limit}`),
+  markRead: (id: string) => fetch(BASE + `/notifications/${id}/read`, { method: 'POST' }),
+  markAllRead: () => fetch(BASE + '/notifications/read-all', { method: 'POST' }),
+  remove: (id: string) => fetch(BASE + `/notifications/${id}`, { method: 'DELETE' }),
+  clearAll: () => fetch(BASE + '/notifications', { method: 'DELETE' }),
+}
+
+// Writer improve — POST returns an SSE stream of the improved text (whole doc or
+// a selected passage). Same token protocol as the email draft/improve streams.
+export async function streamWriterImprove(
+  payload: { provider: string; text: string; context?: string },
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/writer/improve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (!raw || raw === '[DONE]') continue
+
+      let data: { type: string; text?: string; message?: string }
+      try { data = JSON.parse(raw) } catch { continue }
+
+      if (data.type === 'token' && data.text != null) onToken(data.text)
+      else if (data.type === 'error') throw new Error(data.message || 'improve failed')
+    }
+  }
+}
+
 // Suggestions (commitments detected in sent emails)
 export interface Suggestion {
   id: string
@@ -873,62 +1019,34 @@ export interface CategorizerRunSummary {
   message: string
 }
 
+// AI auto-sort config is scoped to one Microsoft 365 account (its own + shared
+// mailboxes), selected by `account` (the integration id; omit = default).
 export const emailCategorizer = {
-  getConfig: () => json<CategorizerConfig>('/email/categorizer'),
-  saveConfig: (cfg: CategorizerConfig) =>
-    json<CategorizerConfig>('/email/categorizer', {
+  getConfig: (account?: string) =>
+    json<CategorizerConfig>(`/email/categorizer${account ? `?account=${encodeURIComponent(account)}` : ''}`),
+  saveConfig: (cfg: CategorizerConfig, account?: string) =>
+    json<CategorizerConfig>(`/email/categorizer${account ? `?account=${encodeURIComponent(account)}` : ''}`, {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  runNow: (mailbox?: string) =>
-    json<CategorizerRunSummary>(`/email/categorizer/run${mailbox ? `?mailbox=${encodeURIComponent(mailbox)}` : ''}`, { method: 'POST' }),
+  runNow: (account?: string, mailbox?: string) => {
+    const p = new URLSearchParams()
+    if (account) p.set('account', account)
+    if (mailbox) p.set('mailbox', mailbox)
+    const qs = p.toString()
+    return json<CategorizerRunSummary>(`/email/categorizer/run${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  },
 }
 
 // Integrations
-export interface EmailConfigStatus {
-  configured: boolean
-  connected: boolean
-  tenant_id: string
-  client_id: string
-  connected_email: string | null
-}
-
-export interface SaveEmailConfig {
-  tenant_id: string
-  client_id: string
-  client_secret?: string
-}
-
 export interface SharedMailbox {
   address: string
   name: string | null
 }
 
 export const integrations = {
-  email: {
-    getConfig: () => json<EmailConfigStatus>('/integrations/email/config'),
-    saveConfig: (config: SaveEmailConfig) =>
-      fetch(BASE + '/integrations/email/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      }),
-    disconnect: () =>
-      fetch(BASE + '/integrations/email/config', { method: 'DELETE' }),
-    listShared: () =>
-      json<{ mailboxes: SharedMailbox[] }>('/integrations/email/shared'),
-    // Verifies access server-side; rejects (throws) if the user can't open it.
-    addShared: (address: string, name?: string) =>
-      json<{ mailboxes: SharedMailbox[] }>('/integrations/email/shared', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, name }),
-      }),
-    removeShared: (address: string) =>
-      fetch(BASE + `/integrations/email/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
-  },
-  // Named instances of helpdesk/phoneus/github (multiple allowed per kind).
-  // Tokens stay server-side; create/update run the credential exchange.
+  // Named instances of every kind (helpdesk/phoneus/github/microsoft), multiple
+  // allowed per kind. Secrets/tokens stay server-side.
   list: () => json<{ integrations: IntegrationView[] }>('/integrations'),
   create: (body: IntegrationInput) =>
     json<IntegrationView>('/integrations', { method: 'POST', body: JSON.stringify(body) }),
@@ -936,19 +1054,40 @@ export const integrations = {
     json<IntegrationView>(`/integrations/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   remove: (id: string) => fetch(BASE + `/integrations/${id}`, { method: 'DELETE' }),
   setDefault: (id: string) => fetch(BASE + `/integrations/${id}/default`, { method: 'POST' }),
+
+  // Microsoft 365 per-instance connection (OAuth) + shared mailboxes.
+  connectUrl: (id: string) => `${BASE}/integrations/${encodeURIComponent(id)}/connect`,
+  disconnect: (id: string) =>
+    fetch(BASE + `/integrations/${encodeURIComponent(id)}/connection`, { method: 'DELETE' }),
+  listShared: (id: string) =>
+    json<{ mailboxes: SharedMailbox[] }>(`/integrations/${encodeURIComponent(id)}/shared`),
+  // Verifies access server-side; rejects (throws) if the user can't open it.
+  addShared: (id: string, address: string, name?: string) =>
+    json<{ mailboxes: SharedMailbox[] }>(`/integrations/${encodeURIComponent(id)}/shared`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, name }),
+    }),
+  removeShared: (id: string, address: string) =>
+    fetch(BASE + `/integrations/${encodeURIComponent(id)}/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
 }
 
-export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github'
+export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github' | 'microsoft'
 
 export interface IntegrationView {
   id: string
   kind: IntegrationKind
   name: string
   is_default: boolean
-  /** helpdesk/phoneus email, or GitHub login. */
+  /** helpdesk/phoneus email, GitHub login, or M365 connected mailbox. */
   account: string
   base_url: string
   default_owner: string
+  /** Microsoft 365 app identifiers (non-secret), for prefilling the edit form. */
+  tenant_id: string
+  client_id: string
+  /** Microsoft 365 only: whether the mailbox is currently connected (OAuth). */
+  connected: boolean
 }
 
 export interface IntegrationInput {
@@ -960,6 +1099,10 @@ export interface IntegrationInput {
   password?: string
   token?: string
   default_owner?: string
+  // Microsoft 365 (Azure app registration).
+  tenant_id?: string
+  client_id?: string
+  client_secret?: string
 }
 
 // Auth

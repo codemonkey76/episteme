@@ -56,7 +56,9 @@ pub async fn list_events(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<Vec<CalendarEvent>> {
-    let token = microsoft::get_valid_token(state, user_id).await?;
+    // Calendar uses the user's default Microsoft 365 account (no per-account
+    // switcher yet).
+    let token = microsoft::get_valid_token(state, user_id, None).await?;
     let url = format!("{GRAPH}/me/calendarView");
 
     let response = state
@@ -142,7 +144,7 @@ pub async fn create_event(state: &AppState, user_id: &str, ev: NewEvent) -> Resu
         payload["reminderMinutesBeforeStart"] = serde_json::json!(mins);
     }
 
-    let created = graph_post(state, user_id, &format!("{GRAPH}/me/events"), &payload)
+    let created = graph_post(state, user_id, None, &format!("{GRAPH}/me/events"), &payload)
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
 
@@ -158,7 +160,7 @@ pub async fn create_event(state: &AppState, user_id: &str, ev: NewEvent) -> Resu
 }
 
 pub async fn delete_event(state: &AppState, user_id: &str, id: &str) -> Result<()> {
-    graph_delete(state, user_id, &format!("{GRAPH}/me/events/{id}"))
+    graph_delete(state, user_id, None, &format!("{GRAPH}/me/events/{id}"))
         .await
         .map_err(|e| anyhow!(e.to_string()))
 }

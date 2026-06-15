@@ -150,6 +150,7 @@ async fn search(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
     let body = graph_get(
         state,
         user_id,
+        None,
         &format!("{GRAPH}/{seg}/messages"),
         &[
             ("$search", &format!("\"{query}\"")),
@@ -226,6 +227,7 @@ async fn resolve_folder(
     let folders = graph_get(
         state,
         user_id,
+        None,
         &format!("{GRAPH}/{seg}/mailFolders"),
         &[("$top", "100"), ("$select", "id,displayName")],
     )
@@ -251,6 +253,7 @@ async fn list(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
     let body = graph_get(
         state,
         user_id,
+        None,
         &format!("{GRAPH}/{seg}/mailFolders/{folder}/messages"),
         &[
             ("$select", SUMMARY_SELECT),
@@ -280,6 +283,7 @@ async fn read(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
     let msg = graph_get(
         state,
         user_id,
+        None,
         &format!("{GRAPH}/{seg}/messages/{message_id}"),
         &[(
             "$select",
@@ -308,6 +312,7 @@ async fn read(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
         let atts = graph_get(
             state,
             user_id,
+            None,
             &format!("{GRAPH}/{seg}/messages/{message_id}/attachments"),
             &[("$select", "name,contentType,size")],
         )
@@ -389,6 +394,7 @@ async fn draft(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
             let draft = graph_post(
                 state,
                 user_id,
+                None,
                 &format!("{GRAPH}/{seg}/messages/{message_id}/{verb}"),
                 &json!({}),
             )
@@ -407,7 +413,7 @@ async fn draft(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
             let draft_id = draft["id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("draft missing id"))?;
-            graph_patch(state, user_id, &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch)
+            graph_patch(state, user_id, None, &format!("{GRAPH}/{seg}/messages/{draft_id}"), &patch)
                 .await?
         }
         "new" => {
@@ -418,6 +424,7 @@ async fn draft(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
             graph_post(
                 state,
                 user_id,
+                None,
                 &format!("{GRAPH}/{seg}/messages"),
                 &json!({
                     "subject": subject,

@@ -15,6 +15,8 @@ pub mod logs;
 pub mod memories;
 pub mod tasks;
 pub mod notes;
+pub mod writer;
+pub mod notifications;
 pub mod suggestions;
 pub mod usage;
 pub mod invites;

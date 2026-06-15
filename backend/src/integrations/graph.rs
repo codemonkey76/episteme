@@ -35,10 +35,11 @@ pub fn mailbox_seg(mailbox: Option<&str>) -> Result<String> {
 pub async fn graph_get(
     state: &AppState,
     user_id: &str,
+    account: Option<&str>,
     url: &str,
     params: &[(&str, &str)],
 ) -> Result<Value> {
-    let token = microsoft::get_valid_token(state, user_id).await?;
+    let token = microsoft::get_valid_token(state, user_id, account).await?;
 
     let response = state
         .http_client
@@ -64,8 +65,14 @@ pub async fn graph_get(
 }
 
 /// POST a JSON body to Graph and return the parsed response.
-pub async fn graph_post(state: &AppState, user_id: &str, url: &str, body: &Value) -> Result<Value> {
-    let token = microsoft::get_valid_token(state, user_id).await?;
+pub async fn graph_post(
+    state: &AppState,
+    user_id: &str,
+    account: Option<&str>,
+    url: &str,
+    body: &Value,
+) -> Result<Value> {
+    let token = microsoft::get_valid_token(state, user_id, account).await?;
 
     let response = state
         .http_client
@@ -91,8 +98,14 @@ pub async fn graph_post(state: &AppState, user_id: &str, url: &str, body: &Value
 }
 
 /// PATCH a JSON body to Graph (draft updates).
-pub async fn graph_patch(state: &AppState, user_id: &str, url: &str, body: &Value) -> Result<Value> {
-    let token = microsoft::get_valid_token(state, user_id).await?;
+pub async fn graph_patch(
+    state: &AppState,
+    user_id: &str,
+    account: Option<&str>,
+    url: &str,
+    body: &Value,
+) -> Result<Value> {
+    let token = microsoft::get_valid_token(state, user_id, account).await?;
 
     let response = state
         .http_client
@@ -118,8 +131,8 @@ pub async fn graph_patch(state: &AppState, user_id: &str, url: &str, body: &Valu
 }
 
 /// DELETE a Graph resource. Treats any 2xx as success.
-pub async fn graph_delete(state: &AppState, user_id: &str, url: &str) -> Result<()> {
-    let token = microsoft::get_valid_token(state, user_id).await?;
+pub async fn graph_delete(state: &AppState, user_id: &str, account: Option<&str>, url: &str) -> Result<()> {
+    let token = microsoft::get_valid_token(state, user_id, account).await?;
 
     let response = state
         .http_client
