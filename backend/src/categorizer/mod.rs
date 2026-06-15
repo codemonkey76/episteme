@@ -277,7 +277,7 @@ pub async fn run_mailbox(
         },
     ];
 
-    let (raw, used) = ModelRouter::complete_with_usage(&provider, history).await?;
+    let (raw, used) = ModelRouter::complete_json_with_usage(&provider, history).await?;
     db::usage::record(&state.db, user_id, &provider, "auto-sort", used).await;
     let classifications = match parse_classifications(&raw) {
         Ok(c) => c,
@@ -410,15 +410,33 @@ struct Classification {
     folder: Option<String>,
 }
 
-/// Extract the JSON array from a model response, tolerating code fences or
-/// surrounding prose by slicing between the first `[` and last `]`.
+/// Extract the classification array from a model response, tolerating code
+/// fences or surrounding prose. Prefers a top-level JSON array (slicing between
+/// the first `[` and last `]`); falls back to the first array of objects inside
+/// a wrapper object (e.g. `{"classifications": [...]}`), which JSON-mode local
+/// models sometimes emit instead of a bare array.
 fn parse_classifications(raw: &str) -> Result<Vec<Classification>> {
-    let start = raw.find('[').ok_or_else(|| anyhow::anyhow!("no JSON array in model output"))?;
-    let end = raw.rfind(']').ok_or_else(|| anyhow::anyhow!("no JSON array in model output"))?;
-    if end < start {
-        anyhow::bail!("malformed JSON array in model output");
+    if let (Some(start), Some(end)) = (raw.find('['), raw.rfind(']')) {
+        if end > start {
+            if let Ok(v) = serde_json::from_str::<Vec<Classification>>(&raw[start..=end]) {
+                return Ok(v);
+            }
+        }
     }
-    Ok(serde_json::from_str(&raw[start..=end])?)
+    if let (Some(start), Some(end)) = (raw.find('{'), raw.rfind('}')) {
+        if end > start {
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&raw[start..=end]) {
+                for (_k, val) in map {
+                    if val.is_array() {
+                        if let Ok(v) = serde_json::from_value::<Vec<Classification>>(val) {
+                            return Ok(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    anyhow::bail!("no JSON array in model output")
 }
 
 // ── Logging ────────────────────────────────────────────────────────────────────
@@ -500,4 +518,39 @@ pub fn spawn_worker(state: Arc<AppState>) {
             tokio::time::sleep(Duration::from_secs(next_interval)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_bare_array_with_surrounding_prose() {
+        let raw = "Sure, here you go:\n[{\"id\":\"a\",\"category\":\"promotions\"}]\nLet me know!";
+        let v = parse_classifications(raw).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].category, "promotions");
+    }
+
+    #[test]
+    fn parse_array_in_code_fence() {
+        let raw = "```json\n[{\"id\":\"x\",\"category\":\"invoices\"}]\n```";
+        let v = parse_classifications(raw).unwrap();
+        assert_eq!(v[0].id, "x");
+    }
+
+    #[test]
+    fn parse_array_wrapped_in_object() {
+        // JSON-mode local models sometimes wrap the array in an object.
+        let raw = "{\"classifications\":[{\"id\":\"1\",\"category\":\"notifications\"},\
+                   {\"id\":\"2\",\"category\":\"none\"}]}";
+        let v = parse_classifications(raw).unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[1].category, "none");
+    }
+
+    #[test]
+    fn parse_pure_prose_errors() {
+        assert!(parse_classifications("I cannot classify these emails.").is_err());
+    }
 }

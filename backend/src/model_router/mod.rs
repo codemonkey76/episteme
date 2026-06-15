@@ -62,7 +62,7 @@ impl ModelRouter {
         tx: mpsc::Sender<StreamChunk>,
     ) -> Result<()> {
         if provider.provider == "ollama" {
-            return stream_ollama(provider, history, tools, think, tx).await;
+            return stream_ollama(provider, history, tools, think, false, tx).await;
         }
 
         // Non-Ollama providers use genai's NON-streaming exec_chat. genai 0.1.23's
@@ -104,6 +104,27 @@ impl ModelRouter {
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
     ) -> Result<(String, Option<TokenUsage>)> {
+        Self::complete_inner(provider, history, false).await
+    }
+
+    /// Like `complete_with_usage`, but asks the provider for strict JSON. For
+    /// Ollama this sets the native `format: "json"` constraint — decisive for
+    /// weak local models that otherwise wrap the answer in prose (a JSON-array
+    /// classifier prompt then comes back as narration, parsing to nothing).
+    /// Cloud providers already honor the prompt's JSON instruction, so they go
+    /// through the same path unchanged.
+    pub async fn complete_json_with_usage(
+        provider: &ProviderConfig,
+        history: Vec<ChatMessage>,
+    ) -> Result<(String, Option<TokenUsage>)> {
+        Self::complete_inner(provider, history, true).await
+    }
+
+    async fn complete_inner(
+        provider: &ProviderConfig,
+        history: Vec<ChatMessage>,
+        json: bool,
+    ) -> Result<(String, Option<TokenUsage>)> {
         // Non-Ollama providers go through genai's NON-streaming `exec_chat`.
         // Streaming there uses reqwest-eventsource, which clones the request for
         // retries and fails on Anthropic with `CannotCloneRequestError`; a
@@ -120,11 +141,11 @@ impl ModelRouter {
             return Ok((res.content_text_into_string().unwrap_or_default(), usage));
         }
 
-        // Ollama: collect from its custom streaming path.
+        // Ollama: collect from its custom streaming path (`json` sets format mode).
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let provider = provider.clone();
         let task = tokio::spawn(async move {
-            Self::stream(&provider, history, Vec::new(), false, tx).await
+            stream_ollama(&provider, history, Vec::new(), false, json, tx).await
         });
 
         let mut out = String::new();
@@ -146,6 +167,7 @@ async fn stream_ollama(
     history: Vec<ChatMessage>,
     tools: Vec<Value>,
     think: bool,
+    json: bool,
     tx: mpsc::Sender<StreamChunk>,
 ) -> Result<()> {
     let base_url = provider.base_url.as_deref().unwrap_or("http://localhost:11434");
@@ -225,6 +247,12 @@ async fn stream_ollama(
     // omitted otherwise to preserve default behavior for non-thinking models.
     if !think {
         body["think"] = serde_json::json!(false);
+    }
+    // Constrain decoding to valid JSON. Decisive for one-shot JSON callers (the
+    // email categorizer, etc.) on weaker local models, which otherwise lead with
+    // prose — leaving no JSON to parse no matter how firmly the prompt asks.
+    if json {
+        body["format"] = serde_json::json!("json");
     }
     // Advertise tools in Ollama's format ({type, function:{name,description,parameters}}).
     // Without this the model can't call tools and tends to hallucinate that it did.
