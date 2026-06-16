@@ -2,7 +2,8 @@ use anyhow::Result;
 use futures::StreamExt;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ContentPart, MessageContent, Tool,
+    ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ChatResponseFormat, ContentPart,
+    MessageContent, Tool,
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
@@ -132,7 +133,16 @@ impl ModelRouter {
         if provider.provider != "ollama" {
             let client = build_client(provider);
             let chat_req = ChatRequest::new(history_to_genai(history));
-            let options = ChatOptions::default().with_capture_usage(true);
+            let mut options = ChatOptions::default().with_capture_usage(true);
+            // OpenAI-family adapters (incl. local models served over an
+            // OpenAI-compatible endpoint) honor a json response_format. The
+            // prompt already contains "JSON" (required by JsonMode). Anthropic/
+            // Gemini/Cohere have no such mode and already comply, so leave them.
+            if json && matches!(provider.provider.as_str(),
+                "openai" | "openai_compatible" | "groq" | "xai" | "deepseek")
+            {
+                options = options.with_response_format(ChatResponseFormat::JsonMode);
+            }
             let res = client.exec_chat(&provider.model_id, chat_req, Some(&options)).await?;
             let usage = Some(TokenUsage {
                 prompt: res.usage.prompt_tokens.unwrap_or(0) as i64,
