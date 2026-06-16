@@ -282,8 +282,15 @@ pub async fn run_mailbox(
     let classifications = match parse_classifications(&raw) {
         Ok(c) => c,
         Err(e) => {
-            // Don't record ids; let the next cycle retry.
-            log_event(state, "error", format!("Classification parse failed: {e}"));
+            // Don't record ids; let the next cycle retry. Log a clip of the raw
+            // model output so an unparseable reply (prose, empty, truncated) is
+            // diagnosable instead of opaque.
+            let clip: String = raw.chars().take(500).collect();
+            log_event(
+                state,
+                "error",
+                format!("Classification parse failed: {e} — model returned {} chars: {clip}", raw.len()),
+            );
             summary.message = format!("Classification failed: {e}");
             return Ok(summary);
         }
