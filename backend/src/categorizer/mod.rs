@@ -250,16 +250,20 @@ pub async fn run_mailbox(
         return Ok(summary);
     }
 
-    // Build the classification request.
+    // Build the classification request. The model is shown a short 1-based index
+    // as the id, never the real Microsoft Graph message id (~150 opaque chars):
+    // echoing those back for a full batch bloats the reply until it overruns the
+    // model's output budget and the JSON array is truncated mid-stream (the very
+    // failure this replaces). We map the index back to the real id afterwards.
     let mut listing = String::new();
-    for m in &fresh {
-        let id = m["id"].as_str().unwrap_or("");
+    for (i, m) in fresh.iter().enumerate() {
+        let idx = i + 1;
         let from = m["from"]["emailAddress"]["address"].as_str().unwrap_or("");
         let name = m["from"]["emailAddress"]["name"].as_str().unwrap_or("");
         let subject = m["subject"].as_str().unwrap_or("(no subject)");
         let preview: String = m["bodyPreview"].as_str().unwrap_or("").chars().take(200).collect();
         listing.push_str(&format!(
-            "---\nid: {id}\nfrom: {name} <{from}>\nsubject: {subject}\npreview: {preview}\n"
+            "---\nid: {idx}\nfrom: {name} <{from}>\nsubject: {subject}\npreview: {preview}\n"
         ));
     }
 
@@ -296,17 +300,19 @@ pub async fn run_mailbox(
         }
     };
 
+    // Keyed by the short index we showed the model (1-based, as a string).
     let by_id: HashMap<&str, &Classification> =
         classifications.iter().map(|c| (c.id.as_str(), c)).collect();
 
     // Cache folder ids resolved within this run.
     let mut folder_ids: HashMap<String, String> = HashMap::new();
 
-    for m in &fresh {
+    for (i, m) in fresh.iter().enumerate() {
         let Some(id) = m["id"].as_str() else { continue };
+        let idx = (i + 1).to_string();
         let subject = m["subject"].as_str().unwrap_or("(no subject)");
         let category = by_id
-            .get(id)
+            .get(idx.as_str())
             .map(|c| c.category.trim().to_lowercase())
             .unwrap_or_else(|| "attention".to_string());
 
@@ -337,7 +343,7 @@ pub async fn run_mailbox(
                 // "folder" carries a custom destination named by the per-mailbox
                 // instructions; everything else maps through the fixed categories.
                 let folder_name = if other == "folder" {
-                    match by_id.get(id).and_then(|c| c.folder.as_deref()).map(str::trim) {
+                    match by_id.get(idx.as_str()).and_then(|c| c.folder.as_deref()).map(str::trim) {
                         Some(name) if !name.is_empty() && name.len() <= 100 => name.to_string(),
                         _ => {
                             summary.skipped += 1;
@@ -409,12 +415,27 @@ async fn resolve_provider(state: &AppState, name: &str) -> Result<ProviderConfig
 
 #[derive(Debug, Deserialize)]
 struct Classification {
+    /// The short index we showed the model. Accept a JSON number too — models
+    /// often emit `"id": 1` for a numeric-looking id rather than `"id": "1"`.
+    #[serde(deserialize_with = "de_string_or_number")]
     id: String,
     category: String,
     /// Custom destination folder, only honoured with category "folder" —
     /// directed by the per-mailbox instructions.
     #[serde(default)]
     folder: Option<String>,
+}
+
+/// Deserialize a field that may arrive as a JSON string or number into a String.
+fn de_string_or_number<'de, D>(d: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    })
 }
 
 /// Extract the classification array from a model response, tolerating code
@@ -554,6 +575,16 @@ mod tests {
         let v = parse_classifications(raw).unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!(v[1].category, "none");
+    }
+
+    #[test]
+    fn parse_numeric_ids() {
+        // Models often emit the short index as a JSON number, not a string.
+        let raw = "[{\"id\":1,\"category\":\"promotions\"},{\"id\":2,\"category\":\"attention\"}]";
+        let v = parse_classifications(raw).unwrap();
+        assert_eq!(v[0].id, "1");
+        assert_eq!(v[1].id, "2");
+        assert_eq!(v[1].category, "attention");
     }
 
     #[test]
