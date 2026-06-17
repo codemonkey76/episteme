@@ -43,6 +43,14 @@ async function loadSession(id: string) {
   activeSession.value = sessionRes.session
   messages.value = msgRes.messages
   if (props.winId) winStore.updateProps(props.winId, { sessionId: id, forceNew: undefined })
+  syncWindowTitle()
+}
+
+// Reflect the conversation name in the window header (e.g. "Chat: Foo").
+function syncWindowTitle() {
+  if (!props.winId) return
+  const t = activeSession.value?.title?.trim()
+  winStore.setTitle(props.winId, t ? `Chat: ${t}` : 'Chat')
 }
 
 function appendMessage(msg: api.Message) {
@@ -261,6 +269,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (activeSession.value) {
           activeSession.value.title = title
           store.setSessionTitle(activeSession.value.id, title)
+          syncWindowTitle()
         }
       },
       () => { thinking.value = true; scrollToBottom() },

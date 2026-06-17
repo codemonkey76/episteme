@@ -333,6 +333,13 @@ export const useWindowsStore = defineStore('windows', () => {
     if (w) w.props = { ...w.props, ...patch }
   }
 
+  // Set a window's header title (e.g. a chat window showing its conversation
+  // name). Not persisted — re-derived from the session on reload.
+  function setTitle(id: string, title: string) {
+    const w = windows.value.find((w) => w.id === id)
+    if (w) w.title = title
+  }
+
   function close(id: string) {
     windows.value = windows.value.filter((w) => w.id !== id)
     relayout(windows.value)
@@ -461,5 +468,5 @@ export const useWindowsStore = defineStore('windows', () => {
   // Persist the layout whenever windows change (open/close/move/resize/dock).
   watch(windows, (wins) => persist(wins), { deep: true })
 
-  return { windows, snapPreview, open, openKey, openChat, updateProps, close, focus, move, snap, unsnap, setSize, setSnapPreview, hydrate, reflow }
+  return { windows, snapPreview, open, openKey, openChat, updateProps, setTitle, close, focus, move, snap, unsnap, setSize, setSnapPreview, hydrate, reflow }
 })
