@@ -15,6 +15,16 @@ use crate::state::AppState;
 pub fn schemas() -> Vec<Value> {
     vec![
         json!({
+            "name": "phoneus_health",
+            "description": "Check the PhoneUs portal's health endpoint. Reports the overall platform status plus per-section checks of its integrations and services (external portals, FusionPBX servers, etc.). Returns the HTTP `status`, an `ok` flag, and the portal's raw `report` JSON — where `report.status` is the overall verdict (\"ok\", \"warn\", or worse) and each entry in `report.sections` has its own `status` and `items`. Inspect it: if the overall status isn't ok, or any section/item is warning, failing, or stale, call `notify_user` to flag the user with a concise summary of exactly what's wrong. During an unattended/scheduled check where everything is healthy, stay silent.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "integration": { "type": "string", "description": "Which PhoneUs instance (portal) to use, by name. Optional when only one is configured." }
+                }
+            }
+        }),
+        json!({
             "name": "phoneus_list_customers",
             "description": "Search PhoneUs customers by company name, contact name, or account number. Returns each match's account_number, display_name, and current total_outstanding. Use this first to resolve a customer before asking about their balance, services, or contacts. If multiple PhoneUs instances (portals) are configured, ask the user which one and pass its name as `integration`.",
             "input_schema": {
@@ -107,7 +117,8 @@ pub fn schemas() -> Vec<Value> {
 pub fn handles(name: &str) -> bool {
     matches!(
         name,
-        "phoneus_list_customers"
+        "phoneus_health"
+            | "phoneus_list_customers"
             | "phoneus_customer_balance"
             | "phoneus_list_services"
             | "phoneus_list_contacts"
@@ -125,6 +136,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     // Which PhoneUs instance to use (name); resolved against the registry.
     let instance = args["integration"].as_str();
     match name {
+        "phoneus_health" => phoneus::health(state, user_id, instance).await,
         "phoneus_list_customers" => {
             let search = args["search"].as_str().unwrap_or("");
             let path = format!("/customers?search={}", urlencoding::encode(search));

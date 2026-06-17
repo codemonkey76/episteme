@@ -15,11 +15,6 @@ use crate::state::AppState;
 pub fn schemas() -> Vec<Value> {
     vec![
         json!({
-            "name": "helpdesk_health",
-            "description": "Check the helpdesk portal's health endpoint. Reports whether the platform and its dependencies (database, queue/scheduler, cache, mail, storage, etc.) are operating normally. Returns the HTTP `status`, an `ok` flag, and the portal's raw `report` JSON. Inspect the result: if `ok` is false or anything in the report is unhealthy, degraded, or stale, call `notify_user` to flag the user with a concise summary of what's wrong. If everything is healthy during an unattended/scheduled check, stay silent.",
-            "input_schema": { "type": "object", "properties": {} }
-        }),
-        json!({
             "name": "helpdesk_list_tickets",
             "description": "List open helpdesk tickets (excludes closed), most urgent first. Supports filtering by status and searching subject/reference (e.g. TKT-00042). Use this to find a ticket's id before acting on it.",
             "input_schema": {
@@ -153,8 +148,7 @@ pub fn schemas() -> Vec<Value> {
 pub fn handles(name: &str) -> bool {
     matches!(
         name,
-        "helpdesk_health"
-            | "helpdesk_list_tickets"
+        "helpdesk_list_tickets"
             | "helpdesk_get_ticket"
             | "helpdesk_list_clients"
             | "helpdesk_list_categories"
@@ -189,7 +183,6 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
     // Which helpdesk instance to use (name); resolved against the registry.
     let instance = args["integration"].as_str();
     match name {
-        "helpdesk_health" => helpdesk::health(state, user_id, instance).await,
         "helpdesk_list_tickets" => {
             let mut path = "/tickets?per_page=25".to_string();
             if let Some(s) = args["status"].as_str().filter(|s| !s.is_empty()) {

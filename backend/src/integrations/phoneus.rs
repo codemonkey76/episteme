@@ -97,3 +97,35 @@ pub async fn request(
     }
     Ok(parsed)
 }
+
+/// Fetch the portal's health endpoint (GET /api/health). This sits *outside* the
+/// `/api/integration` namespace `request` uses, so it's a dedicated call. Unlike
+/// `request`, a non-2xx response is *not* an error here: a degraded portal may
+/// answer 503 with the details in its body, and that failing status is exactly
+/// the signal we want the model to inspect. Returns the HTTP `status`, an `ok`
+/// flag, and the raw `report` the portal provided (overall `status` plus
+/// per-section `items`). Only a genuine transport failure (or an expired
+/// session) errors.
+pub async fn health(state: &AppState, user_id: &str, instance: Option<&str>) -> Result<Value> {
+    let cfg = config(state, user_id, instance).await?;
+    let url = format!("{}/api/health", cfg.base_url.trim_end_matches('/'));
+    let res = state
+        .http_client
+        .get(&url)
+        .bearer_auth(&cfg.token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| anyhow!("could not reach PhoneUs at {url}: {e}"))?;
+
+    let status = res.status();
+    if status.as_u16() == 401 {
+        return Err(anyhow!("PhoneUs session expired — reconnect in Settings → Integrations"));
+    }
+    let report: Value = res.json().await.unwrap_or(Value::Null);
+    Ok(serde_json::json!({
+        "status": status.as_u16(),
+        "ok": status.is_success(),
+        "report": report,
+    }))
+}
