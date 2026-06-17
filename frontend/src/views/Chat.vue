@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { useSessionsStore } from '../stores/sessions'
+import { useWindowsStore } from '../stores/windows'
 import { useApprovalsStore } from '../stores/approvals'
 import { useLogsStore } from '../stores/logs'
 import { useCalendarStore } from '../stores/calendar'
@@ -10,22 +11,72 @@ import * as api from '../api'
 import { renderMarkdown } from '../lib/markdown'
 import ApprovalCard from '../components/ApprovalCard.vue'
 
+// This chat window's identity. `winId` lets it persist its resolved session
+// back into its window; `sessionId`/`forceNew` seed which conversation to show.
+const props = defineProps<{ winId?: string; sessionId?: string; forceNew?: boolean }>()
+
 const logs = useLogsStore()
 
 const store = useSessionsStore()
+const winStore = useWindowsStore()
 const approvalsStore = useApprovalsStore()
 const calStore = useCalendarStore()
 const tasksStore = useTasksStore()
 const notesStore = useNotesStore()
 
+// Per-window conversation state — each chat window is independent.
+const activeSession = ref<api.Session | null>(null)
+const messages = ref<api.Message[]>([])
+
 // Tool-call/result messages are model context, not user-facing — hide them.
 const visibleMessages = computed(() =>
-  store.messages.filter(m => m.role !== 'tool'),
+  messages.value.filter(m => m.role !== 'tool'),
 )
+
+// Load a session's metadata + messages into this window, and remember it so a
+// reload restores the same conversation.
+async function loadSession(id: string) {
+  const [sessionRes, msgRes] = await Promise.all([
+    api.sessions.get(id),
+    api.sessions.messages(id),
+  ])
+  activeSession.value = sessionRes.session
+  messages.value = msgRes.messages
+  if (props.winId) winStore.updateProps(props.winId, { sessionId: id, forceNew: undefined })
+}
+
+function appendMessage(msg: api.Message) {
+  messages.value.push(msg)
+}
+
+function appendToolCall(name: string) {
+  messages.value.push({
+    id: crypto.randomUUID(),
+    session_id: activeSession.value?.id ?? '',
+    role: 'tool_call',
+    content: name,
+    created_at: new Date().toISOString(),
+  })
+}
+
+function appendToken(text: string) {
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'assistant') {
+    last.content += text
+  } else {
+    messages.value.push({
+      id: crypto.randomUUID(),
+      session_id: activeSession.value?.id ?? '',
+      role: 'assistant',
+      content: text,
+      created_at: new Date().toISOString(),
+    })
+  }
+}
 
 async function newSession() {
   const s = await store.createSession()
-  await store.loadSession(s.id)
+  await loadSession(s.id)
   logs.info('Chat', 'Started new session')
 }
 
@@ -57,15 +108,18 @@ onMounted(async () => {
   }
   watch(provider, (v) => { if (v) localStorage.setItem('chat-provider', v) })
 
-  // Keep a session set by a handoff (e.g. "Ask AI" from email); otherwise pick up
-  // the most recent session, or start a fresh one.
-  if (store.activeSession) {
-    // already loaded by the handoff
+  // Resolve which conversation this window shows: an explicit new session, a
+  // specific session handed to it, or the most recent (creating one if none).
+  if (props.forceNew) {
+    const s = await store.createSession()
+    await loadSession(s.id)
+  } else if (props.sessionId) {
+    await loadSession(props.sessionId)
   } else if (store.sessions.length === 0) {
     const s = await store.createSession()
-    await store.loadSession(s.id)
+    await loadSession(s.id)
   } else {
-    await store.loadSession(store.sessions[0].id)
+    await loadSession(store.sessions[0].id)
   }
 
   // Land at the latest message on (re)load. The extra frame ensures it happens
@@ -130,7 +184,7 @@ function onDrop(e: DragEvent) {
 async function send() {
   const text = input.value.trim()
   const images = pendingImages.value
-  if ((!text && images.length === 0) || !store.activeSession) return
+  if ((!text && images.length === 0) || !activeSession.value) return
   input.value = ''
   pendingImages.value = []
   if (sending.value) {
@@ -141,7 +195,7 @@ async function send() {
 }
 
 async function sendText(text: string, images: api.ChatImage[] = []) {
-  if (sending.value || !store.activeSession) return
+  if (sending.value || !activeSession.value) return
   let calendarTouched = false
   let tasksTouched = false
   let notesTouched = false
@@ -149,9 +203,9 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
   thinking.value = false
   error.value = null
 
-  store.appendMessage({
+  appendMessage({
     id: crypto.randomUUID(),
-    session_id: store.activeSession.id,
+    session_id: activeSession.value.id,
     role: 'user',
     // Mirror the DB shape so displayContent/displayImages handle both live
     // and reloaded messages identically.
@@ -168,10 +222,10 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
 
   try {
     await api.streamChat(
-      store.activeSession.id,
+      activeSession.value.id,
       text,
       provider.value,
-      (tok) => { thinking.value = false; store.appendToken(tok); scrollToBottom() },
+      (tok) => { thinking.value = false; appendToken(tok); scrollToBottom() },
       () => {
         sending.value = false
         thinking.value = false
@@ -187,7 +241,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         logs.warn('Chat', `Tool approval required: ${toolName}`)
         approvalsStore.addPending({
           id: actionId,
-          session_id: store.activeSession!.id,
+          session_id: activeSession.value!.id,
           tool_name: toolName,
           tool_args: JSON.stringify(toolArgs),
           status: 'pending',
@@ -197,13 +251,18 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
       },
       (name) => {
         thinking.value = false
-        store.appendToolCall(name)
+        appendToolCall(name)
         scrollToBottom()
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
         if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
         if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
       },
-      (title) => { if (store.activeSession) store.setSessionTitle(store.activeSession.id, title) },
+      (title) => {
+        if (activeSession.value) {
+          activeSession.value.title = title
+          store.setSessionTitle(activeSession.value.id, title)
+        }
+      },
       () => { thinking.value = true; scrollToBottom() },
       abortController.signal,
       images,
@@ -296,7 +355,7 @@ function toolLabel(name: string): string {
 
 // Pending approvals for the active session — rendered as inline cards.
 const sessionApprovals = computed(() =>
-  approvalsStore.pending.filter(a => a.session_id === store.activeSession?.id),
+  approvalsStore.pending.filter(a => a.session_id === activeSession.value?.id),
 )
 
 // A tool_call message is either a live chip (content = tool name) or a

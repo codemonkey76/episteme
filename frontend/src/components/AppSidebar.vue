@@ -40,8 +40,23 @@ function toggle() {
 }
 
 // Nav icons are toggles: pressed while the window is open; clicking again
-// (or closing the window itself) releases them.
-const isOpen = (key: string) => winStore.windows.some(w => w.key === key)
+// (or closing the window itself) releases them. Matches by regKey so
+// multi-instance windows (chat) light up regardless of their unique key.
+const isOpen = (key: string) => winStore.windows.some(w => w.key === key || w.regKey === key)
+
+// Chat is multi-instance: clicking focuses an existing chat window (the topmost)
+// or opens one if none; the "+" always opens an additional, fresh conversation.
+function focusOrOpenChat() {
+  const open = winStore.windows.filter(w => w.regKey === 'chat')
+  if (open.length > 0) {
+    winStore.focus(open.reduce((a, b) => (a.zIndex >= b.zIndex ? a : b)).id)
+  } else {
+    winStore.openChat()
+  }
+}
+function newChatWindow() {
+  winStore.openChat({ forceNew: true })
+}
 
 function toggleKey(key: string) {
   const open = winStore.windows.filter(w => w.key === key)
@@ -78,13 +93,20 @@ function toggleSettings(tab: string) {
     </div>
 
     <nav class="flex-1 flex flex-col gap-0.5 p-1.5 overflow-y-auto">
-      <!-- Chat -->
-      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] mb-0.5 hover:bg-[var(--c-1a2a4a)] hover:text-[var(--c-7ab5ff)]', isOpen('chat') ? 'bg-[var(--c-1a2a4a)] text-[var(--c-7ab5ff)]' : 'text-[var(--c-5a9aff)]']" :title="collapsed ? 'Chat' : ''" :aria-pressed="isOpen('chat')" @click="toggleKey('chat')">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        <span v-if="!collapsed">Chat</span>
-      </button>
+      <!-- Chat (multi-instance): main button focuses/opens; "+" opens another -->
+      <div class="flex items-center gap-0.5 mb-0.5 group/chat">
+        <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer flex-1 text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-1a2a4a)] hover:text-[var(--c-7ab5ff)]', isOpen('chat') ? 'bg-[var(--c-1a2a4a)] text-[var(--c-7ab5ff)]' : 'text-[var(--c-5a9aff)]']" :title="collapsed ? 'Chat' : ''" :aria-pressed="isOpen('chat')" @click="focusOrOpenChat">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span v-if="!collapsed">Chat</span>
+        </button>
+        <button v-if="!collapsed" class="flex items-center justify-center w-7 h-7 shrink-0 rounded-md bg-none border-none cursor-pointer text-[var(--c-5a9aff)] transition-[background,color] duration-150 hover:bg-[var(--c-1a2a4a)] hover:text-[var(--c-7ab5ff)]" title="New chat window" @click="newChatWindow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+      </div>
 
       <!-- History -->
       <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('chats') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'History' : ''" :aria-pressed="isOpen('chats')" @click="toggleKey('chats')">

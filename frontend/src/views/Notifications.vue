@@ -3,11 +3,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import * as api from '../api'
 import ApprovalCard from '../components/ApprovalCard.vue'
 import { useNotificationsStore } from '../stores/notifications'
-import { useSessionsStore } from '../stores/sessions'
 import { useWindowsStore } from '../stores/windows'
 
 const notifStore = useNotificationsStore()
-const sessionsStore = useSessionsStore()
 const winStore = useWindowsStore()
 
 const items = ref<api.Notification[]>([])
@@ -40,12 +38,7 @@ watch(() => notifStore.changeToken, load)
 async function open(n: api.Notification) {
   if (!n.read_at) await markRead(n)
   if (n.link_kind === 'session' && n.link_id) {
-    try {
-      await sessionsStore.loadSession(n.link_id)
-      winStore.openKey('chat', undefined, 'fill')
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Could not open the linked session'
-    }
+    winStore.openChat({ sessionId: n.link_id })
   }
 }
 

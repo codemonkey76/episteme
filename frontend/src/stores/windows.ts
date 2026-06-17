@@ -15,7 +15,11 @@ export interface SnapPreview {
 
 export interface WinState {
   id: string
+  /** Unique per instance. For singletons this equals `regKey`; multi-instance
+   *  windows (chat) get a generated key like `chat:3`. */
   key?: string
+  /** Registry key used to resolve the component (e.g. 'chat'). */
+  regKey?: string
   title: string
   component: Component
   props: Record<string, unknown>
@@ -190,6 +194,8 @@ const STORAGE_KEY = 'window-layout'
 // by `key` on load, so it (and the title) are intentionally not stored.
 interface SavedWindow {
   key: string
+  /** Registry key for the component; defaults to `key` for older saved layouts. */
+  regKey?: string
   props: Record<string, unknown>
   x: number
   y: number
@@ -204,9 +210,10 @@ interface SavedWindow {
 
 function toSaved(wins: WinState[]): SavedWindow[] {
   return wins
-    .filter(w => w.key && windowRegistry[w.key])
+    .filter(w => w.key && windowRegistry[w.regKey ?? w.key])
     .map(w => ({
       key: w.key as string,
+      regKey: w.regKey ?? w.key,
       props: w.props,
       x: w.x,
       y: w.y,
@@ -237,6 +244,7 @@ export const useWindowsStore = defineStore('windows', () => {
 
   function open(config: {
     key?: string
+    regKey?: string
     title: string
     component: Component
     props?: Record<string, unknown>
@@ -257,6 +265,7 @@ export const useWindowsStore = defineStore('windows', () => {
     windows.value.push({
       id: String(++nextId),
       key: config.key,
+      regKey: config.regKey ?? config.key,
       title: config.title,
       component: markRaw(config.component),
       props: config.props ?? {},
@@ -286,8 +295,12 @@ export const useWindowsStore = defineStore('windows', () => {
   function openKey(key: string, propsOverride?: Record<string, unknown>, dock?: DockAnchor) {
     const def = windowRegistry[key]
     if (!def) return
+    // Multi-instance windows get a unique key per instance so each is its own
+    // window (no focus-existing dedupe); singletons keep key === regKey.
+    const instanceKey = def.multi ? `${key}:${nextId + 1}` : key
     open({
-      key,
+      key: instanceKey,
+      regKey: key,
       title: def.title,
       component: def.component,
       props: propsOverride ?? def.props,
@@ -295,6 +308,29 @@ export const useWindowsStore = defineStore('windows', () => {
       height: def.height,
       initialDock: dock ?? def.initialDock,
     })
+  }
+
+  // Open (or focus) a chat conversation. If `sessionId` is already shown in a
+  // chat window, focus it; otherwise open a new chat window carrying the props.
+  // `forceNew` tells a fresh window to start a brand-new session.
+  function openChat(opts?: { sessionId?: string; forceNew?: boolean }, dock?: DockAnchor) {
+    if (opts?.sessionId) {
+      const existing = windows.value.find(
+        (w) => w.regKey === 'chat' && w.props.sessionId === opts.sessionId,
+      )
+      if (existing) {
+        focus(existing.id)
+        return
+      }
+    }
+    openKey('chat', { sessionId: opts?.sessionId, forceNew: opts?.forceNew }, dock)
+  }
+
+  // Merge a patch into a window's props (e.g. a chat window recording the
+  // session it resolved to, so a reload restores the same conversation).
+  function updateProps(id: string, patch: Record<string, unknown>) {
+    const w = windows.value.find((w) => w.id === id)
+    if (w) w.props = { ...w.props, ...patch }
   }
 
   function close(id: string) {
@@ -376,11 +412,13 @@ export const useWindowsStore = defineStore('windows', () => {
 
     const restored: WinState[] = []
     for (const s of saved) {
-      const def = windowRegistry[s.key]
+      const regKey = s.regKey ?? s.key // older layouts stored only `key`
+      const def = windowRegistry[regKey]
       if (!def) continue // window type no longer exists — skip it
       restored.push({
         id: String(++nextId),
         key: s.key,
+        regKey,
         title: def.title,
         component: markRaw(def.component),
         props: s.props ?? def.props ?? {},
@@ -423,5 +461,5 @@ export const useWindowsStore = defineStore('windows', () => {
   // Persist the layout whenever windows change (open/close/move/resize/dock).
   watch(windows, (wins) => persist(wins), { deep: true })
 
-  return { windows, snapPreview, open, openKey, close, focus, move, snap, unsnap, setSize, setSnapPreview, hydrate, reflow }
+  return { windows, snapPreview, open, openKey, openChat, updateProps, close, focus, move, snap, unsnap, setSize, setSnapPreview, hydrate, reflow }
 })

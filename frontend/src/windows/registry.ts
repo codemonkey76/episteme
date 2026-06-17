@@ -26,13 +26,15 @@ export interface WindowDef {
   height?: number
   props?: Record<string, unknown>
   initialDock?: DockAnchor
+  /** Allow several independent instances (e.g. multiple chat conversations). */
+  multi?: boolean
 }
 
 // Single source of truth for every openable window. Keyed by the stable `key`
 // stored with each window — used both to open windows and to reconstruct them
 // from a persisted layout (the component itself can't be serialized).
 export const windowRegistry: Record<string, WindowDef> = {
-  chat: { title: 'Chat', component: markRaw(Chat), width: 740, height: 560 },
+  chat: { title: 'Chat', component: markRaw(Chat), width: 740, height: 560, multi: true },
   chats: { title: 'History', component: markRaw(Chats), width: 520, height: 480 },
   email: { title: 'Email', component: markRaw(Email), width: 1100, height: 660 },
   calendar: { title: 'Calendar', component: markRaw(Calendar), width: 800, height: 560 },

@@ -9,9 +9,8 @@ const winStore = useWindowsStore()
 
 onMounted(() => store.fetchSessions())
 
-async function open(id: string) {
-  await store.loadSession(id)
-  winStore.openKey('chat', undefined, 'fill')
+function open(id: string) {
+  winStore.openChat({ sessionId: id })
 }
 
 async function remove(id: string) {

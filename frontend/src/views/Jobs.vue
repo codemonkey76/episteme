@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
-import { useSessionsStore } from '../stores/sessions'
 import { useWindowsStore } from '../stores/windows'
 import { useLogsStore } from '../stores/logs'
 import * as api from '../api'
 import ApprovalCard from '../components/ApprovalCard.vue'
 
-const sessions = useSessionsStore()
 const winStore = useWindowsStore()
 const logs = useLogsStore()
 
@@ -78,9 +76,8 @@ async function decide(a: api.PendingActionGlobal, approved: boolean, editedArgs?
   load()
 }
 
-async function openSession(id: string) {
-  await sessions.loadSession(id)
-  winStore.openKey('chat', undefined, 'fill')
+function openSession(id: string) {
+  winStore.openChat({ sessionId: id })
 }
 
 const STATUS_STYLE: Record<string, string> = {

@@ -137,7 +137,7 @@ const windowStyle = computed(() => ({
     </div>
 
     <div class="overflow-y-auto flex-1 rounded-b-lg">
-      <component :is="win.component" v-bind="win.props" />
+      <component :is="win.component" v-bind="win.props" :win-id="win.id" />
     </div>
 
     <!-- Resize handles -->
