@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::state::AppState;
 
@@ -167,4 +167,34 @@ pub async fn request(
         return Err(anyhow!("helpdesk API {status}: {msg}"));
     }
     Ok(parsed)
+}
+
+/// Fetch the portal's health endpoint (GET /api/health). Unlike [`request`], a
+/// non-2xx response is *not* an error here: a degraded portal may answer 503
+/// with the details in its body, and that failing status is exactly the signal
+/// we want the model to inspect. Returns the HTTP `status`, an `ok` flag, and
+/// the raw `report` the portal provided. Only a genuine transport failure (or an
+/// expired session) errors.
+pub async fn health(state: &AppState, user_id: &str, instance: Option<&str>) -> Result<Value> {
+    let cfg = config(state, user_id, instance).await?;
+    let url = format!("{}/api/health", cfg.base_url.trim_end_matches('/'));
+    let res = state
+        .http_client
+        .get(&url)
+        .bearer_auth(&cfg.token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| anyhow!("could not reach helpdesk at {url}: {e}"))?;
+
+    let status = res.status();
+    if status.as_u16() == 401 {
+        return Err(anyhow!("helpdesk session expired — reconnect in Settings → Integrations"));
+    }
+    let report: Value = res.json().await.unwrap_or(Value::Null);
+    Ok(json!({
+        "status": status.as_u16(),
+        "ok": status.is_success(),
+        "report": report,
+    }))
 }

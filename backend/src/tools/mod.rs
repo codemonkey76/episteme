@@ -18,6 +18,7 @@ pub mod history;
 pub mod jobs;
 pub mod memories;
 pub mod notes;
+pub mod notify;
 pub mod phoneus;
 pub mod research;
 pub mod tasks;
@@ -36,6 +37,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(history::schemas());
     all.extend(jobs::schemas());
     all.extend(research::schemas());
+    all.extend(notify::schemas());
     all.extend(tag_instance(helpdesk::schemas(), "helpdesk"));
     all.extend(tag_instance(github::schemas(), "GitHub"));
     all.extend(phoneus::schemas()); // already carries `integration` per tool
@@ -68,6 +70,7 @@ pub fn is_native(name: &str) -> bool {
         || history::handles(name)
         || jobs::handles(name)
         || research::handles(name)
+        || notify::handles(name)
         || helpdesk::handles(name)
         || github::handles(name)
         || phoneus::handles(name)
@@ -86,6 +89,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("history", history::schemas()),
         ("jobs", jobs::schemas()),
         ("research", research::schemas()),
+        ("notify", notify::schemas()),
         ("helpdesk", helpdesk::schemas()),
         ("github", github::schemas()),
         ("phoneus", phoneus::schemas()),
@@ -148,6 +152,9 @@ pub async fn execute(
     }
     if research::handles(name) {
         return research::execute(state, user_id, name, args).await;
+    }
+    if notify::handles(name) {
+        return notify::execute(state, user_id, name, args).await;
     }
     if helpdesk::handles(name) {
         return helpdesk::execute(state, user_id, name, args).await;
