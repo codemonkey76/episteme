@@ -467,6 +467,29 @@ export const email = {
     }),
 }
 
+export interface HelpdeskUser {
+  id: number
+  name: string
+  email: string
+}
+
+export interface HelpdeskClient {
+  id: number
+  name: string
+  users: HelpdeskUser[]
+}
+
+export const helpdesk = {
+  // Clients (each with their contacts) for the create-ticket approval pickers.
+  listClients: (opts?: { integration?: string; search?: string }) => {
+    const p = new URLSearchParams()
+    if (opts?.integration) p.set('integration', opts.integration)
+    if (opts?.search) p.set('search', opts.search)
+    const qs = p.toString()
+    return json<{ clients: HelpdeskClient[] }>(`/helpdesk/clients${qs ? `?${qs}` : ''}`)
+  },
+}
+
 // AI draft — POST returns an SSE stream of reply tokens (model can be slow, so stream live).
 export async function streamAiDraft(
   payload: { provider: string; from: string; subject: string; body: string },

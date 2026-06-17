@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import * as api from '../api'
 
 const props = withDefaults(
   defineProps<{
@@ -20,7 +21,17 @@ const emit = defineEmits<{
 type Field = {
   key: string
   label: string
-  kind: 'textarea' | 'text' | 'number' | 'select' | 'date' | 'checkbox' | 'readonly'
+  kind:
+    | 'textarea'
+    | 'text'
+    | 'number'
+    | 'select'
+    | 'date'
+    | 'checkbox'
+    | 'readonly'
+    // Helpdesk pickers, resolved to names via /helpdesk/clients (create ticket).
+    | 'client-select'
+    | 'requester-select'
   options?: string[]
   step?: number
 }
@@ -41,8 +52,8 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'description', label: 'Description', kind: 'textarea' },
   ],
   helpdesk_create_ticket: [
-    { key: 'client_id', label: 'Client id', kind: 'readonly' },
-    { key: 'user_id', label: 'Requester id', kind: 'readonly' },
+    { key: 'client_id', label: 'Client', kind: 'client-select' },
+    { key: 'user_id', label: 'Requester', kind: 'requester-select' },
     { key: 'subject', label: 'Subject', kind: 'text' },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
     { key: 'description', label: 'Description', kind: 'textarea' },
@@ -80,14 +91,73 @@ function parseArgs(): Record<string, unknown> {
 
 const parsed = parseArgs()
 
+// Today's date as YYYY-MM-DD in the operator's local timezone — the default for
+// empty date fields (e.g. time-entry "logged at").
+function todayLocal(): string {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
 // Editable working copy, seeded from the model's draft. Missing select values
-// default to the first option so the control is never blank.
+// default to the first option so the control is never blank; empty date fields
+// default to today.
 const edited = ref<Record<string, unknown>>({ ...parsed })
 if (fields) {
   for (const f of fields) {
     if (edited.value[f.key] == null && f.kind === 'select' && f.options) {
       edited.value[f.key] = f.options[0]
     }
+    if (f.kind === 'date' && !edited.value[f.key]) {
+      edited.value[f.key] = todayLocal()
+    }
+  }
+}
+
+// Create-ticket card: load the helpdesk clients (each with their contacts) so
+// the client_id/user_id ids can be shown as names and changed via dropdowns.
+const isCreateTicket = props.toolName === 'helpdesk_create_ticket'
+const clients = ref<api.HelpdeskClient[]>([])
+const clientsLoaded = ref(false)
+const clientsError = ref<string | null>(null)
+
+onMounted(async () => {
+  if (!isCreateTicket) return
+  try {
+    const integration = typeof parsed.integration === 'string' ? parsed.integration : undefined
+    const res = await api.helpdesk.listClients({ integration })
+    clients.value = res.clients
+    // If the draft's requester isn't a contact of the (resolved) client, snap it
+    // to a valid one so the dropdown isn't left on a stale, unselectable id.
+    if (selectedClient.value) onClientChange()
+  } catch (e) {
+    clientsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    clientsLoaded.value = true
+  }
+})
+
+const selectedClient = computed(() =>
+  clients.value.find((c) => c.id === Number(edited.value.client_id)),
+)
+const requesterOptions = computed(() => selectedClient.value?.users ?? [])
+
+function clientName(id: unknown): string {
+  const c = clients.value.find((x) => x.id === Number(id))
+  return c ? c.name : String(id ?? '')
+}
+function requesterName(id: unknown): string {
+  const u = requesterOptions.value.find((x) => x.id === Number(id))
+  return u ? u.name || u.email : String(id ?? '')
+}
+
+// When the client changes, keep the requester valid — reset to the first
+// contact of the newly chosen client if the current one doesn't belong to it.
+function onClientChange() {
+  const users = requesterOptions.value
+  if (!users.some((u) => u.id === Number(edited.value.user_id))) {
+    edited.value.user_id = users[0]?.id
   }
 }
 
@@ -122,6 +192,35 @@ function onApprove() {
         <span class="text-[0.66rem] uppercase tracking-[0.05em] text-[var(--c-8a7a50)]">{{ f.label }}</span>
 
         <span v-if="f.kind === 'readonly'" class="text-[0.78rem] text-[var(--c-a09070)]">{{ edited[f.key] }}</span>
+
+        <!-- Helpdesk client picker (names). Falls back to the raw id while the
+             list loads or if it can't be fetched. -->
+        <select
+          v-else-if="f.kind === 'client-select' && clientsLoaded && !clientsError && clients.length"
+          v-model.number="edited[f.key]"
+          @change="onClientChange"
+          class="text-[0.78rem] text-[var(--c-d0c8b0)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-1.5 font-[inherit] focus:outline-none focus:border-[var(--c-4a3a1a)]"
+        >
+          <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+
+        <!-- Helpdesk requester picker — the chosen client's contacts. -->
+        <select
+          v-else-if="f.kind === 'requester-select' && clientsLoaded && !clientsError && requesterOptions.length"
+          v-model.number="edited[f.key]"
+          class="text-[0.78rem] text-[var(--c-d0c8b0)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-1.5 font-[inherit] focus:outline-none focus:border-[var(--c-4a3a1a)]"
+        >
+          <option v-for="u in requesterOptions" :key="u.id" :value="u.id">{{ u.name || u.email }}</option>
+        </select>
+
+        <span
+          v-else-if="f.kind === 'client-select' || f.kind === 'requester-select'"
+          class="text-[0.78rem] text-[var(--c-a09070)]"
+        >
+          {{ f.kind === 'client-select' ? clientName(edited[f.key]) : requesterName(edited[f.key]) }}
+          <span v-if="!clientsLoaded" class="text-[var(--c-8a7a50)]"> · loading…</span>
+          <span v-else-if="clientsError" class="text-[var(--c-8a7a50)]"> · (couldn't load list)</span>
+        </span>
 
         <textarea
           v-else-if="f.kind === 'textarea'"
