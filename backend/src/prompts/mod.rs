@@ -210,6 +210,27 @@ Respond with ONLY a JSON object, no prose, no code fences: \
 \"priority\": \"low|medium|high|critical\"}.",
     },
     PromptDef {
+        key: "ticket_update_reply",
+        name: "Provider update → ticket reply",
+        description: "Runs when an email arrives in a thread linked to a helpdesk \
+ticket (e.g. an upstream provider's reply about a lodged fault). Produces a short \
+notification summary and a customer-facing draft reply for the ticket. Must keep \
+instructing the model to respond with ONLY a JSON object {\"summary\", \"reply\"}.",
+        variables: &[],
+        default: "An email has arrived in a thread linked to a customer's helpdesk \
+ticket — typically an upstream provider or supplier responding about a fault that \
+was lodged on the customer's behalf. Do two things.\n\n\
+1. summary: one short line (max ~120 chars) capturing the key update for a \
+notification — e.g. \"NBN advises area outage, estimated restore Thu 5pm\" or \
+\"Provider requires an on-site appointment\".\n\n\
+2. reply: a polite, customer-facing message to post on the ticket relaying the \
+relevant update in plain language. Write to the end customer (not the provider). \
+Don't expose internal/provider references or pricing unless clearly meant for the \
+customer. Keep it concise; no greeting line is needed (the helpdesk adds one).\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: \
+{\"summary\": \"<one line>\", \"reply\": \"<customer-facing message>\"}.",
+    },
+    PromptDef {
         key: "email_advise",
         name: "Ask AI about email",
         description: "Default instruction used by \"Ask AI about this email\" when you \

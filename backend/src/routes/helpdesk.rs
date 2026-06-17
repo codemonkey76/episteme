@@ -3,7 +3,7 @@
 //! human-readable client + requester names with a picker.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     Extension, Json,
 };
 use serde::Deserialize;
@@ -79,4 +79,40 @@ pub async fn list_clients(
         .unwrap_or_default();
 
     Ok(Json(json!({ "clients": clients })))
+}
+
+fn default_reply_type() -> String {
+    "reply".to_string()
+}
+
+#[derive(Deserialize)]
+pub struct ReplyBody {
+    /// Named helpdesk instance (omit = default/sole).
+    #[serde(default)]
+    integration: Option<String>,
+    /// "reply" (customer-facing) or "internal_note".
+    #[serde(default = "default_reply_type")]
+    r#type: String,
+    body: String,
+}
+
+// POST /api/helpdesk/tickets/:id/reply — post a reply (or internal note) onto a
+// ticket. Drives the same logic as the chat agent's helpdesk_reply_ticket tool;
+// used by the "Review & send reply" action on ticket-update notifications.
+pub async fn reply_ticket(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(ticket_id): Path<i64>,
+    Json(b): Json<ReplyBody>,
+) -> AppResult<Json<Value>> {
+    let args = json!({
+        "ticket_id": ticket_id,
+        "type": b.r#type,
+        "body": b.body,
+        "integration": b.integration,
+    });
+    let res = crate::tools::helpdesk::execute(&state, &user.id, "helpdesk_reply_ticket", args)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(res))
 }

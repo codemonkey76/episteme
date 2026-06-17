@@ -488,6 +488,16 @@ export const helpdesk = {
     const qs = p.toString()
     return json<{ clients: HelpdeskClient[] }>(`/helpdesk/clients${qs ? `?${qs}` : ''}`)
   },
+  // Post a reply (or internal note) onto a ticket — used by ticket-update
+  // notification actions.
+  replyTicket: (
+    ticketId: number,
+    payload: { body: string; type?: 'reply' | 'internal_note'; integration?: string | null },
+  ) =>
+    json<Record<string, unknown>>(`/helpdesk/tickets/${ticketId}/reply`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 }
 
 // AI draft — POST returns an SSE stream of reply tokens (model can be slow, so stream live).
@@ -941,13 +951,23 @@ export const writer = {
 // Notifications — durable record of every push notification.
 export interface Notification {
   id: string
-  category: string // agent | approval | error | suggestion | email | info
+  category: string // agent | approval | error | suggestion | email | ticket_update | info
   title: string
   body: string
-  link_kind: string | null // e.g. 'session'
+  link_kind: string | null // e.g. 'session', 'helpdesk_ticket'
   link_id: string | null
+  // JSON payload for actionable notifications (e.g. ticket_update). Parse per category.
+  data: string | null
   read_at: string | null
   created_at: string
+}
+
+// Shape of a ticket_update notification's `data` payload.
+export interface TicketUpdateData {
+  ticket_id: number
+  integration?: string | null
+  draft_reply: string
+  subject?: string
 }
 
 export const notifications = {

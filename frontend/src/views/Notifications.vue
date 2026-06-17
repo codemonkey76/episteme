@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import * as api from '../api'
+import ApprovalCard from '../components/ApprovalCard.vue'
 import { useNotificationsStore } from '../stores/notifications'
 import { useSessionsStore } from '../stores/sessions'
 import { useWindowsStore } from '../stores/windows'
@@ -95,6 +96,43 @@ async function clearAll() {
   }
 }
 
+// ── Ticket-update actions ───────────────────────────────────────────────────
+// Which notification's reply composer is expanded, and which have been replied.
+const openReplyId = ref<string | null>(null)
+const repliedIds = ref<Set<string>>(new Set())
+const replyError = ref<Record<string, string>>({})
+
+// Parse a ticket_update notification's `data` payload; null if absent/malformed.
+function ticketData(n: api.Notification): api.TicketUpdateData | null {
+  if (n.category !== 'ticket_update' || !n.data) return null
+  try {
+    return JSON.parse(n.data) as api.TicketUpdateData
+  } catch {
+    return null
+  }
+}
+
+// JSON args seeding the ApprovalCard's helpdesk_reply_ticket editor.
+function replyArgs(d: api.TicketUpdateData): string {
+  return JSON.stringify({ ticket_id: d.ticket_id, type: 'reply', body: d.draft_reply })
+}
+
+async function sendReply(n: api.Notification, edited?: Record<string, unknown>) {
+  const d = ticketData(n)
+  if (!d) return
+  const body = String(edited?.body ?? d.draft_reply)
+  const type = (edited?.type as 'reply' | 'internal_note') ?? 'reply'
+  delete replyError.value[n.id]
+  try {
+    await api.helpdesk.replyTicket(d.ticket_id, { body, type, integration: d.integration })
+    repliedIds.value.add(n.id)
+    openReplyId.value = null
+    await markRead(n)
+  } catch (e: unknown) {
+    replyError.value[n.id] = e instanceof Error ? e.message : 'Failed to send reply'
+  }
+}
+
 // ── Presentation ──────────────────────────────────────────────────────────────
 interface Style { color: string; bg: string; path: string }
 const STYLES: Record<string, Style> = {
@@ -103,6 +141,7 @@ const STYLES: Record<string, Style> = {
   error:      { color: 'var(--c-d08080)', bg: 'var(--c-2a1818)', path: 'alert' },
   suggestion: { color: 'var(--c-7ad08a)', bg: 'var(--c-15291b)', path: 'check' },
   email:      { color: 'var(--c-7ab0ff)', bg: 'var(--c-15233f)', path: 'mail' },
+  ticket_update: { color: 'var(--c-7ad08a)', bg: 'var(--c-15291b)', path: 'ticket' },
   info:       { color: 'var(--c-9a9a9a)', bg: 'var(--c-1c1c1c)', path: 'bell' },
 }
 function styleFor(cat: string): Style {
@@ -160,6 +199,7 @@ function fmtTime(iso: string): string {
               <svg v-if="styleFor(n.category).path === 'alert'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               <svg v-else-if="styleFor(n.category).path === 'check'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               <svg v-else-if="styleFor(n.category).path === 'mail'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
+              <svg v-else-if="styleFor(n.category).path === 'ticket'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><line x1="13" y1="5" x2="13" y2="19"/></svg>
               <svg v-else-if="n.category === 'agent'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
               <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
             </span>
@@ -175,6 +215,30 @@ function fmtTime(iso: string): string {
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               Open chat
             </span>
+
+            <!-- Ticket-update actions: review & send a customer reply on the ticket. -->
+            <div v-if="ticketData(n)" class="mt-1.5" @click.stop>
+              <span v-if="repliedIds.has(n.id)" class="inline-flex items-center gap-1 text-[0.7rem] text-[var(--c-7ad08a)]">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                Reply sent to customer
+              </span>
+              <button
+                v-else-if="openReplyId !== n.id"
+                class="text-[0.7rem] text-[var(--c-7ad08a)] bg-[var(--c-15291b)] border border-[var(--c-2a5a3a)] rounded px-2 py-1 cursor-pointer hover:bg-[var(--c-1b3324)]"
+                @click="openReplyId = n.id"
+              >
+                Review &amp; send reply
+              </button>
+              <ApprovalCard
+                v-else
+                :tool-name="'helpdesk_reply_ticket'"
+                :tool-args="replyArgs(ticketData(n)!)"
+                label="Reply to customer"
+                @approve="(args) => sendReply(n, args)"
+                @reject="openReplyId = null"
+              />
+              <p v-if="replyError[n.id]" class="text-[0.7rem] text-danger mt-1">{{ replyError[n.id] }}</p>
+            </div>
           </div>
 
           <button class="shrink-0 text-[var(--c-505050)] hover:text-[var(--c-d08080)] p-1 bg-none border-none cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity duration-100" title="Dismiss" @click.stop="remove(n)">

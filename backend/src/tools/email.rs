@@ -64,7 +64,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "email_draft",
-            "description": "Create a DRAFT email in the Drafts folder. It is NOT sent — the user reviews and sends it themselves. Use kind reply/reply_all/forward with a message_id to respond to a message (quoted history is kept automatically), or kind new with to + subject for a fresh message.",
+            "description": "Create a DRAFT email in the Drafts folder. It is NOT sent — the user reviews and sends it themselves. Use kind reply/reply_all/forward with a message_id to respond to a message (quoted history is kept automatically), or kind new with to + subject for a fresh message. When the email is about a helpdesk ticket (e.g. lodging a fault with an upstream provider), set helpdesk_ticket_id so a later reply in the same thread is recognised as an update to that ticket.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -73,7 +73,9 @@ pub fn schemas() -> Vec<Value> {
                     "message_id": { "type": "string", "description": "The message being responded to. Required for reply/reply_all/forward." },
                     "to": { "type": "array", "items": { "type": "string" }, "description": "Recipient addresses. Required for new and forward; for replies Graph fills them in automatically." },
                     "subject": { "type": "string", "description": "Required for new; replies/forwards keep their Re:/Fwd: subject unless overridden." },
-                    "mailbox": mailbox_prop
+                    "mailbox": mailbox_prop,
+                    "helpdesk_ticket_id": { "type": "integer", "description": "If this email concerns a helpdesk ticket, its numeric id — links this email thread to the ticket so future replies surface as ticket updates." },
+                    "integration": { "type": "string", "description": "Named helpdesk instance for helpdesk_ticket_id; omit for the default/sole instance." }
                 },
                 "required": ["kind", "body"]
             }
@@ -437,11 +439,25 @@ async fn draft(state: &AppState, user_id: &str, args: Value) -> Result<Value> {
         other => return Err(anyhow!("unknown draft kind '{other}'")),
     };
 
+    // If this email is about a helpdesk ticket, link its thread so a later reply
+    // (e.g. the provider's response) can be tied back to the ticket. Sending the
+    // draft preserves the conversationId, so the link survives the user's send.
+    let mut linked_ticket: Option<i64> = None;
+    if let Some(ticket_id) = args["helpdesk_ticket_id"].as_i64() {
+        if let Some(conversation_id) = draft["conversationId"].as_str().filter(|c| !c.is_empty()) {
+            let integration = args["integration"].as_str().filter(|s| !s.is_empty());
+            crate::db::ticket_links::upsert(&state.db, user_id, conversation_id, ticket_id, integration)
+                .await?;
+            linked_ticket = Some(ticket_id);
+        }
+    }
+
     Ok(json!({
         "drafted": true,
         "draft_id": draft["id"],
         "subject": draft["subject"],
         "web_link": draft["webLink"],
+        "linked_ticket_id": linked_ticket,
         "note": "Draft saved to the Drafts folder — the user must review and send it.",
     }))
 }

@@ -39,6 +39,31 @@ pub async fn notify_linked(
     super::webpush::notify(state, user_id, title, body).await;
 }
 
+/// Notify with a category, an optional associated item, and a structured `data`
+/// JSON payload the UI uses to render action buttons (e.g. a pre-drafted ticket
+/// reply on a `ticket_update` notification).
+pub async fn notify_action(
+    state: &AppState,
+    user_id: &str,
+    title: &str,
+    body: &str,
+    category: &str,
+    link: Option<Link<'_>>,
+    data: Option<&str>,
+) {
+    let (lk, li) = match &link {
+        Some(l) => (Some(l.kind), Some(l.id)),
+        None => (None, None),
+    };
+    if let Err(e) =
+        db::notifications::insert_with_data(&state.db, user_id, category, title, body, lk, li, data).await
+    {
+        tracing::warn!("failed to record notification: {e}");
+    }
+    super::fcm::notify(state, user_id, title, body).await;
+    super::webpush::notify(state, user_id, title, body).await;
+}
+
 /// Notify with no associated item, category `info`.
 #[allow(dead_code)] // kept as the simple entry point for future call sites
 pub async fn notify(state: &AppState, user_id: &str, title: &str, body: &str) {

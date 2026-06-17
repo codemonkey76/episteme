@@ -139,8 +139,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/email/categorizer", get(email::get_categorizer))
         .route("/api/email/categorizer", put(email::put_categorizer))
         .route("/api/email/categorizer/run", post(email::run_categorizer))
-        // Helpdesk lookups for the UI (client/requester pickers on approvals).
+        // Helpdesk lookups + actions for the UI (client/requester pickers on
+        // approvals; ticket reply from a ticket-update notification).
         .route("/api/helpdesk/clients", get(helpdesk::list_clients))
+        .route("/api/helpdesk/tickets/:id/reply", post(helpdesk::reply_ticket))
         .route("/api/documents", get(documents::list))
         .route(
             "/api/documents",

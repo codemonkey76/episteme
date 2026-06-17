@@ -13,6 +13,8 @@ pub struct Notification {
     pub body: String,
     pub link_kind: Option<String>,
     pub link_id: Option<String>,
+    /// JSON payload for actionable notifications (e.g. a ticket reply draft).
+    pub data: Option<String>,
     pub read_at: Option<String>,
     pub created_at: String,
 }
@@ -26,11 +28,27 @@ pub async fn insert(
     link_kind: Option<&str>,
     link_id: Option<&str>,
 ) -> Result<Notification> {
+    insert_with_data(pool, user_id, category, title, body, link_kind, link_id, None).await
+}
+
+/// Like [`insert`] but with a structured `data` JSON payload the UI uses to
+/// render action buttons (see the `data` column).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_with_data(
+    pool: &SqlitePool,
+    user_id: &str,
+    category: &str,
+    title: &str,
+    body: &str,
+    link_kind: Option<&str>,
+    link_id: Option<&str>,
+    data: Option<&str>,
+) -> Result<Notification> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO notifications (id, user_id, category, title, body, link_kind, link_id, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notifications (id, user_id, category, title, body, link_kind, link_id, data, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
@@ -39,6 +57,7 @@ pub async fn insert(
     .bind(body)
     .bind(link_kind)
     .bind(link_id)
+    .bind(data)
     .bind(&now)
     .execute(pool)
     .await?;
@@ -50,6 +69,7 @@ pub async fn insert(
         body: body.to_string(),
         link_kind: link_kind.map(str::to_string),
         link_id: link_id.map(str::to_string),
+        data: data.map(str::to_string),
         read_at: None,
         created_at: now,
     })
@@ -57,7 +77,7 @@ pub async fn insert(
 
 pub async fn list(pool: &SqlitePool, user_id: &str, limit: i64) -> Result<Vec<Notification>> {
     Ok(sqlx::query_as::<_, Notification>(
-        "SELECT id, category, title, body, link_kind, link_id, read_at, created_at \
+        "SELECT id, category, title, body, link_kind, link_id, data, read_at, created_at \
          FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
     )
     .bind(user_id)

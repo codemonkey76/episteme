@@ -22,6 +22,7 @@ pub mod usage;
 pub mod invites;
 pub mod jobs;
 pub mod research_checkpoint;
+pub mod ticket_links;
 pub mod terminal_history;
 pub mod terminal_output;
 

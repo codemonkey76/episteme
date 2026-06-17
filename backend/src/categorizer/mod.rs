@@ -102,6 +102,8 @@ pub struct RunSummary {
     pub moved: usize,
     pub flagged: usize,
     pub skipped: usize,
+    /// Messages recognised as updates to a linked helpdesk ticket.
+    pub ticket_updates: usize,
     pub message: String,
 }
 
@@ -213,7 +215,7 @@ pub async fn run_mailbox(
         Some(account_id),
         &format!("{GRAPH}/{seg}/mailFolders/inbox/messages"),
         &[
-            ("$select", "id,subject,from,bodyPreview,receivedDateTime,isRead"),
+            ("$select", "id,subject,from,bodyPreview,receivedDateTime,isRead,conversationId"),
             ("$orderby", "receivedDateTime desc"),
             ("$top", &top),
         ],
@@ -238,15 +240,58 @@ pub async fn run_mailbox(
         st.processed_ids.iter().map(String::as_str).collect();
 
     // Keep only messages we haven't processed before.
-    let fresh: Vec<&Value> = messages
+    let all_fresh: Vec<&Value> = messages
         .iter()
         .filter(|m| m["id"].as_str().map(|id| !seen.contains(id)).unwrap_or(false))
         .collect();
 
-    let mut summary = RunSummary { scanned: fresh.len(), ..Default::default() };
+    // Pull out messages in a thread we've linked to a helpdesk ticket — these
+    // are handled as ticket updates (notify + draft a customer reply), never
+    // sorted away by the classifier.
+    let mut linked: Vec<(&Value, db::ticket_links::TicketLink)> = Vec::new();
+    let mut fresh: Vec<&Value> = Vec::new();
+    for m in all_fresh {
+        let conv = m["conversationId"].as_str().unwrap_or("");
+        let link = if conv.is_empty() {
+            None
+        } else {
+            db::ticket_links::find(&state.db, user_id, conv).await?
+        };
+        match link {
+            Some(l) => linked.push((m, l)),
+            None => fresh.push(m),
+        }
+    }
+
+    let mut summary = RunSummary { scanned: linked.len() + fresh.len(), ..Default::default() };
+
+    // Ticket-update threads first — independent of the sort classifier.
+    for (m, link) in &linked {
+        match handle_ticket_update(state, &provider, user_id, account_id, &seg, mailbox_opt, m, link).await {
+            Ok(()) => summary.ticket_updates += 1,
+            Err(e) => {
+                let subj = m["subject"].as_str().unwrap_or("(no subject)");
+                log_event(state, "error", format!("Ticket-update handling failed for \"{subj}\": {e}"));
+            }
+        }
+    }
 
     if fresh.is_empty() {
-        summary.message = "No new mail to categorize.".to_string();
+        // Still remember the linked ids we just handled so they aren't reprocessed.
+        for (m, _) in &linked {
+            if let Some(id) = m["id"].as_str() {
+                st.processed_ids.push_back(id.to_string());
+            }
+        }
+        while st.processed_ids.len() > MAX_PROCESSED {
+            st.processed_ids.pop_front();
+        }
+        db::settings::set(&state.db, &state_key(account_id, mailbox), &st).await?;
+        summary.message = if linked.is_empty() {
+            "No new mail to categorize.".to_string()
+        } else {
+            format!("Handled {} ticket update(s); no other new mail.", summary.ticket_updates)
+        };
         return Ok(summary);
     }
 
@@ -383,9 +428,9 @@ pub async fn run_mailbox(
         }
     }
 
-    // Mark every scanned message as processed (the model had its chance), and
-    // bound the remembered set.
-    for m in &fresh {
+    // Mark every scanned message as processed (the model had its chance, and
+    // ticket-update threads were handled above), and bound the remembered set.
+    for m in fresh.iter().chain(linked.iter().map(|(m, _)| m)) {
         if let Some(id) = m["id"].as_str() {
             st.processed_ids.push_back(id.to_string());
         }
@@ -396,10 +441,104 @@ pub async fn run_mailbox(
     db::settings::set(&state.db, &state_key(account_id, mailbox), &st).await?;
 
     summary.message = format!(
-        "Scanned {}, moved {}, flagged {}, left {}.",
-        summary.scanned, summary.moved, summary.flagged, summary.skipped
+        "Scanned {}, moved {}, flagged {}, ticket updates {}, left {}.",
+        summary.scanned, summary.moved, summary.flagged, summary.ticket_updates, summary.skipped
     );
     Ok(summary)
+}
+
+/// AI-extracted from a provider's reply: a one-line notification summary plus a
+/// customer-facing draft reply to post on the ticket.
+#[derive(Debug, Deserialize)]
+struct TicketUpdate {
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    reply: String,
+}
+
+/// Handle an inbox message that belongs to a thread linked to a helpdesk ticket:
+/// draft a customer-facing reply, flag the mail in place, and raise an
+/// actionable `ticket_update` notification carrying the draft.
+#[allow(clippy::too_many_arguments)]
+async fn handle_ticket_update(
+    state: &AppState,
+    provider: &ProviderConfig,
+    user_id: &str,
+    account_id: &str,
+    seg: &str,
+    mailbox_opt: Option<&str>,
+    msg: &Value,
+    link: &db::ticket_links::TicketLink,
+) -> Result<()> {
+    let id = msg["id"].as_str().ok_or_else(|| anyhow::anyhow!("message missing id"))?;
+    let subject = msg["subject"].as_str().unwrap_or("(no subject)");
+    let from = msg["from"]["emailAddress"]["address"].as_str().unwrap_or("");
+
+    // The list fetch only carried a preview; pull the full body for a faithful draft.
+    let full = graph::graph_get(
+        state,
+        user_id,
+        Some(account_id),
+        &format!("{GRAPH}/{seg}/messages/{id}"),
+        &[("$select", "body")],
+    )
+    .await?;
+    let body_raw = full["body"]["content"].as_str().unwrap_or("");
+    let body_text = if full["body"]["contentType"].as_str().map(|c| c.eq_ignore_ascii_case("html")).unwrap_or(false) {
+        graph::html_to_text(body_raw)
+    } else {
+        body_raw.to_string()
+    };
+    let body_text: String = body_text.chars().take(4000).collect();
+
+    let system = crate::prompts::get(&state.db, "ticket_update_reply").await;
+    let user_msg = format!("From: {from}\nSubject: {subject}\n\n{body_text}");
+    let (raw, used) = ModelRouter::complete_json_with_usage(
+        provider,
+        vec![
+            ChatMessage { role: "system".to_string(), content: Value::String(system) },
+            ChatMessage { role: "user".to_string(), content: Value::String(user_msg) },
+        ],
+    )
+    .await?;
+    db::usage::record(&state.db, user_id, provider, "ticket-update", used).await;
+
+    // Tolerate code fences / prose around the JSON object.
+    let start = raw.find('{').ok_or_else(|| anyhow::anyhow!("no JSON in model output"))?;
+    let end = raw.rfind('}').ok_or_else(|| anyhow::anyhow!("no JSON in model output"))?;
+    let parsed: TicketUpdate = serde_json::from_str(&raw[start..=end])
+        .map_err(|e| anyhow::anyhow!("ticket-update output unparseable: {e}"))?;
+    let summary_line = parsed.summary.trim();
+    let summary_line = if summary_line.is_empty() { subject } else { summary_line };
+
+    // It's actionable — flag in place rather than sorting it into a folder.
+    if let Err(e) = email::flag_message(state, user_id, Some(account_id), mailbox_opt, id).await {
+        log_event(state, "error", format!("Flag failed for ticket-update \"{subject}\": {e}"));
+    }
+
+    let ticket_id_str = link.ticket_id.to_string();
+    let data = serde_json::json!({
+        "ticket_id": link.ticket_id,
+        "integration": link.integration,
+        "draft_reply": parsed.reply,
+        "subject": subject,
+    })
+    .to_string();
+
+    crate::integrations::push::notify_action(
+        state,
+        user_id,
+        &format!("Ticket #{} update", link.ticket_id),
+        summary_line,
+        "ticket_update",
+        Some(crate::integrations::push::Link { kind: "helpdesk_ticket", id: &ticket_id_str }),
+        Some(&data),
+    )
+    .await;
+
+    log_event(state, "info", format!("Ticket #{} update: {summary_line}", link.ticket_id));
+    Ok(())
 }
 
 async fn resolve_provider(state: &AppState, name: &str) -> Result<ProviderConfig> {
