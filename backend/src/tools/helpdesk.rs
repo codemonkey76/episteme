@@ -95,7 +95,7 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_log_time",
-            "description": "Log work time against a helpdesk ticket, in 15-minute blocks (15–480 minutes).",
+            "description": "Log work time against a helpdesk ticket, in 15-minute blocks (15–480 minutes). Optionally set the ticket's status in the same request (e.g. log time and mark it resolved).",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -103,7 +103,8 @@ pub fn schemas() -> Vec<Value> {
                     "duration_minutes": { "type": "integer", "description": "Multiple of 15, between 15 and 480." },
                     "work_type": { "type": "string", "enum": ["remote", "on_site"] },
                     "description": { "type": "string", "description": "What the time was spent on." },
-                    "logged_at": { "type": "string", "description": "Date the work was done, YYYY-MM-DD (today or earlier). Defaults to today." }
+                    "logged_at": { "type": "string", "description": "Date the work was done, YYYY-MM-DD (today or earlier). Defaults to today." },
+                    "status": { "type": "string", "enum": ["open", "in_progress", "pending_user", "resolved", "closed"], "description": "Optional — move the ticket to this status in the same request. Omit to leave it unchanged." }
                 },
                 "required": ["ticket_id", "duration_minutes", "work_type", "description"]
             }
@@ -289,15 +290,23 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                     chrono::Utc::now().with_timezone(&tz).format("%Y-%m-%d").to_string()
                 }
             };
-            let body = json!({
+            let mut body = json!({
                 "duration_minutes": minutes,
                 "work_type": args["work_type"].as_str().ok_or_else(|| anyhow!("work_type is required"))?,
                 "description": args["description"].as_str().ok_or_else(|| anyhow!("description is required"))?,
                 "logged_at": logged_at,
             });
+            // Optionally move the ticket's status in the same request.
+            let status = args["status"].as_str().filter(|s| !s.is_empty());
+            if let Some(s) = status {
+                body["status"] = json!(s);
+            }
             let res = helpdesk::request(state, user_id, instance, Method::POST, &format!("/tickets/{id}/time-entries"), Some(&body)).await?;
             state
-                .log("helpdesk", "info", format!("Logged {minutes}m against ticket #{id}"))
+                .log("helpdesk", "info", match status {
+                    Some(s) => format!("Logged {minutes}m against ticket #{id}; status → {s}"),
+                    None => format!("Logged {minutes}m against ticket #{id}"),
+                })
                 .await;
             Ok(json!({ "time_entry": res["data"] }))
         }

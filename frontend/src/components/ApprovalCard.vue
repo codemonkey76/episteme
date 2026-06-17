@@ -33,6 +33,8 @@ type Field = {
     | 'client-select'
     | 'requester-select'
   options?: string[]
+  /** Friendly labels for select options (value → label); falls back to the value. */
+  optionLabels?: Record<string, string>
   step?: number
 }
 
@@ -49,6 +51,17 @@ const FIELD_SPECS: Record<string, Field[]> = {
     { key: 'duration_minutes', label: 'Minutes', kind: 'number', step: 15 },
     { key: 'work_type', label: 'Work type', kind: 'select', options: ['remote', 'on_site'] },
     { key: 'logged_at', label: 'Date', kind: 'date' },
+    {
+      key: 'status',
+      label: 'Set status',
+      kind: 'select',
+      options: ['', 'open', 'in_progress', 'pending_user', 'resolved', 'closed'],
+      optionLabels: {
+        '': '— No change —',
+        in_progress: 'In progress',
+        pending_user: 'Pending user',
+      },
+    },
     { key: 'description', label: 'Description', kind: 'textarea' },
   ],
   helpdesk_create_ticket: [
@@ -234,7 +247,7 @@ function onApprove() {
           v-model="edited[f.key] as string"
           class="text-[0.78rem] text-[var(--c-d0c8b0)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-1.5 font-[inherit] focus:outline-none focus:border-[var(--c-4a3a1a)]"
         >
-          <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
+          <option v-for="opt in f.options" :key="opt" :value="opt">{{ f.optionLabels?.[opt] ?? opt }}</option>
         </select>
 
         <input
