@@ -45,6 +45,11 @@ pub fn schemas() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "helpdesk_list_categories",
+            "description": "List the active ticket categories (id, name, and description). Call this before helpdesk_create_ticket and choose the category whose name/description best fits the issue, passing its id as category_id.",
+            "input_schema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "helpdesk_create_user",
             "description": "Create a new helpdesk customer contact (always role 'User') belonging to one or more clients. Resolve the client id(s) via helpdesk_list_clients first. Only name and email are required; mobile is optional (the user can add their own later). The new user is emailed an invite to set their password. Use this when asked to add a contact/person to a client.",
             "input_schema": {
@@ -65,12 +70,13 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "name": "helpdesk_create_ticket",
-            "description": "Create a new helpdesk ticket — in one call you also set its priority and, optionally, assign it to yourself. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Set assign_to_me=true to assign the new ticket to the connected agent (you) as it's created — no separate update call is needed. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
+            "description": "Create a new helpdesk ticket — in one call you also set its priority and, optionally, assign it to yourself. Resolve client_id and user_id (the requesting contact at that client) via helpdesk_list_clients first; ask the user if the contact is ambiguous. Call helpdesk_list_categories and set category_id to the category that best matches the issue. Set assign_to_me=true to assign the new ticket to the connected agent (you) as it's created — no separate update call is needed. Set silent=true for a silent ticket: the customer is never emailed about it (no creation, reply, or status email) — use for work tracked internally that shouldn't notify the customer.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "client_id": { "type": "integer" },
                     "user_id": { "type": "integer", "description": "The requesting contact's user id (from helpdesk_list_clients)." },
+                    "category_id": { "type": "integer", "description": "Best-fit category id from helpdesk_list_categories. Optional but encouraged." },
                     "subject": { "type": "string" },
                     "description": { "type": "string", "description": "Full description of the issue." },
                     "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
@@ -145,6 +151,7 @@ pub fn handles(name: &str) -> bool {
         "helpdesk_list_tickets"
             | "helpdesk_get_ticket"
             | "helpdesk_list_clients"
+            | "helpdesk_list_categories"
             | "helpdesk_create_user"
             | "helpdesk_create_ticket"
             | "helpdesk_reply_ticket"
@@ -200,6 +207,10 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             let res = helpdesk::request(state, user_id, instance, Method::GET, &path, None).await?;
             Ok(json!({ "clients": res["data"] }))
         }
+        "helpdesk_list_categories" => {
+            let res = helpdesk::request(state, user_id, instance, Method::GET, "/categories", None).await?;
+            Ok(json!({ "categories": res["data"] }))
+        }
         "helpdesk_create_user" => {
             let client_ids: Vec<i64> = args["client_ids"]
                 .as_array()
@@ -241,6 +252,9 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             // Assign to the connected agent on creation, so create + assign is a
             // single approved call. Resolve "me" via the same /user lookup the
             // update tool uses.
+            if let Some(category_id) = args["category_id"].as_i64() {
+                body["category_id"] = json!(category_id);
+            }
             if args["assign_to_me"].as_bool().unwrap_or(false) {
                 let me = helpdesk::request(state, user_id, instance, Method::GET, "/user", None).await?;
                 let agent_id = me["data"]["id"]

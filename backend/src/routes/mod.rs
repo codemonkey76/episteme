@@ -142,6 +142,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Helpdesk lookups + actions for the UI (client/requester pickers on
         // approvals; ticket reply from a ticket-update notification).
         .route("/api/helpdesk/clients", get(helpdesk::list_clients))
+        .route("/api/helpdesk/categories", get(helpdesk::list_categories))
         .route("/api/helpdesk/tickets/:id/reply", post(helpdesk::reply_ticket))
         .route("/api/documents", get(documents::list))
         .route(

@@ -479,6 +479,12 @@ export interface HelpdeskClient {
   users: HelpdeskUser[]
 }
 
+export interface HelpdeskCategory {
+  id: number
+  name: string
+  description: string
+}
+
 export const helpdesk = {
   // Clients (each with their contacts) for the create-ticket approval pickers.
   listClients: (opts?: { integration?: string; search?: string }) => {
@@ -487,6 +493,13 @@ export const helpdesk = {
     if (opts?.search) p.set('search', opts.search)
     const qs = p.toString()
     return json<{ clients: HelpdeskClient[] }>(`/helpdesk/clients${qs ? `?${qs}` : ''}`)
+  },
+  // Active ticket categories (id, name, description) for the create-ticket picker.
+  listCategories: (opts?: { integration?: string }) => {
+    const p = new URLSearchParams()
+    if (opts?.integration) p.set('integration', opts.integration)
+    const qs = p.toString()
+    return json<{ categories: HelpdeskCategory[] }>(`/helpdesk/categories${qs ? `?${qs}` : ''}`)
   },
   // Post a reply (or internal note) onto a ticket — used by ticket-update
   // notification actions.

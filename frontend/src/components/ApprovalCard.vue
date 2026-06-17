@@ -32,6 +32,8 @@ type Field = {
     // Helpdesk pickers, resolved to names via /helpdesk/clients (create ticket).
     | 'client-select'
     | 'requester-select'
+    // Ticket category, resolved via /helpdesk/categories (create ticket).
+    | 'category-select'
   options?: string[]
   /** Friendly labels for select options (value → label); falls back to the value. */
   optionLabels?: Record<string, string>
@@ -67,6 +69,7 @@ const FIELD_SPECS: Record<string, Field[]> = {
   helpdesk_create_ticket: [
     { key: 'client_id', label: 'Client', kind: 'client-select' },
     { key: 'user_id', label: 'Requester', kind: 'requester-select' },
+    { key: 'category_id', label: 'Category', kind: 'category-select' },
     { key: 'subject', label: 'Subject', kind: 'text' },
     { key: 'priority', label: 'Priority', kind: 'select', options: ['low', 'medium', 'high', 'critical'] },
     { key: 'description', label: 'Description', kind: 'textarea' },
@@ -134,11 +137,19 @@ const isCreateTicket = props.toolName === 'helpdesk_create_ticket'
 const clients = ref<api.HelpdeskClient[]>([])
 const clientsLoaded = ref(false)
 const clientsError = ref<string | null>(null)
+const categories = ref<api.HelpdeskCategory[]>([])
+
+// Normalize the category to a number or null so the dropdown (which offers a
+// "no category" option) always has a matching selection.
+if (isCreateTicket) {
+  edited.value.category_id =
+    typeof parsed.category_id === 'number' ? parsed.category_id : null
+}
 
 onMounted(async () => {
   if (!isCreateTicket) return
+  const integration = typeof parsed.integration === 'string' ? parsed.integration : undefined
   try {
-    const integration = typeof parsed.integration === 'string' ? parsed.integration : undefined
     const res = await api.helpdesk.listClients({ integration })
     clients.value = res.clients
     // If the draft's requester isn't a contact of the (resolved) client, snap it
@@ -149,7 +160,17 @@ onMounted(async () => {
   } finally {
     clientsLoaded.value = true
   }
+  // Categories are best-effort — a failure just leaves the picker empty.
+  try {
+    const res = await api.helpdesk.listCategories({ integration })
+    categories.value = res.categories
+  } catch { /* ignore — category stays optional */ }
 })
+
+function categoryName(id: unknown): string {
+  const c = categories.value.find((x) => x.id === Number(id))
+  return c ? c.name : id == null ? 'None' : String(id)
+}
 
 const selectedClient = computed(() =>
   clients.value.find((c) => c.id === Number(edited.value.client_id)),
@@ -233,6 +254,20 @@ function onApprove() {
           {{ f.kind === 'client-select' ? clientName(edited[f.key]) : requesterName(edited[f.key]) }}
           <span v-if="!clientsLoaded" class="text-[var(--c-8a7a50)]"> · loading…</span>
           <span v-else-if="clientsError" class="text-[var(--c-8a7a50)]"> · (couldn't load list)</span>
+        </span>
+
+        <!-- Helpdesk category picker — optional; "No category" leaves it unset. -->
+        <select
+          v-else-if="f.kind === 'category-select' && categories.length"
+          v-model="edited[f.key]"
+          class="text-[0.78rem] text-[var(--c-d0c8b0)] bg-[var(--c-12100a)] border border-[var(--c-2a2418)] rounded p-1.5 font-[inherit] focus:outline-none focus:border-[var(--c-4a3a1a)]"
+        >
+          <option :value="null">— No category —</option>
+          <option v-for="c in categories" :key="c.id" :value="c.id" :title="c.description">{{ c.name }}</option>
+        </select>
+
+        <span v-else-if="f.kind === 'category-select'" class="text-[0.78rem] text-[var(--c-a09070)]">
+          {{ categoryName(edited[f.key]) }}
         </span>
 
         <textarea

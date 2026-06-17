@@ -81,6 +81,49 @@ pub async fn list_clients(
     Ok(Json(json!({ "clients": clients })))
 }
 
+#[derive(Deserialize)]
+pub struct CategoriesQuery {
+    #[serde(default)]
+    integration: Option<String>,
+}
+
+// GET /api/helpdesk/categories — active ticket categories (id, name,
+// description) for the create-ticket approval card's category picker.
+pub async fn list_categories(
+    State(state): State<Arc<AppState>>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Query(q): Query<CategoriesQuery>,
+) -> AppResult<Json<Value>> {
+    let res = crate::integrations::helpdesk::request(
+        &state,
+        user.id.as_str(),
+        q.integration.as_deref(),
+        reqwest::Method::GET,
+        "/categories",
+        None,
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    let categories: Vec<Value> = res["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    let id = c["id"].as_i64()?;
+                    Some(json!({
+                        "id": id,
+                        "name": c["name"].as_str().unwrap_or(""),
+                        "description": c["description"].as_str().unwrap_or(""),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(json!({ "categories": categories })))
+}
+
 fn default_reply_type() -> String {
     "reply".to_string()
 }
