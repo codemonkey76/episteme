@@ -13,8 +13,13 @@ use tokio::sync::mpsc;
 
 /// Fixed Ollama context window (tokens), pinned on every request so the model
 /// loads once instead of reloading whenever the prompt size would nudge a
-/// dynamic num_ctx. Matches this deployment's 128K working ceiling.
-const OLLAMA_NUM_CTX: usize = 131_072;
+/// dynamic num_ctx (the reload is what produced empty/timeout replies). Set to
+/// the largest window this GPU can actually hold for the 27B: measured, 32K
+/// loads fully in VRAM (~19 GB, no CPU spill) and answers in ~7s, while 64K/128K
+/// overflow the KV cache and stall indefinitely. Raising this needs KV-cache
+/// quantization on the Ollama server (OLLAMA_FLASH_ATTENTION=1 +
+/// OLLAMA_KV_CACHE_TYPE=q8_0/q4_0) or more VRAM.
+const OLLAMA_NUM_CTX: usize = 32_768;
 /// Grace for Ollama's first response byte — covers a cold model load plus
 /// prompt-eval of a large (all-tools) prompt before any token streams.
 const OLLAMA_FIRST_BYTE_GRACE: std::time::Duration = std::time::Duration::from_secs(300);
