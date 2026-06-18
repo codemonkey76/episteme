@@ -11,6 +11,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+/// Fixed Ollama context window (tokens), pinned on every request so the model
+/// loads once instead of reloading whenever the prompt size would nudge a
+/// dynamic num_ctx. Matches this deployment's 128K working ceiling.
+const OLLAMA_NUM_CTX: usize = 131_072;
+/// Grace for Ollama's first response byte — covers a cold model load plus
+/// prompt-eval of a large (all-tools) prompt before any token streams.
+const OLLAMA_FIRST_BYTE_GRACE: std::time::Duration = std::time::Duration::from_secs(300);
+/// Idle-gap budget *between* streamed bytes once output is flowing; a longer
+/// silence means a wedged Ollama or a dead socket.
+const OLLAMA_IDLE_GAP: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
@@ -283,31 +294,32 @@ async fn stream_ollama(
     if !ollama_tools.is_empty() {
         body["tools"] = serde_json::json!(ollama_tools);
     }
-    // Ollama defaults num_ctx to 4096 and silently truncates bigger prompts
-    // from the FRONT — the system prompt (instructions, JSON schemas) vanishes
-    // first. Raise the window to fit when the prompt is large; small requests
-    // keep the default so they don't pay the extra VRAM.
-    if let Some(num_ctx) = ollama_num_ctx(body.to_string().len(), think) {
-        // Preserve any options already set above (none today, but keep this
-        // robust to future additions) rather than clobbering the object.
-        body["options"]["num_ctx"] = serde_json::json!(num_ctx);
-    }
+    // Pin the context window to a fixed size on every request. Ollama keys the
+    // loaded model on its num_ctx, so a *changing* num_ctx (the old per-prompt
+    // sizing) forced a full model + KV-cache reload between turns — on a 27B
+    // that reload routinely blows past the first-byte timeout, surfacing as
+    // "connection error" and an empty reply. A constant window means Ollama
+    // loads once and every later turn reuses it. 128K is the model's working
+    // ceiling here; the trade-off is the KV cache is allocated up front.
+    body["options"]["num_ctx"] = serde_json::json!(OLLAMA_NUM_CTX);
 
-    // A read (not total) timeout: streaming replies can run for minutes on a
-    // slow local model, but a genuinely wedged Ollama (or a dropped socket
-    // that never errors) stops sending bytes — without this the request, and
-    // any job awaiting it, hangs forever. read_timeout fires only on an idle
-    // gap between bytes, so legitimate slow streams are unaffected.
+    // Two-tier timeouts (applied per-read below, not as a single client
+    // read-timeout): the FIRST byte may wait through a cold model load plus
+    // prompt-eval of a large all-tools prompt, so it gets a generous grace;
+    // once tokens are flowing, a short idle gap instead signals a wedged Ollama
+    // or a dead socket. Connect stays quick — the server is local.
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(15))
-        .read_timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| anyhow::anyhow!("Ollama client build error: {e}"))?;
-    let response = client
-        .post(&url)
-        .json(&body)
-        .send()
+    let response = tokio::time::timeout(OLLAMA_FIRST_BYTE_GRACE, client.post(&url).json(&body).send())
         .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Ollama did not respond within {}s (model load/prompt-eval)",
+                OLLAMA_FIRST_BYTE_GRACE.as_secs()
+            )
+        })?
         .map_err(|e| anyhow::anyhow!("Ollama connection error: {e}"))?;
 
     if !response.status().is_success() {
@@ -321,8 +333,22 @@ async fn stream_ollama(
     // Tool calls may arrive across chunks; accumulate and emit on the done chunk.
     let mut pending_tool_calls: Vec<genai::chat::ToolCall> = Vec::new();
 
-    while let Some(chunk) = byte_stream.next().await {
-        buf.push_str(&String::from_utf8_lossy(&chunk?));
+    let mut first_byte = true;
+    loop {
+        // The first chunk may wait through a cold model load + prompt-eval; once
+        // tokens flow, a short idle gap instead means a wedged Ollama.
+        let budget = if first_byte { OLLAMA_FIRST_BYTE_GRACE } else { OLLAMA_IDLE_GAP };
+        let chunk = match tokio::time::timeout(budget, byte_stream.next()).await {
+            Ok(Some(chunk)) => chunk?,
+            Ok(None) => break, // stream finished
+            Err(_) => anyhow::bail!(
+                "Ollama stalled — no {} within {}s",
+                if first_byte { "response (model load)" } else { "further output" },
+                budget.as_secs()
+            ),
+        };
+        first_byte = false;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(newline) = buf.find('\n') {
             let line = buf[..newline].trim().to_string();
@@ -557,54 +583,3 @@ fn schemas_to_tools(schemas: Vec<Value>) -> Vec<Tool> {
         .collect()
 }
 
-/// Context window override for an Ollama request, from the serialized request
-/// size. None = the prompt fits Ollama's 4096 default; otherwise the needed
-/// window rounded up in 4k steps, capped at `CAP` (Ollama clamps to the model's
-/// own maximum beyond that). Bytes/3 deliberately over-estimates tokens
-/// (English runs ~4 bytes/token) so truncation stays the rare case.
-///
-/// `think` reserves far more reply headroom: a reasoning model emits a hidden
-/// thinking trace BEFORE any visible content, often several thousand tokens. At
-/// the old 2k headroom a big prompt left no room for the trace + answer, so the
-/// window filled mid-think and the reply came back empty (done_reason=length) —
-/// a silent, blank turn. 12k headroom keeps the visible answer inside the window.
-///
-/// CAP is 128k: the hybrid-SSM Qwen3.x models advertise 256k and grow KV memory
-/// only gently with context, so 128k loads in ~26 GB (fits a 24 GB GPU with a
-/// small CPU spill). The window is still sized to the prompt — small chats stay
-/// cheap; only a genuinely large transcript asks for the full 128k.
-fn ollama_num_ctx(request_bytes: usize, think: bool) -> Option<usize> {
-    const DEFAULT: usize = 4096;
-    const CAP: usize = 131_072;
-    let reply_headroom = if think { 12_288 } else { 2_048 };
-    let needed = request_bytes / 3 + reply_headroom;
-    (needed > DEFAULT).then(|| needed.next_multiple_of(4096).min(CAP))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ollama_num_ctx_scales_with_prompt_size() {
-        // Small prompts keep Ollama's default window (no options sent).
-        assert_eq!(ollama_num_ctx(1_000, false), None);
-        assert_eq!(ollama_num_ctx(6_000, false), None);
-        // A deep-research synthesis prompt (~30k bytes) needs ~12k tokens.
-        assert_eq!(ollama_num_ctx(30_000, false), Some(12_288));
-        // Huge prompts cap at 128k.
-        assert_eq!(ollama_num_ctx(500_000, false), Some(131_072));
-    }
-
-    #[test]
-    fn ollama_num_ctx_reserves_headroom_for_thinking() {
-        // Thinking turns reserve 12k tokens for the (hidden) trace + answer, so
-        // the same prompt asks for a much larger window than a non-thinking one.
-        assert_eq!(ollama_num_ctx(30_000, true), Some(24_576));
-        // The 12k headroom alone clears the 4096 default, so even a tiny prompt
-        // now gets an explicit window (333 + 12288 -> 16384).
-        assert_eq!(ollama_num_ctx(1_000, true), Some(16_384));
-        // Big prompts cap at 128k just the same.
-        assert_eq!(ollama_num_ctx(500_000, true), Some(131_072));
-    }
-}

@@ -250,6 +250,7 @@ mod tests {
             provider: String::new(),
             instructions: "x".into(),
             enabled,
+            quiet: false,
             last_run: last_run.into(),
         }
     }
