@@ -90,15 +90,20 @@ pub async fn run(state: Arc<AppState>, job: Job) {
             state
                 .log("jobs", "info", format!("'{}' finished: {}", job.name, clip(&summary, 120)))
                 .await;
-            push::notify_linked(
-                &state,
-                &job.user_id,
-                &job.name,
-                &summary,
-                "agent",
-                Some(push::Link { kind: "session", id: &job.session_id }),
-            )
-            .await;
+            // A "quiet" job (e.g. a scheduled monitor) suppresses this automatic
+            // completion notification — it only reaches the user if the agent
+            // chose to call notify_user during the run.
+            if !is_quiet(&job) {
+                push::notify_linked(
+                    &state,
+                    &job.user_id,
+                    &job.name,
+                    &summary,
+                    "agent",
+                    Some(push::Link { kind: "session", id: &job.session_id }),
+                )
+                .await;
+            }
         }
         Ok(TurnOutcome::Suspended { pending }) => {
             let tool = db::pending_actions::list_pending(&state.db, &job.session_id)
@@ -188,4 +193,14 @@ pub async fn session_summary(state: &AppState, session_id: &str) -> String {
 
 fn clip(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
+}
+
+/// Whether the job opted out of the automatic completion notification (its meta
+/// carries `{"quiet": true}`, set for quiet scheduled agents).
+fn is_quiet(job: &Job) -> bool {
+    job.meta
+        .as_deref()
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .and_then(|v| v["quiet"].as_bool())
+        .unwrap_or(false)
 }

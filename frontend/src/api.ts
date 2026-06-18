@@ -764,6 +764,8 @@ export interface ScheduledAgent {
   provider: string
   instructions: string
   enabled: boolean
+  /** Suppress the automatic completion notification — only ping via notify_user. */
+  quiet: boolean
   last_run: string
 }
 

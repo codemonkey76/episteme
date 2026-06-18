@@ -34,6 +34,11 @@ pub struct ScheduledAgent {
     /// The prompt the agent runs with.
     pub instructions: String,
     pub enabled: bool,
+    /// When true the run is "quiet": its automatic completion notification is
+    /// suppressed, so the agent only reaches the user if it calls `notify_user`.
+    /// Ideal for monitors ("check health; ping me only if something's wrong").
+    #[serde(default)]
+    pub quiet: bool,
     /// Local date "YYYY-MM-DD" of the last fire — guards double runs.
     #[serde(default)]
     pub last_run: String,
@@ -215,8 +220,12 @@ pub async fn run_now(state: &Arc<AppState>, user_id: &str, agent: &ScheduledAgen
 
     state.log("scheduler", "info", format!("Running '{}'", agent.name)).await;
 
-    let job = crate::jobs::start(state, user_id, &session.id, &agent.provider, "scheduled", &agent.name, None)
-        .await?;
+    // Quiet agents carry a meta flag so the job runner skips the automatic
+    // completion notification (they speak up only via notify_user).
+    let meta = agent.quiet.then(|| serde_json::json!({ "quiet": true }).to_string());
+    let job =
+        crate::jobs::start(state, user_id, &session.id, &agent.provider, "scheduled", &agent.name, meta.as_deref())
+            .await?;
     crate::jobs::run(Arc::clone(state), job).await;
 
     Ok(session.id)

@@ -331,6 +331,7 @@ function addAgent() {
     provider: '',
     instructions: '',
     enabled: true,
+    quiet: false,
     last_run: '',
   })
 }
@@ -1464,6 +1465,9 @@ async function logout() {
             <input v-model="a.time" class="w-[4.5rem] bg-surface text-fg border border-raised rounded px-2 py-1 text-[0.8125rem] font-[inherit] outline-none text-center focus:border-[var(--c-3a6adf)]" placeholder="07:00" />
             <label class="flex items-center gap-1.5 text-[0.75rem] text-[var(--c-808080)] cursor-pointer select-none">
               <input type="checkbox" v-model="a.enabled" class="cursor-pointer" /> enabled
+            </label>
+            <label class="flex items-center gap-1.5 text-[0.75rem] text-[var(--c-808080)] cursor-pointer select-none" title="Don't send the usual ‘run finished’ notification — only notify if the agent itself flags something (via notify_user). Ideal for health/monitor checks.">
+              <input type="checkbox" v-model="a.quiet" class="cursor-pointer" /> quiet
             </label>
           </div>
           <div class="flex items-center gap-1">
