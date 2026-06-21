@@ -9,11 +9,24 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 use crate::model_router::ProviderConfig;
 
 const DEFAULT_MODEL: &str = "nomic-embed-text";
 const DEFAULT_OLLAMA: &str = "http://localhost:11434";
+
+/// Global cap on concurrent embed requests in flight to Ollama. The embed model
+/// shares one GPU with the (much larger) chat model, so a burst of parallel
+/// requests — email indexing + memory backfill firing at once — used to flood
+/// Ollama's scheduler queue and get rejected en masse with
+/// "503 server busy, maximum pending requests exceeded". Serialising to a small
+/// number keeps us well under that ceiling; embeddings are best-effort
+/// background work, so trickling them through is fine.
+static EMBED_GATE: Semaphore = Semaphore::const_new(2);
+
+/// How many times to retry a transient "server busy" 503 before giving up.
+const BUSY_RETRIES: u32 = 5;
 
 /// The embedding model, overridable via the `embedding_model` settings key.
 async fn model(pool: &SqlitePool) -> String {
@@ -46,21 +59,41 @@ async fn ollama_base(pool: &SqlitePool) -> String {
 pub async fn embed(pool: &SqlitePool, client: &reqwest::Client, text: &str) -> Result<Vec<f32>> {
     let base = ollama_base(pool).await;
     let model = model(pool).await;
-    let response = client
-        .post(format!("{base}/api/embeddings"))
-        .json(&serde_json::json!({ "model": model, "prompt": text }))
-        .send()
-        .await
-        .map_err(|e| anyhow!("embedding request failed: {e}"))?;
 
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
+    // Hold a permit for the whole request so total in-flight embeds stay capped
+    // (see EMBED_GATE). const_new() never closes, so acquire can't fail.
+    let _permit = EMBED_GATE.acquire().await.expect("embed semaphore");
+
+    // Ollama returns a 503 "server busy" when its scheduler queue is saturated;
+    // that's transient, so back off and retry rather than dropping the work.
+    let mut attempt = 0;
+    let body: Value = loop {
+        let response = client
+            .post(format!("{base}/api/embeddings"))
+            .json(&serde_json::json!({ "model": model, "prompt": text }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("embedding request failed: {e}"))?;
+
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            break body;
+        }
+
         let msg = body["error"].as_str().unwrap_or("unknown error");
+        let busy = status == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+        if busy && attempt < BUSY_RETRIES {
+            // Exponential backoff: 250ms, 500ms, 1s, 2s, 4s.
+            let delay = std::time::Duration::from_millis(250 << attempt);
+            tokio::time::sleep(delay).await;
+            attempt += 1;
+            continue;
+        }
         return Err(anyhow!(
             "embedding failed: {status} {msg} (is `{model}` pulled on the Ollama host?)"
         ));
-    }
+    };
 
     let vec: Vec<f32> = body["embedding"]
         .as_array()

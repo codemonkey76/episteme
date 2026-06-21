@@ -114,7 +114,16 @@ pub async fn run_turn(
     // Token counts summed across all model round-trips in this turn.
     let mut turn_usage = crate::model_router::TokenUsage::default();
 
-    // Cap tool round-trips so a misbehaving model can't loop forever.
+    // Cap tool round-trips so a misbehaving model can't loop forever. The
+    // default (16) comfortably covers multi-step tool chains — e.g. a helpdesk
+    // ticket that fans out across several email_search/read + list lookups
+    // before the create — while still bounding a runaway. Override with
+    // AGENT_MAX_ITERATIONS for heavier workflows.
+    let max_iterations: u32 = std::env::var("AGENT_MAX_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(16);
     let mut iterations = 0;
 
     // Reasoning is on by default (reasoning models won't act otherwise — see
@@ -131,7 +140,7 @@ pub async fn run_turn(
 
     loop {
         iterations += 1;
-        if iterations > 6 {
+        if iterations > max_iterations {
             // All text so far was persisted per-iteration (alongside its tool
             // calls), so there's nothing left to save at the cap.
             tracing::warn!("agent turn hit iteration cap");
