@@ -207,6 +207,50 @@ class _EmailTabState extends State<EmailTab> {
                         ),
                       ),
                       const Spacer(),
+                      // Account switcher: hop between connected Microsoft 365
+                      // connections. Hidden unless there's more than one.
+                      if (store.accounts.length > 1)
+                        PopupMenuButton<String>(
+                          tooltip: 'Switch account',
+                          color: Palette.surface,
+                          onSelected: store.switchAccount,
+                          itemBuilder: (_) => [
+                            for (final a in store.accounts)
+                              PopupMenuItem(
+                                value: a.id,
+                                child: Text(a.label,
+                                    style: TextStyle(
+                                        fontSize: 13.5,
+                                        color: store.accountId == a.id
+                                            ? Palette.accent
+                                            : Palette.fg)),
+                              ),
+                          ],
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.account_circle_outlined,
+                                    size: 18, color: Palette.muted),
+                                const SizedBox(width: 4),
+                                ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 96),
+                                  child: Text(
+                                    store.currentAccountLabel,
+                                    overflow: TextOverflow.ellipsis,
+                                    softWrap: false,
+                                    style: const TextStyle(
+                                        color: Palette.fg, fontSize: 12.5),
+                                  ),
+                                ),
+                                const Icon(Icons.arrow_drop_down,
+                                    size: 18, color: Palette.faint),
+                              ],
+                            ),
+                          ),
+                        ),
                       // Mailbox switcher: own + any shared mailboxes added in
                       // web Settings. Hidden when there are none.
                       if (store.sharedMailboxes.isNotEmpty)

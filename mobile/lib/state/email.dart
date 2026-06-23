@@ -33,15 +33,36 @@ class EmailStore extends ChangeNotifier {
   List<SharedMailbox> sharedMailboxes = [];
   String currentMailbox = '';
 
-  /// `?mailbox=` suffix for path-built requests (POST/PATCH helpers have no
-  /// query parameter argument).
-  String get _mbq => currentMailbox.isEmpty
-      ? ''
-      : '?mailbox=${Uri.encodeQueryComponent(currentMailbox)}';
+  /// Connected Microsoft 365 instances the user can read from. Each call is
+  /// scoped by `account=<id>` (which connection) and, within it, `mailbox=`
+  /// (a shared mailbox; '' = that account's own mailbox).
+  List<EmailAccount> accounts = [];
+  String accountId = '';
+
+  /// Display label for the active account (its name, or email as a fallback).
+  String get currentAccountLabel => accounts
+      .firstWhere((a) => a.id == accountId,
+          orElse: () => EmailAccount(id: '', name: '', email: selfEmail))
+      .label;
+
+  /// account + mailbox selectors, shared by every Graph-backed call. GET
+  /// requests pass them as query params; POST/PATCH bodies as fields; the
+  /// path-built helpers append them as a query string.
+  Map<String, String> get _sel => {
+        if (accountId.isNotEmpty) 'account': accountId,
+        if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+      };
 
   /// Query-map entry for GET requests.
-  Map<String, String> get _mbParams =>
-      currentMailbox.isEmpty ? const {} : {'mailbox': currentMailbox};
+  Map<String, String> get _mbParams => _sel;
+
+  /// `?…` suffix for path-built requests (POST/PATCH/raw helpers have no
+  /// query-parameter argument).
+  String get _mbq {
+    final p = _sel;
+    if (p.isEmpty) return '';
+    return '?${p.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
+  }
 
   Future<void> switchMailbox(String address) async {
     if (address == currentMailbox) return;
@@ -55,6 +76,47 @@ class EmailStore extends ChangeNotifier {
     await loadFolders();
   }
 
+  /// Switch to another connected Microsoft 365 account. Resets to its own
+  /// mailbox and reloads its shared mailboxes, signatures, and folders.
+  Future<void> switchAccount(String id) async {
+    if (id == accountId || id.isEmpty) return;
+    accountId = id;
+    selfEmail = accounts
+            .firstWhere((a) => a.id == id,
+                orElse: () => EmailAccount(id: id, name: '', email: ''))
+            .email
+            .toLowerCase();
+    currentMailbox = '';
+    folders = [];
+    folder = null;
+    messages = [];
+    sharedMailboxes = [];
+    exhausted = false;
+    error = null;
+    notifyListeners();
+    await _loadSignatures();
+    await _loadShared();
+    await loadFolders();
+  }
+
+  Future<void> _loadSignatures() async {
+    try {
+      final sigs = await _api.getJson('/email/signatures');
+      signatures = sigs.map((k, v) => MapEntry(k, (v as String?) ?? ''));
+    } catch (_) {}
+  }
+
+  Future<void> _loadShared() async {
+    try {
+      final res = await _api.getJson('/integrations/$accountId/shared');
+      sharedMailboxes = (res['mailboxes'] as List)
+          .map((m) => SharedMailbox.fromJson(m as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      sharedMailboxes = [];
+    }
+  }
+
   List<Suggestion> suggestions = [];
   Timer? _suggestionTimer;
 
@@ -65,9 +127,27 @@ class EmailStore extends ChangeNotifier {
   Future<void> init() async {
     if (checked) return;
     try {
-      final cfg = await _api.getJson('/integrations/email/config');
-      connected = cfg['connected'] == true;
-      selfEmail = (cfg['connected_email'] as String?)?.toLowerCase() ?? '';
+      final res = await _api.getJson('/integrations');
+      final msft = (res['integrations'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .where((i) => i['kind'] == 'microsoft')
+          .toList();
+      // Only connected instances are usable; let the user switch between them.
+      accounts = msft
+          .where((i) => i['connected'] == true)
+          .map(EmailAccount.fromJson)
+          .toList();
+      connected = accounts.isNotEmpty;
+      if (connected) {
+        // Read from the default instance when it's connected, else the first.
+        final def = msft.firstWhere(
+          (i) => i['is_default'] == true && i['connected'] == true,
+          orElse: () => <String, dynamic>{},
+        );
+        final chosen = def.isNotEmpty ? EmailAccount.fromJson(def) : accounts.first;
+        accountId = chosen.id;
+        selfEmail = chosen.email.toLowerCase();
+      }
     } catch (_) {
       connected = false;
     }
@@ -82,16 +162,8 @@ class EmailStore extends ChangeNotifier {
           .toList();
       if (providers.isNotEmpty) aiProvider = providers.first.name;
     } catch (_) {}
-    try {
-      final sigs = await _api.getJson('/email/signatures');
-      signatures = sigs.map((k, v) => MapEntry(k, (v as String?) ?? ''));
-    } catch (_) {}
-    try {
-      final res = await _api.getJson('/integrations/email/shared');
-      sharedMailboxes = (res['mailboxes'] as List)
-          .map((m) => SharedMailbox.fromJson(m as Map<String, dynamic>))
-          .toList();
-    } catch (_) {}
+    await _loadSignatures();
+    await _loadShared();
     await loadFolders();
     await loadSuggestions();
   }
@@ -225,7 +297,7 @@ class EmailStore extends ChangeNotifier {
   Future<int> deleteMessages(List<String> ids) async {
     final res = await _api.postJson('/email/messages/delete', {
       'ids': ids,
-      if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+      ..._sel,
     });
     messages.removeWhere((m) => ids.contains(m.id));
     notifyListeners();
@@ -237,18 +309,18 @@ class EmailStore extends ChangeNotifier {
   Future<Map<String, dynamic>> createTicket(String messageId) =>
       _api.postJson('/email/messages/$messageId/ticket', {
         'provider': aiProvider,
-        if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+        ..._sel,
       });
 
   /// Stream a short AI summary of the email (token/error/done events).
   Stream<Map<String, dynamic>> streamSummary(String messageId) =>
       _api.streamSse('/email/messages/$messageId/summarize', {
         'provider': aiProvider,
-        if (currentMailbox.isNotEmpty) 'mailbox': currentMailbox,
+        ..._sel,
       });
 
   Future<void> send(Map<String, dynamic> payload) async {
-    if (currentMailbox.isNotEmpty) payload['mailbox'] = currentMailbox;
+    payload.addAll(_sel);
     await _api.postJson('/email/send', payload);
     _pollSuggestions();
     // Replied mail gets filed server-side a moment later.

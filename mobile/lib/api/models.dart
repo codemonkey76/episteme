@@ -65,6 +65,23 @@ class SharedMailbox {
       );
 }
 
+/// A connected Microsoft 365 instance. `id` is the integration id threaded as
+/// `account=` into every Graph-backed call; `email` is its own mailbox address.
+class EmailAccount {
+  EmailAccount({required this.id, required this.name, required this.email});
+  final String id;
+  final String name;
+  final String email;
+
+  String get label => name.isNotEmpty ? name : email;
+
+  factory EmailAccount.fromJson(Map<String, dynamic> j) => EmailAccount(
+        id: j['id'] as String,
+        name: (j['name'] as String?) ?? '',
+        email: (j['account'] as String?) ?? '',
+      );
+}
+
 class Note {
   Note({
     required this.id,
