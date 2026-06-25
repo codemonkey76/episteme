@@ -177,19 +177,28 @@ class ChatMessage {
     return const [];
   }
 
-  /// For role `tool_call`: tool names — live chips hold a plain name, DB rows
-  /// hold a JSON array of call objects.
-  List<String> get toolNames {
+  /// For role `tool_call`: one chip per call. Both live chips and DB rows now
+  /// hold a JSON array of call objects ({fn_name, detail?, fn_arguments?}); a
+  /// bare legacy string falls back to a single name-only chip.
+  List<ToolChip> get toolChips {
+    List<dynamic> calls;
     try {
       final v = jsonDecode(displayText);
-      if (v is List) {
-        return v
-            .map((c) => (c is Map ? c['fn_name'] : null) as String? ?? '')
-            .where((n) => n.isNotEmpty)
-            .toList();
-      }
-    } catch (_) {}
-    return [content];
+      calls = v is List ? v : [{'fn_name': content}];
+    } catch (_) {
+      calls = [{'fn_name': content}];
+    }
+    return calls
+        .map((c) {
+          final m = c is Map ? c : const {};
+          final name = (m['fn_name'] as String?) ?? '';
+          final detail = (m['detail'] is String && (m['detail'] as String).isNotEmpty)
+              ? m['detail'] as String
+              : _toolDetail(name, m['fn_arguments']);
+          return ToolChip(name, detail);
+        })
+        .where((c) => c.name.isNotEmpty)
+        .toList();
   }
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -197,6 +206,41 @@ class ChatMessage {
         role: j['role'] as String,
         content: j['content'] as String,
       );
+}
+
+/// One tool-call chip: the tool name plus a short, human-readable summary of
+/// what it's doing (empty when none can be derived).
+class ToolChip {
+  ToolChip(this.name, this.detail);
+  final String name;
+  final String detail;
+}
+
+/// Reconstruct a chip's detail from a persisted call's stored arguments — the
+/// live-stream detail (incl. email_read's resolved subject) isn't persisted,
+/// so on reload we show what the args allow.
+String _toolDetail(String name, dynamic args) {
+  if (args is! Map) return '';
+  String s(String k) => args[k] is String ? (args[k] as String).trim() : '';
+  switch (name) {
+    case 'email_search':
+      return s('query');
+    case 'email_list':
+      final folder = s('folder');
+      return folder.isEmpty ? 'Inbox' : folder;
+    case 'email_draft':
+      final kind = s('kind').isEmpty ? 'reply' : s('kind');
+      final subject = s('subject');
+      return subject.isEmpty ? kind : '$kind: $subject';
+    // email_read's args hold only an opaque message_id; its subject only
+    // surfaces in the live stream, so there's nothing to show on reload.
+    default:
+      for (final k in const ['query', 'title', 'name', 'summary']) {
+        final v = s(k);
+        if (v.isNotEmpty) return v;
+      }
+      return '';
+  }
 }
 
 class PendingApproval {

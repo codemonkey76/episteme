@@ -142,7 +142,12 @@ class ChatStore extends ChangeNotifier {
               messages.add(ChatMessage(
                 id: _nextId(),
                 role: 'tool_call',
-                content: event['name'] as String? ?? '',
+                // Same shape as a persisted tool_call row (a JSON array of call
+                // objects), carrying the backend's detail (e.g. the email
+                // subject email_read resolved) so the chip can show it.
+                content: jsonEncode([
+                  {'fn_name': event['name'] ?? '', 'detail': event['detail']},
+                ]),
               ));
               current = null;
             case 'awaiting_approval':

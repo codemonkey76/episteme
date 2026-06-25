@@ -15,8 +15,11 @@ pub enum AgentEvent {
     /// A reasoning model is producing its (hidden) thinking trace — drives the
     /// "thinking…" indicator so a long pre-answer pause doesn't look like a stall.
     Thinking,
-    /// A native tool is about to run — surfaced in the chat UI.
-    ToolCall { name: String },
+    /// A native tool is about to run — surfaced in the chat UI. `detail` is a
+    /// short, human-readable summary of what it's doing (the search query, the
+    /// subject of the email being read, …) so a wall of identical "Using
+    /// email_search…" chips becomes legible.
+    ToolCall { name: String, detail: Option<String> },
     /// The session was auto-named from its first exchange; update the UI live.
     Title(String),
     Done,
@@ -113,6 +116,12 @@ pub async fn run_turn(
     let mut assistant_text = String::new();
     // Token counts summed across all model round-trips in this turn.
     let mut turn_usage = crate::model_router::TokenUsage::default();
+
+    // Maps an email message_id → its subject, collected from search/list/read
+    // results across this turn. Lets an `email_read` chip show the subject of
+    // the mail it's opening, since its args carry only the opaque Graph id.
+    let mut email_subjects: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     // Cap tool round-trips so a misbehaving model can't loop forever. The
     // default (16) comfortably covers multi-step tool chains — e.g. a helpdesk
@@ -409,8 +418,12 @@ pub async fn run_turn(
                         }
                     }
 
-                    // Tell the UI a tool is running.
-                    let _ = tx.send(AgentEvent::ToolCall { name: call.fn_name.clone() }).await;
+                    // Tell the UI a tool is running, with a human-readable
+                    // summary of what it's doing where we can derive one.
+                    let detail = tool_call_detail(&call.fn_name, &effective_args, &email_subjects);
+                    let _ = tx
+                        .send(AgentEvent::ToolCall { name: call.fn_name.clone(), detail })
+                        .await;
 
                     let result = execute_tool(&state, &user_id, &call.fn_name, effective_args.clone())
                         .await;
@@ -420,6 +433,9 @@ pub async fn run_turn(
                             state
                                 .log("tools", "info", format!("{} {}", call.fn_name, effective_args))
                                 .await;
+                            // Remember any (id, subject) pairs so a later
+                            // email_read chip can name the mail it opens.
+                            cache_email_subjects(&call.fn_name, &v, &mut email_subjects);
                             v.to_string()
                         }
                         Err(e) => {
@@ -566,6 +582,74 @@ fn looks_like_cliffhanger(text: &str) -> bool {
 /// Execute one tool call — native registry or MCP — returning the raw result.
 /// Shared by the agent loop and the approval-resume path, so a parked call
 /// executes exactly the way a live one would have.
+/// A short, human-readable summary of a tool call's intent, drawn from its
+/// arguments (and, for `email_read`, the subject cache) — surfaced as the chip
+/// label's detail so "Using email_search…" becomes "Searching mail: vonex
+/// outage". Returns `None` when there's nothing meaningful to show.
+fn tool_call_detail(
+    name: &str,
+    args: &Value,
+    email_subjects: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let s = |k: &str| {
+        args.get(k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    let detail = match name {
+        "email_search" => s("query")?.to_string(),
+        "email_list" => s("folder").unwrap_or("Inbox").to_string(),
+        "email_read" => {
+            let id = args.get("message_id").and_then(Value::as_str).unwrap_or_default();
+            email_subjects.get(id).cloned()?
+        }
+        "email_draft" => match (s("kind").unwrap_or("reply"), s("subject")) {
+            (kind, Some(subject)) => format!("{kind}: {subject}"),
+            (kind, None) => kind.to_string(),
+        },
+        // Generic best-effort for the common "title/query/name" arg shapes
+        // (notes, tasks, calendar events, research, …).
+        _ => s("query")
+            .or_else(|| s("title"))
+            .or_else(|| s("name"))
+            .or_else(|| s("summary"))?
+            .to_string(),
+    };
+    // Keep chips to one line; the model can produce long queries.
+    let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(match detail.char_indices().nth(80) {
+        Some((i, _)) => format!("{}…", &detail[..i]),
+        None => detail,
+    })
+}
+
+/// Harvest (message_id → subject) pairs from a successful email tool result so a
+/// later `email_read` can name the mail it opens. search/list return
+/// `{ messages: [{ id, subject }] }`; read returns `{ id, subject }`.
+fn cache_email_subjects(
+    name: &str,
+    result: &Value,
+    email_subjects: &mut std::collections::HashMap<String, String>,
+) {
+    let mut remember = |m: &Value| {
+        if let (Some(id), Some(subject)) =
+            (m.get("id").and_then(Value::as_str), m.get("subject").and_then(Value::as_str))
+        {
+            email_subjects.insert(id.to_string(), subject.to_string());
+        }
+    };
+    match name {
+        "email_search" | "email_list" => {
+            if let Some(msgs) = result.get("messages").and_then(Value::as_array) {
+                msgs.iter().for_each(&mut remember);
+            }
+        }
+        "email_read" => remember(result),
+        _ => {}
+    }
+}
+
 pub async fn execute_tool(
     state: &Arc<AppState>,
     user_id: &str,
@@ -589,7 +673,9 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_title, looks_like_cliffhanger};
+    use super::{cache_email_subjects, clean_title, looks_like_cliffhanger, tool_call_detail};
+    use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn cliffhanger_detection_catches_narrate_and_stop() {
@@ -617,5 +703,51 @@ mod tests {
             "one two three four five six seven eight"
         );
         assert_eq!(clean_title(""), "");
+    }
+
+    #[test]
+    fn tool_detail_summarizes_from_args() {
+        let empty = HashMap::new();
+        assert_eq!(
+            tool_call_detail("email_search", &json!({ "query": "vonex outage" }), &empty),
+            Some("vonex outage".into()),
+        );
+        // Folder defaults to Inbox; whitespace is collapsed.
+        assert_eq!(
+            tool_call_detail("email_list", &json!({}), &empty),
+            Some("Inbox".into()),
+        );
+        assert_eq!(
+            tool_call_detail("email_draft", &json!({ "kind": "reply", "subject": "Re: Fault" }), &empty),
+            Some("reply: Re: Fault".into()),
+        );
+        // Generic fallback picks up a title-shaped arg.
+        assert_eq!(
+            tool_call_detail("create_task", &json!({ "title": "Call Kellie" }), &empty),
+            Some("Call Kellie".into()),
+        );
+        // Nothing meaningful → None (no chip detail).
+        assert_eq!(tool_call_detail("list_tasks", &json!({}), &empty), None);
+    }
+
+    #[test]
+    fn email_read_detail_resolves_subject_from_cache() {
+        let mut subjects = HashMap::new();
+        // A prior search/list result seeds the cache…
+        cache_email_subjects(
+            "email_search",
+            &json!({ "messages": [{ "id": "AAA", "subject": "Vonex ongoing" }] }),
+            &mut subjects,
+        );
+        // …so a later read of that id names the mail.
+        assert_eq!(
+            tool_call_detail("email_read", &json!({ "message_id": "AAA" }), &subjects),
+            Some("Vonex ongoing".into()),
+        );
+        // Unknown id → no detail rather than the opaque id.
+        assert_eq!(
+            tool_call_detail("email_read", &json!({ "message_id": "ZZZ" }), &subjects),
+            None,
+        );
     }
 }

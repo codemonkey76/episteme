@@ -1827,8 +1827,8 @@ pub async fn advise(
                 .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
             AgentEvent::Thinking => Event::default()
                 .data(serde_json::json!({ "type": "thinking" }).to_string()),
-            AgentEvent::ToolCall { name } => Event::default()
-                .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
+            AgentEvent::ToolCall { name, detail } => Event::default()
+                .data(serde_json::json!({ "type": "tool", "name": name, "detail": detail }).to_string()),
             AgentEvent::Title(title) => Event::default()
                 .data(serde_json::json!({ "type": "title", "title": title }).to_string()),
             AgentEvent::Done => Event::default().data(serde_json::json!({ "type": "done" }).to_string()),

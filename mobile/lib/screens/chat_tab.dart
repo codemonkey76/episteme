@@ -32,6 +32,23 @@ const _toolLabels = {
 
 String toolLabel(String name) => _toolLabels[name] ?? 'Using $name';
 
+/// Renders tool-call chips as "Label: detail, Label…", with the detail dimmed.
+List<TextSpan> toolChipSpans(List<ToolChip> chips) {
+  final spans = <TextSpan>[];
+  for (var i = 0; i < chips.length; i++) {
+    if (i > 0) spans.add(const TextSpan(text: ', '));
+    spans.add(TextSpan(text: toolLabel(chips[i].name)));
+    if (chips[i].detail.isNotEmpty) {
+      spans.add(TextSpan(
+        text: ': ${chips[i].detail}',
+        style: const TextStyle(color: Color(0xFF5E7186)),
+      ));
+    }
+  }
+  spans.add(const TextSpan(text: '…'));
+  return spans;
+}
+
 class ChatTab extends StatefulWidget {
   const ChatTab({super.key});
 
@@ -319,8 +336,8 @@ class _MessageRow extends StatelessWidget {
               const Icon(Icons.build_outlined, size: 13, color: Color(0xFF7A9EC0)),
               const SizedBox(width: 6),
               Flexible(
-                child: Text(
-                  '${message.toolNames.map(toolLabel).join(', ')}…',
+                child: Text.rich(
+                  TextSpan(children: toolChipSpans(message.toolChips)),
                   style: const TextStyle(color: Color(0xFF7A9EC0), fontSize: 12.5),
                 ),
               ),

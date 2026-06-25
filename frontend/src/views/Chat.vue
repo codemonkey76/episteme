@@ -57,12 +57,15 @@ function appendMessage(msg: api.Message) {
   messages.value.push(msg)
 }
 
-function appendToolCall(name: string) {
+function appendToolCall(name: string, detail: string | null) {
   messages.value.push({
     id: crypto.randomUUID(),
     session_id: activeSession.value?.id ?? '',
     role: 'tool_call',
-    content: name,
+    // Same shape as a persisted tool_call row (a JSON array of call objects),
+    // so one render path handles both — here carrying the backend-supplied
+    // detail (e.g. the email subject email_read resolved).
+    content: JSON.stringify([{ fn_name: name, detail }]),
     created_at: new Date().toISOString(),
   })
 }
@@ -257,9 +260,9 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         })
         scrollToBottom()
       },
-      (name) => {
+      (name, detail) => {
         thinking.value = false
-        appendToolCall(name)
+        appendToolCall(name, detail)
         scrollToBottom()
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
         if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
@@ -367,16 +370,45 @@ const sessionApprovals = computed(() =>
   approvalsStore.pending.filter(a => a.session_id === activeSession.value?.id),
 )
 
-// A tool_call message is either a live chip (content = tool name) or a
-// DB-persisted row (JSON-encoded array of call objects). Label both.
-function toolCallLabels(content: string): string[] {
+// A short, human-readable summary of a persisted call, derived from its stored
+// arguments — the live-stream detail (incl. email_read's resolved subject)
+// isn't persisted, so on reload we reconstruct what we can from the args.
+function toolDetail(name: string, args: unknown): string {
+  if (!args || typeof args !== 'object') return ''
+  const a = args as Record<string, unknown>
+  const str = (k: string) => (typeof a[k] === 'string' ? (a[k] as string).trim() : '')
+  switch (name) {
+    case 'email_search': return str('query')
+    case 'email_list': return str('folder') || 'Inbox'
+    case 'email_draft': {
+      const kind = str('kind') || 'reply'
+      const subject = str('subject')
+      return subject ? `${kind}: ${subject}` : kind
+    }
+    // email_read's args hold only an opaque message_id; its subject only
+    // surfaces in the live stream, so there's nothing to show on reload.
+    default: return str('query') || str('title') || str('name') || str('summary')
+  }
+}
+
+interface ToolChip { label: string; detail: string }
+
+// A tool_call message is either a live chip or a DB-persisted row — both are a
+// JSON array of call objects now. Render each as a label plus an optional
+// detail (the backend's live summary, else one derived from the stored args).
+function toolChips(content: string): ToolChip[] {
+  let calls: Array<Record<string, unknown>>
   try {
     const v = JSON.parse(content)
-    if (Array.isArray(v)) {
-      return v.map((c) => toolLabel(typeof c?.fn_name === 'string' ? c.fn_name : ''))
-    }
-  } catch { /* live chip: plain tool name */ }
-  return [toolLabel(content)]
+    calls = Array.isArray(v) ? v : [{ fn_name: content }]
+  } catch { calls = [{ fn_name: content }] /* legacy plain-name chip */ }
+  return calls.map((c) => {
+    const name = typeof c?.fn_name === 'string' ? c.fn_name : ''
+    const detail = (typeof c?.detail === 'string' && c.detail)
+      ? c.detail
+      : toolDetail(name, c?.fn_arguments)
+    return { label: toolLabel(name), detail }
+  })
 }
 </script>
 
@@ -389,7 +421,9 @@ function toolCallLabels(content: string): string[] {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/>
           </svg>
-          <span>{{ toolCallLabels(msg.content).join(', ') }}…</span>
+          <span>
+            <template v-for="(chip, i) in toolChips(msg.content)" :key="i"><span v-if="i > 0">, </span>{{ chip.label }}<span v-if="chip.detail" class="text-[var(--c-606060)]">: {{ chip.detail }}</span></template>…
+          </span>
         </div>
         <!-- Normal message -->
         <div v-else :class="['flex flex-col gap-1 max-w-3xl', msg.role === 'user' ? 'self-end' : 'self-start']">
