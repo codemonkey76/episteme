@@ -515,7 +515,7 @@ export const helpdesk = {
 
 // AI draft — POST returns an SSE stream of reply tokens (model can be slow, so stream live).
 export async function streamAiDraft(
-  payload: { provider: string; from: string; subject: string; body: string },
+  payload: { provider: string; from: string; subject: string; body: string; instruction?: string },
   onToken: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {

@@ -1096,6 +1096,10 @@ pub struct AiDraftBody {
     subject: String,
     /// Plain-text body of the email being replied to (HTML stripped client-side).
     body: String,
+    /// Optional short steer from the user on how to reply (e.g. "decline
+    /// politely", "tell them it's still ongoing"). Empty = default behaviour.
+    #[serde(default)]
+    instruction: Option<String>,
 }
 
 pub async fn ai_draft(
@@ -1131,8 +1135,16 @@ previous drafts:\n",
         }
     }
 
+    // A short user steer, when given, directs the tone/content of the reply.
+    let task = match payload.instruction.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(steer) => format!(
+            "Draft a reply to this email. The user wants the reply to: {steer}. \
+Honour that instruction while keeping the reply appropriate to the email."
+        ),
+        None => "Draft a reply to this email.".to_string(),
+    };
     let user = format!(
-        "Draft a reply to this email.\n\nFrom: {}\nSubject: {}\n\n{}",
+        "{task}\n\nFrom: {}\nSubject: {}\n\n{}",
         payload.from, payload.subject, payload.body
     );
 
