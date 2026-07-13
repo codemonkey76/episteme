@@ -20,6 +20,7 @@ pub mod memories;
 pub mod notes;
 pub mod notify;
 pub mod phoneus;
+pub mod recipes;
 pub mod research;
 pub mod tasks;
 pub mod web;
@@ -40,6 +41,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(notify::schemas());
     all.extend(tag_instance(helpdesk::schemas(), "helpdesk"));
     all.extend(tag_instance(github::schemas(), "GitHub"));
+    all.extend(tag_instance(recipes::schemas(), "Recipe Box"));
     all.extend(phoneus::schemas()); // already carries `integration` per tool
     all
 }
@@ -74,6 +76,7 @@ pub fn is_native(name: &str) -> bool {
         || helpdesk::handles(name)
         || github::handles(name)
         || phoneus::handles(name)
+        || recipes::handles(name)
 }
 
 /// Native tools grouped by integration, for the settings Tools page.
@@ -93,6 +96,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("helpdesk", helpdesk::schemas()),
         ("github", github::schemas()),
         ("phoneus", phoneus::schemas()),
+        ("recipes", recipes::schemas()),
     ]
 }
 
@@ -165,6 +169,9 @@ pub async fn execute(
     if github::handles(name) {
         return github::execute(state, user_id, name, args).await;
     }
+    if recipes::handles(name) {
+        return recipes::execute(state, user_id, name, args).await;
+    }
     Err(anyhow!("unknown native tool '{name}'"))
 }
 
@@ -185,7 +192,7 @@ pub async fn system_preamble(state: &AppState, user_id: &str) -> ChatMessage {
     // which to use when it's ambiguous.
     use crate::integrations::registry;
     let mut multi: Vec<String> = Vec::new();
-    for kind in ["helpdesk", "phoneus", "github"] {
+    for kind in ["helpdesk", "phoneus", "github", "recipes"] {
         let names = registry::names(&state.db, user_id, kind).await;
         if names.len() > 1 {
             multi.push(format!("- {}: {}", registry::label(kind), names.join(", ")));

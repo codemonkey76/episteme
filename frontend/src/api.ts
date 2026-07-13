@@ -1130,7 +1130,7 @@ export const integrations = {
     fetch(BASE + `/integrations/${encodeURIComponent(id)}/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
 }
 
-export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github' | 'microsoft'
+export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github' | 'recipes' | 'microsoft'
 
 export interface IntegrationView {
   id: string

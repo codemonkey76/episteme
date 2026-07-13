@@ -280,7 +280,7 @@ pub async fn remove_shared(
 // ── Integrations registry (helpdesk / phoneus / github / microsoft) ────────────
 
 use crate::db::integrations as int_db;
-use crate::integrations::{github, helpdesk, phoneus};
+use crate::integrations::{github, helpdesk, phoneus, recipes};
 
 /// Masked view of an instance — never returns secrets/tokens.
 #[derive(Serialize)]
@@ -379,7 +379,7 @@ async fn build_config(
     existing: Option<&int_db::Integration>,
 ) -> AppResult<serde_json::Value> {
     match kind {
-        "helpdesk" | "phoneus" => {
+        "helpdesk" | "phoneus" | "recipes" => {
             let base_url =
                 body.base_url.clone().unwrap_or_default().trim().trim_end_matches('/').to_string();
             let email = body.email.clone().unwrap_or_default().trim().to_string();
@@ -397,10 +397,10 @@ async fn build_config(
                 }
                 return Err(AppError::BadRequest("password is required".into()));
             }
-            let token = if kind == "helpdesk" {
-                helpdesk::login(state, &base_url, &email, &pw).await
-            } else {
-                phoneus::login(state, &base_url, &email, &pw).await
+            let token = match kind {
+                "helpdesk" => helpdesk::login(state, &base_url, &email, &pw).await,
+                "recipes" => recipes::login(state, &base_url, &email, &pw).await,
+                _ => phoneus::login(state, &base_url, &email, &pw).await,
             }
             .map_err(AppError::Internal)?;
             Ok(serde_json::json!({ "base_url": base_url, "email": email, "token": token }))
