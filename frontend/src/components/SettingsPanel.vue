@@ -1283,7 +1283,7 @@ async function logout() {
             </label>
 
             <!-- Non-Microsoft kinds: simple credential form. -->
-            <template v-if="intDraft.kind === 'helpdesk' || intDraft.kind === 'phoneus'">
+            <template v-if="kindMeta(intDraft.kind).auth === 'login'">
               <label class="flex flex-col gap-[0.2rem] text-[0.775rem] text-muted">URL
                 <input v-model="intDraft.base_url" placeholder="https://portal.example.com" class="bg-surface text-fg border border-raised rounded px-2 py-1.5 text-[0.8125rem] font-[inherit] focus:outline-none focus:border-[var(--c-3a6adf)]" />
               </label>
