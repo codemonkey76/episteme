@@ -15,6 +15,7 @@ pub fn label(kind: &str) -> &str {
         "helpdesk" => "Helpdesk",
         "phoneus" => "PhoneUs",
         "github" => "GitHub",
+        "recipes" => "Recipe Box",
         other => other,
     }
 }

@@ -1096,6 +1096,10 @@ pub struct AiDraftBody {
     subject: String,
     /// Plain-text body of the email being replied to (HTML stripped client-side).
     body: String,
+    /// Optional short steer from the user on how to reply (e.g. "decline
+    /// politely", "tell them it's still ongoing"). Empty = default behaviour.
+    #[serde(default)]
+    instruction: Option<String>,
 }
 
 pub async fn ai_draft(
@@ -1131,8 +1135,16 @@ previous drafts:\n",
         }
     }
 
+    // A short user steer, when given, directs the tone/content of the reply.
+    let task = match payload.instruction.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(steer) => format!(
+            "Draft a reply to this email. The user wants the reply to: {steer}. \
+Honour that instruction while keeping the reply appropriate to the email."
+        ),
+        None => "Draft a reply to this email.".to_string(),
+    };
     let user = format!(
-        "Draft a reply to this email.\n\nFrom: {}\nSubject: {}\n\n{}",
+        "{task}\n\nFrom: {}\nSubject: {}\n\n{}",
         payload.from, payload.subject, payload.body
     );
 
@@ -1827,8 +1839,8 @@ pub async fn advise(
                 .data(serde_json::json!({ "type": "token", "text": text }).to_string()),
             AgentEvent::Thinking => Event::default()
                 .data(serde_json::json!({ "type": "thinking" }).to_string()),
-            AgentEvent::ToolCall { name } => Event::default()
-                .data(serde_json::json!({ "type": "tool", "name": name }).to_string()),
+            AgentEvent::ToolCall { name, detail } => Event::default()
+                .data(serde_json::json!({ "type": "tool", "name": name, "detail": detail }).to_string()),
             AgentEvent::Title(title) => Event::default()
                 .data(serde_json::json!({ "type": "title", "title": title }).to_string()),
             AgentEvent::Done => Event::default().data(serde_json::json!({ "type": "done" }).to_string()),

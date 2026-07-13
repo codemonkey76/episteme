@@ -55,6 +55,8 @@ class _PendingAttachment {
 class _ComposeScreenState extends State<ComposeScreen> {
   final _to = TextEditingController();
   final _body = TextEditingController();
+  // Optional short steer for the AI reply (e.g. "decline politely").
+  final _instruction = TextEditingController();
   String _aiDraftOriginal = '';
   bool _drafting = false;
   bool _sending = false;
@@ -119,6 +121,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
             from: '${s.from.name} <${s.from.address}>',
             subject: s.subject,
             body: widget.latestText,
+            instruction: _instruction.text,
           )
           .listen((event) {
         if (event['type'] == 'token') {
@@ -249,14 +252,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
       appBar: AppBar(
         title: Text(title, style: const TextStyle(fontSize: 16)),
         actions: [
-          if (widget.mode != 'ai' && !_isForward)
-            TextButton.icon(
-              onPressed: _drafting ? null : _draft,
-              icon: const Icon(Icons.auto_awesome,
-                  size: 15, color: Color(0xFFA0C8FF)),
-              label: const Text('AI draft',
-                  style: TextStyle(color: Color(0xFFA0C8FF), fontSize: 13)),
-            ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FilledButton.icon(
@@ -307,6 +302,40 @@ class _ComposeScreenState extends State<ComposeScreen> {
                       const TextStyle(color: Palette.faint, fontSize: 12)),
             ),
           const SizedBox(height: 12),
+          // Short steer for the AI reply — type how to respond, then (re)draft.
+          if (!_isForward) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _instruction,
+                    textInputAction: TextInputAction.go,
+                    onSubmitted: (_) {
+                      if (!_drafting) _draft();
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'How should the AI reply? (optional)',
+                      hintText: "e.g. decline politely; tell them it's ongoing",
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: 'Draft with AI',
+                  onPressed: _drafting ? null : _draft,
+                  icon: _drafting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.auto_awesome,
+                          color: Color(0xFFA0C8FF)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
           TextField(
             controller: _body,
             minLines: 10,

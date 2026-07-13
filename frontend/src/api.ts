@@ -119,7 +119,7 @@ export async function streamChat(
   onToken: (text: string) => void,
   onDone: () => void,
   onApproval: (actionId: string, toolName: string, toolArgs: unknown) => void,
-  onTool: (name: string) => void,
+  onTool: (name: string, detail: string | null) => void,
   onTitle: (title: string) => void,
   onThinking: () => void,
   signal?: AbortSignal,
@@ -151,7 +151,7 @@ export async function streamChat(
       const raw = line.slice(6).trim()
       if (!raw || raw === '[DONE]') continue
 
-      let data: { type: string; text?: string; name?: string; title?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
+      let data: { type: string; text?: string; name?: string; detail?: string | null; title?: string; action_id?: string; tool_name?: string; tool_args?: unknown }
       try { data = JSON.parse(raw) } catch { continue }
 
       if (data.type === 'token' && data.text != null) {
@@ -159,7 +159,7 @@ export async function streamChat(
       } else if (data.type === 'thinking') {
         onThinking()
       } else if (data.type === 'tool' && data.name) {
-        onTool(data.name)
+        onTool(data.name, data.detail ?? null)
       } else if (data.type === 'title' && data.title) {
         onTitle(data.title)
       } else if (data.type === 'done') {
@@ -178,7 +178,7 @@ export async function streamAdvise(
   opts: { sessionId: string; provider: string; instruction?: string; account?: string; mailbox?: string },
   onToken: (text: string) => void,
   onDone: () => void,
-  onTool: (name: string) => void,
+  onTool: (name: string, detail: string | null) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${BASE}/email/messages/${encodeURIComponent(messageId)}/advise`, {
@@ -203,10 +203,10 @@ export async function streamAdvise(
       if (!line.startsWith('data: ')) continue
       const raw = line.slice(6).trim()
       if (!raw) continue
-      let data: { type: string; text?: string; name?: string }
+      let data: { type: string; text?: string; name?: string; detail?: string | null }
       try { data = JSON.parse(raw) } catch { continue }
       if (data.type === 'token' && data.text != null) onToken(data.text)
-      else if (data.type === 'tool' && data.name) onTool(data.name)
+      else if (data.type === 'tool' && data.name) onTool(data.name, data.detail ?? null)
       else if (data.type === 'done') { onDone(); return }
     }
   }
@@ -515,7 +515,7 @@ export const helpdesk = {
 
 // AI draft — POST returns an SSE stream of reply tokens (model can be slow, so stream live).
 export async function streamAiDraft(
-  payload: { provider: string; from: string; subject: string; body: string },
+  payload: { provider: string; from: string; subject: string; body: string; instruction?: string },
   onToken: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -1130,7 +1130,7 @@ export const integrations = {
     fetch(BASE + `/integrations/${encodeURIComponent(id)}/shared/${encodeURIComponent(address)}`, { method: 'DELETE' }),
 }
 
-export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github' | 'microsoft'
+export type IntegrationKind = 'helpdesk' | 'phoneus' | 'github' | 'recipes' | 'microsoft'
 
 export interface IntegrationView {
   id: string

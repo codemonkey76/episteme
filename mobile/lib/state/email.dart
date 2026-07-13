@@ -331,12 +331,15 @@ class EmailStore extends ChangeNotifier {
     required String from,
     required String subject,
     required String body,
+    String? instruction,
   }) {
     return _api.streamSse('/email/ai-draft', {
       'provider': aiProvider,
       'from': from,
       'subject': subject,
       'body': body,
+      if (instruction != null && instruction.trim().isNotEmpty)
+        'instruction': instruction.trim(),
     });
   }
 

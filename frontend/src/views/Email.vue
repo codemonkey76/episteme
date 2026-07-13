@@ -545,6 +545,7 @@ const isHtmlBody = computed(
 async function selectMessage(summary: api.MessageSummary) {
   showReply.value = false
   editingDraftId.value = null
+  aiInstruction.value = '' // steer is per-email; don't carry it across messages
   view.value = 'message'
   loadingMessage.value = true
   attachments.value = []
@@ -819,6 +820,8 @@ function replyAllCc(m: api.MessageDetail): string {
 
 const aiDrafting = ref(false)
 const aiWarming = ref(false)
+// Optional short steer the user types for "AI reply" (e.g. "decline politely").
+const aiInstruction = ref('')
 
 // "Improve" rewrites the user's own draft in place. While streaming, `improving`
 // is true; once done, `improveBackup` holds the pre-improve body so the user can
@@ -909,6 +912,7 @@ async function aiReply() {
           : '',
         subject: m.subject ?? '',
         body: bodyText,
+        instruction: aiInstruction.value.trim() || undefined,
       },
       (text) => {
         if (!firstToken) {
@@ -1855,12 +1859,22 @@ function replyState(m: api.MessageSummary): 'reply' | 'forward' | null {
               </svg>
               Summary
             </button>
-            <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] border border-[var(--c-2a4a8a)] rounded-md cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
-              </svg>
-              AI reply
-            </button>
+            <div class="inline-flex items-stretch rounded-md border border-[var(--c-2a4a8a)] overflow-hidden">
+              <button class="inline-flex items-center gap-[0.35rem] py-[0.35rem] px-3 bg-[var(--c-1e3a6e)] text-[var(--c-7ab0ff)] cursor-pointer text-[0.8rem] font-[inherit] transition-colors duration-100 hover:bg-[var(--c-254880)]" @click="aiReply">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+                </svg>
+                AI reply
+              </button>
+              <input
+                v-model="aiInstruction"
+                type="text"
+                placeholder="how to reply? (optional)"
+                title="A short steer for the AI reply, e.g. “decline politely” or “tell them it's still ongoing”. Enter to draft."
+                class="w-44 py-[0.35rem] px-2.5 bg-bg text-[0.8rem] text-[var(--c-c0c0c0)] border-l border-[var(--c-2a4a8a)] outline-none placeholder:text-[var(--c-606060)] focus:bg-[var(--c-141414)]"
+                @keydown.enter.prevent="aiReply"
+              />
+            </div>
             <button class="inline-flex items-center py-[0.35rem] px-2.5 bg-surface text-muted border border-raised rounded-md cursor-pointer transition-colors duration-100 hover:bg-[var(--c-222222)] hover:text-[var(--c-c0c0c0)]" title="Reply" @click="startReply('reply')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>

@@ -423,6 +423,7 @@ const INTEGRATION_KINDS = [
   { kind: 'helpdesk' as const, label: 'Helpdesk', auth: 'login' as const, blurb: 'Tickets, replies, and time logging from chat' },
   { kind: 'phoneus' as const, label: 'PhoneUs', auth: 'login' as const, blurb: 'Customer balances, services, contacts, and SMS' },
   { kind: 'github' as const, label: 'GitHub', auth: 'token' as const, blurb: 'Read commits, files, and pull requests' },
+  { kind: 'recipes' as const, label: 'Recipe Box', auth: 'login' as const, blurb: 'Find, create, and share recipes from chat' },
   { kind: 'microsoft' as const, label: 'Microsoft 365', auth: 'oauth' as const, blurb: 'Email, calendar, shared mailboxes, and AI auto-sort' },
 ]
 function kindMeta(kind: string) {
