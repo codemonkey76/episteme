@@ -15,6 +15,7 @@ pub mod logs;
 pub mod memories;
 pub mod tasks;
 pub mod notes;
+pub mod shipments;
 pub mod writer;
 pub mod notifications;
 pub mod suggestions;
@@ -413,5 +414,87 @@ mod tests {
         assert!(messages::search(&pool, "u2", "opnsense", 10).await.unwrap().is_empty());
         sqlx::query("DELETE FROM sessions WHERE id = 's1'").execute(&pool).await.unwrap();
         assert!(messages::search(&pool, "u1", "opnsense", 10).await.unwrap().is_empty());
+    }
+
+    /// The shipping-email upsert: a second mail on the same parcel updates the
+    /// existing shipment instead of forking one, fills blanks without
+    /// clobbering what's known, and never walks the status backwards.
+    #[tokio::test]
+    async fn shipment_upsert_folds_follow_up_mail() {
+        use shipments::Extracted;
+        let pool = init("sqlite::memory:").await.expect("migrations should run");
+
+        // First mail: a dispatch notice with a tracking number but no ETA.
+        let first = Extracted {
+            label: "Framework mainboard".to_string(),
+            carrier: Some("Australia Post".to_string()),
+            tracking_number: Some("AP123".to_string()),
+            merchant: Some("Framework".to_string()),
+            status: Some("in_transit".to_string()),
+            detail: "Dispatched from Melbourne".to_string(),
+            ..Default::default()
+        };
+        let r = shipments::upsert_from_email(&pool, "u1", Some("conv-1"), &first, "2026-08-10T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(r.created);
+        let id = r.shipment.id.clone();
+
+        // Second mail, same tracking number in a different thread: matches on
+        // the number, adds the ETA it now knows, and advances the status.
+        let second = Extracted {
+            label: "Parcel".to_string(),
+            tracking_number: Some("AP123".to_string()),
+            // A re-extraction that got the carrier wrong must not overwrite it.
+            carrier: Some("Unknown".to_string()),
+            status: Some("out_for_delivery".to_string()),
+            eta: Some("2026-08-12T07:30:00Z".to_string()),
+            detail: "With the driver".to_string(),
+            ..Default::default()
+        };
+        let r = shipments::upsert_from_email(&pool, "u1", Some("conv-2"), &second, "2026-08-12T00:00:00Z")
+            .await
+            .unwrap();
+        assert!(!r.created);
+        assert!(r.changed);
+        assert_eq!(r.shipment.id, id);
+        assert_eq!(r.shipment.status, "out_for_delivery");
+        assert_eq!(r.shipment.carrier.as_deref(), Some("Australia Post"));
+        assert_eq!(r.shipment.eta.as_deref(), Some("2026-08-12T07:30:00Z"));
+        assert_eq!(r.shipment.label, "Framework mainboard");
+
+        // A late-arriving "dispatched" mail must not un-deliver the parcel.
+        shipments::update(
+            &pool,
+            "u1",
+            &id,
+            shipments::ShipmentPatch { status: Some("delivered".to_string()), ..Default::default() },
+        )
+        .await
+        .unwrap();
+        let stale = Extracted {
+            tracking_number: Some("AP123".to_string()),
+            status: Some("in_transit".to_string()),
+            detail: "Left the depot".to_string(),
+            ..Default::default()
+        };
+        let r = shipments::upsert_from_email(&pool, "u1", None, &stale, "2026-08-11T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(r.shipment.status, "delivered");
+        assert!(!r.changed, "a repeat of known facts shouldn't notify");
+
+        // Every mail is still recorded, and only this user can see it.
+        assert_eq!(r.shipment.events.len(), 3);
+        assert!(shipments::list(&pool, "u2", None, None, 10).await.unwrap().is_empty());
+
+        // Delete takes the history with it.
+        shipments::delete(&pool, "u1", &id).await.unwrap();
+        assert!(shipments::list(&pool, "u1", None, None, 10).await.unwrap().is_empty());
+        let events: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM shipment_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(events.0, 0);
     }
 }

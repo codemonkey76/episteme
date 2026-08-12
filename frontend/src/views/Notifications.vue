@@ -33,12 +33,13 @@ onMounted(load)
 // Refresh when something elsewhere changes the notifications.
 watch(() => notifStore.changeToken, load)
 
-// Open the item a notification points at (currently only chat sessions), marking
-// it read on the way.
+// Open the item a notification points at, marking it read on the way.
 async function open(n: api.Notification) {
   if (!n.read_at) await markRead(n)
   if (n.link_kind === 'session' && n.link_id) {
     winStore.openChat({ sessionId: n.link_id })
+  } else if (n.link_kind === 'shipment') {
+    winStore.openKey('shipments')
   }
 }
 
@@ -204,9 +205,9 @@ function fmtTime(iso: string): string {
               <span class="shrink-0 text-[0.65rem] text-[var(--c-505050)]">{{ fmtTime(n.created_at) }}</span>
             </div>
             <p class="text-[0.75rem] text-[var(--c-808080)] leading-[1.45] break-words mt-[0.1rem] line-clamp-3">{{ n.body }}</p>
-            <span v-if="n.link_kind === 'session'" class="inline-flex items-center gap-1 text-[0.68rem] text-[var(--c-5a7da0)] mt-[0.2rem]">
+            <span v-if="n.link_kind === 'session' || n.link_kind === 'shipment'" class="inline-flex items-center gap-1 text-[0.68rem] text-[var(--c-5a7da0)] mt-[0.2rem]">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-              Open chat
+              {{ n.link_kind === 'shipment' ? 'Open shipments' : 'Open chat' }}
             </span>
 
             <!-- Ticket-update actions: review & send a customer reply on the ticket. -->

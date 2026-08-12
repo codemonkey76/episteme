@@ -150,6 +150,17 @@ function toggleSettings(tab: string) {
         <span v-if="!collapsed">Notes</span>
       </button>
 
+      <!-- Shipments -->
+      <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('shipments') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Shipments' : ''" :aria-pressed="isOpen('shipments')" @click="toggleKey('shipments')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M16.5 9.4 7.5 4.21"/>
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+          <line x1="12" y1="22.08" x2="12" y2="12"/>
+        </svg>
+        <span v-if="!collapsed">Shipments</span>
+      </button>
+
       <!-- Writer -->
       <button :class="['flex items-center gap-2.5 px-2.5 py-2 rounded-md no-underline text-[0.8125rem] bg-none border-none cursor-pointer w-full text-left transition-[background,color] duration-150 whitespace-nowrap font-[inherit] hover:bg-[var(--c-222222)] hover:text-fg', isOpen('writer') ? 'bg-[var(--c-222222)] text-fg' : 'text-[var(--c-808080)]']" :title="collapsed ? 'Writer' : ''" :aria-pressed="isOpen('writer')" @click="toggleKey('writer')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

@@ -46,6 +46,10 @@ dependencies:
   # Outgoing attachments: native file/photo picking + mime detection.
   file_picker: ^10.1.0
   mime: ^2.0.0
+  # Shipment photos: camera capture / gallery pick (file_picker can't shoot).
+  image_picker: ^1.1.2
+  # Opening a carrier's tracking page in the real browser.
+  url_launcher: ^6.3.1
   firebase_core: ^4.10.0
   firebase_messaging: ^16.3.0
   record: ^7.0.0

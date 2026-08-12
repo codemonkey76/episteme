@@ -31,7 +31,9 @@ When the user asks to schedule, add an appointment, or set a reminder, call \
 create_calendar_event. For to-dos without a fixed appointment time (\"remind me to \
 buy milk\", \"I need to renew my rego\"), use the task tools instead. Use the note \
 tools to save and recall freeform information the user wants kept (ideas, references, \
-details). Resolve relative times (\"tomorrow\", \"next Friday at 3pm\") against the \
+details). When the user mentions having ordered something or expecting a delivery, \
+track it with create_shipment, and answer \"where's my …\" / \"what's arriving\" \
+questions with list_shipments. Resolve relative times (\"tomorrow\", \"next Friday at 3pm\") against the \
 current time and output times as RFC3339 with the user's UTC offset ({offset}). For \
 reminders, set reminder_minutes_before. After acting, briefly confirm what you did \
 in plain language.\n\
@@ -229,6 +231,51 @@ Don't expose internal/provider references or pricing unless clearly meant for th
 customer. Keep it concise; no greeting line is needed (the helpdesk adds one).\n\n\
 Respond with ONLY a JSON object, no prose, no code fences: \
 {\"summary\": \"<one line>\", \"reply\": \"<customer-facing message>\"}.",
+    },
+    PromptDef {
+        key: "shipment_extract",
+        name: "Shipping email → shipment",
+        description: "Runs on every email the auto-sort classifies as \"deliveries\", \
+turning it into a tracked shipment. The status values (ordered, in_transit, \
+out_for_delivery, delivered, exception, cancelled) are wired to the database in \
+code — keep them. Must keep instructing the model to respond with ONLY a JSON \
+object with the listed keys.",
+        variables: &[],
+        default: "You extract shipment tracking details from a shipping or order \
+email. The user wants a list of what's on the way, so pull out what identifies \
+the parcel and where it's up to.\n\n\
+- is_shipment: true if this email is about a specific order or parcel on its way \
+to the user. False for anything that tracks nothing — courier marketing, \
+delivery-app promotions, a review request for something already received, a \
+receipt with no shipping.\n\
+- label: what is actually being delivered, in a few words, as the user would say \
+it (\"Framework mainboard\", \"3 books\", \"Weekly grocery order\"). Use the item \
+names from the email, NOT the subject line and NOT the merchant name. If the \
+email lists several items, name the most significant one and add \"+N more\".\n\
+- merchant: who it was ordered from (the shop or sender).\n\
+- carrier: who is carrying it (Australia Post, StarTrack, DHL, Amazon Logistics…). \
+Empty if not stated.\n\
+- tracking_number: the carrier's tracking/consignment number, exactly as printed. \
+Empty if there isn't one. Never invent or reformat it.\n\
+- tracking_url: the full https link to the carrier's tracking page for this \
+parcel, if the email contains one. Empty otherwise — never construct a URL.\n\
+- order_ref: the merchant's order or invoice number, if stated.\n\
+- status: exactly one of \"ordered\" (confirmed, not yet shipped), \"in_transit\" \
+(dispatched, on its way), \"out_for_delivery\" (with the driver, arriving today), \
+\"delivered\" (arrived or collected), \"exception\" (delayed, held, failed \
+delivery, returned), \"cancelled\".\n\
+- eta: the estimated delivery date the email states, as YYYY-MM-DD, or a full \
+RFC3339 timestamp when a time is given. Resolve relative wording (\"arriving \
+tomorrow\", \"in 2-3 business days\") against the current date given to you; for a \
+range, use the LAST day. Empty if the email gives no estimate — never guess one.\n\
+- summary: one short line (max ~100 chars) describing this specific update, for \
+the shipment's history — e.g. \"Dispatched from Melbourne, ETA Thursday\" or \
+\"Delivery attempted, card left\".\n\n\
+Leave any field you cannot determine as an empty string rather than guessing.\n\n\
+Respond with ONLY a JSON object, no prose, no code fences: {\"is_shipment\": \
+<bool>, \"label\": \"…\", \"merchant\": \"…\", \"carrier\": \"…\", \
+\"tracking_number\": \"…\", \"tracking_url\": \"…\", \"order_ref\": \"…\", \
+\"status\": \"…\", \"eta\": \"…\", \"summary\": \"…\"}.",
     },
     PromptDef {
         key: "email_advise",
