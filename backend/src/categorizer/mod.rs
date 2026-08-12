@@ -326,7 +326,24 @@ pub async fn run_mailbox(
         },
     ];
 
-    let (raw, used) = ModelRouter::complete_json_with_usage(&provider, history).await?;
+    // Pin the reply to an array-of-objects schema. Legacy JSON mode only forces
+    // *valid* JSON, letting thinking-family models (e.g. qwen3) return a single
+    // object and silently drop every email after the first; the schema forces the
+    // full array. `id` may come back as an int or a string (see `Classification`).
+    let schema = serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": { "type": ["integer", "string"] },
+                "category": { "type": "string" },
+                "folder": { "type": "string" },
+            },
+            "required": ["id", "category"],
+        },
+    });
+    let (raw, used) =
+        ModelRouter::complete_json_schema_with_usage(&provider, history, schema).await?;
     db::usage::record(&state.db, user_id, &provider, "auto-sort", used).await;
     let classifications = match parse_classifications(&raw) {
         Ok(c) => c,

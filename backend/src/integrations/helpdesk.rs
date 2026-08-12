@@ -10,6 +10,12 @@ use serde_json::Value;
 
 use crate::state::AppState;
 
+/// Value sent as `source` on anything Episteme writes into the helpdesk, so
+/// tickets and replies we raise are attributed to the assistant rather than
+/// lumped in with every other API caller. The helpdesk validates this against
+/// a fixed enum, so it must stay in step with the values it accepts.
+pub const SOURCE: &str = "episteme";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelpdeskConfig {
     /// e.g. https://helpdesk.example.com — stored without a trailing slash.

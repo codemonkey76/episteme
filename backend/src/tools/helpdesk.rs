@@ -247,7 +247,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
                 "description": args["description"].as_str().ok_or_else(|| anyhow!("description is required"))?,
                 "priority": args["priority"].as_str().unwrap_or("medium"),
                 "silent": args["silent"].as_bool().unwrap_or(false),
-                "source": "api",
+                "source": helpdesk::SOURCE,
             });
             // Assign to the connected agent on creation, so create + assign is a
             // single approved call. Resolve "me" via the same /user lookup the
@@ -281,6 +281,7 @@ pub async fn execute(state: &AppState, user_id: &str, name: &str, args: Value) -
             let body = json!({
                 "body": args["body"].as_str().ok_or_else(|| anyhow!("body is required"))?,
                 "type": kind,
+                "source": helpdesk::SOURCE,
             });
             let res = helpdesk::request(state, user_id, instance, Method::POST, &format!("/tickets/{id}/messages"), Some(&body)).await?;
             state

@@ -79,7 +79,7 @@ impl ModelRouter {
         tx: mpsc::Sender<StreamChunk>,
     ) -> Result<()> {
         if provider.provider == "ollama" {
-            return stream_ollama(provider, history, tools, think, false, tx).await;
+            return stream_ollama(provider, history, tools, think, None, tx).await;
         }
 
         // Non-Ollama providers use genai's NON-streaming exec_chat. genai 0.1.23's
@@ -121,7 +121,7 @@ impl ModelRouter {
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
     ) -> Result<(String, Option<TokenUsage>)> {
-        Self::complete_inner(provider, history, false).await
+        Self::complete_inner(provider, history, None).await
     }
 
     /// Like `complete_with_usage`, but asks the provider for strict JSON. For
@@ -134,13 +134,28 @@ impl ModelRouter {
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
     ) -> Result<(String, Option<TokenUsage>)> {
-        Self::complete_inner(provider, history, true).await
+        Self::complete_inner(provider, history, Some(Value::String("json".to_string()))).await
+    }
+
+    /// Like `complete_json_with_usage`, but pins the reply to a caller-supplied
+    /// JSON Schema via Ollama's structured-outputs (`format: <schema>`). Legacy
+    /// `format: "json"` only guarantees *valid* JSON, not its *shape*: a
+    /// thinking-family model (e.g. qwen3) asked for an array of objects will
+    /// happily return a single object instead, dropping every item after the
+    /// first. Passing the array schema forces the full array. Cloud providers
+    /// fall back to plain JSON mode (they honor the prompt's shape already).
+    pub async fn complete_json_schema_with_usage(
+        provider: &ProviderConfig,
+        history: Vec<ChatMessage>,
+        schema: Value,
+    ) -> Result<(String, Option<TokenUsage>)> {
+        Self::complete_inner(provider, history, Some(schema)).await
     }
 
     async fn complete_inner(
         provider: &ProviderConfig,
         history: Vec<ChatMessage>,
-        json: bool,
+        format: Option<Value>,
     ) -> Result<(String, Option<TokenUsage>)> {
         // Non-Ollama providers go through genai's NON-streaming `exec_chat`.
         // Streaming there uses reqwest-eventsource, which clones the request for
@@ -154,7 +169,7 @@ impl ModelRouter {
             // OpenAI-compatible endpoint) honor a json response_format. The
             // prompt already contains "JSON" (required by JsonMode). Anthropic/
             // Gemini/Cohere have no such mode and already comply, so leave them.
-            if json && matches!(provider.provider.as_str(),
+            if format.is_some() && matches!(provider.provider.as_str(),
                 "openai" | "openai_compatible" | "groq" | "xai" | "deepseek")
             {
                 options = options.with_response_format(ChatResponseFormat::JsonMode);
@@ -167,11 +182,12 @@ impl ModelRouter {
             return Ok((res.content_text_into_string().unwrap_or_default(), usage));
         }
 
-        // Ollama: collect from its custom streaming path (`json` sets format mode).
+        // Ollama: collect from its custom streaming path (`format` sets JSON mode
+        // or, when a schema is given, structured-output mode).
         let (tx, mut rx) = mpsc::channel::<StreamChunk>(64);
         let provider = provider.clone();
         let task = tokio::spawn(async move {
-            stream_ollama(&provider, history, Vec::new(), false, json, tx).await
+            stream_ollama(&provider, history, Vec::new(), false, format, tx).await
         });
 
         let mut out = String::new();
@@ -193,7 +209,7 @@ async fn stream_ollama(
     history: Vec<ChatMessage>,
     tools: Vec<Value>,
     think: bool,
-    json: bool,
+    format: Option<Value>,
     tx: mpsc::Sender<StreamChunk>,
 ) -> Result<()> {
     let base_url = provider.base_url.as_deref().unwrap_or("http://localhost:11434");
@@ -274,11 +290,12 @@ async fn stream_ollama(
     if !think {
         body["think"] = serde_json::json!(false);
     }
-    // Constrain decoding to valid JSON. Decisive for one-shot JSON callers (the
-    // email categorizer, etc.) on weaker local models, which otherwise lead with
-    // prose — leaving no JSON to parse no matter how firmly the prompt asks.
-    if json {
-        body["format"] = serde_json::json!("json");
+    // Constrain decoding for one-shot JSON callers. `Some("json")` is Ollama's
+    // legacy valid-JSON mode; `Some(<schema>)` is structured-output mode, which
+    // additionally pins the *shape* (e.g. an array of objects) — decisive for
+    // thinking-family models that otherwise collapse a batch to a single object.
+    if let Some(fmt) = format {
+        body["format"] = fmt;
     }
     // Advertise tools in Ollama's format ({type, function:{name,description,parameters}}).
     // Without this the model can't call tools and tends to hallucinate that it did.
