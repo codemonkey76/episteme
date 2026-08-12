@@ -105,6 +105,13 @@ class ApiClient {
     return body['authenticated'] == true;
   }
 
+  /// Absolute URL for an API path, for widgets that fetch it themselves
+  /// (`Image.network` on a shipment photo) instead of going through here.
+  String url(String path) => '$_baseUrl/api$path';
+
+  /// Headers such a direct fetch needs — the session cookie and nothing else.
+  Map<String, String> get authHeaders => {'Cookie': ?_cookie};
+
   Future<Map<String, dynamic>> getJson(String path,
       [Map<String, String>? query]) async {
     final res = await http.get(_uri(path, query), headers: _headers());

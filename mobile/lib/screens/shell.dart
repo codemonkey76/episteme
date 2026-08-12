@@ -7,12 +7,14 @@ import '../state/activity.dart';
 import '../state/auth.dart';
 import '../state/chat.dart';
 import '../state/notes.dart';
+import '../state/shipments.dart';
 import '../state/tasks.dart';
 import 'activity_tab.dart';
 import 'calendar_tab.dart';
 import 'chat_tab.dart';
 import 'email_tab.dart';
 import 'notes_tab.dart';
+import 'shipments_tab.dart';
 import 'tasks_tab.dart';
 
 /// Bottom-tab shell — the mobile counterpart of the desktop window workspace.
@@ -26,8 +28,17 @@ class ShellScreen extends StatefulWidget {
 class _ShellScreenState extends State<ShellScreen> {
   int _tab = 0;
 
-  static const _titles = ['Chat', 'Email', 'Calendar', 'Tasks', 'Notes', 'Activity'];
-  static const _activityTab = 5;
+  static const _titles = [
+    'Chat',
+    'Email',
+    'Calendar',
+    'Tasks',
+    'Notes',
+    'Shipments',
+    'Activity',
+  ];
+  static const _shipmentsTab = 5;
+  static const _activityTab = 6;
 
   @override
   void initState() {
@@ -54,6 +65,7 @@ class _ShellScreenState extends State<ShellScreen> {
       const CalendarTab(),
       const TasksTab(),
       const NotesTab(),
+      const ShipmentsTab(),
       ActivityTab(onOpenSession: _openSessionInChat),
     ];
 
@@ -75,6 +87,9 @@ class _ShellScreenState extends State<ShellScreen> {
       ),
       body: IndexedStack(index: _tab, children: pages),
       bottomNavigationBar: NavigationBar(
+        // Seven destinations don't fit with labels on a phone; show the label
+        // only for the selected tab and let the icons carry the rest.
+        labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
         selectedIndex: _tab,
         onDestinationSelected: (i) {
           setState(() => _tab = i);
@@ -83,6 +98,7 @@ class _ShellScreenState extends State<ShellScreen> {
           // Activity tab polls while visible (job statuses flip server-side).
           if (i == 3) context.read<TasksStore>().load();
           if (i == 4) context.read<NotesStore>().load();
+          if (i == _shipmentsTab) context.read<ShipmentsStore>().load();
           final activity = context.read<ActivityStore>();
           if (i == _activityTab) {
             activity.startPolling();
@@ -96,6 +112,7 @@ class _ShellScreenState extends State<ShellScreen> {
           const NavigationDestination(icon: Icon(Icons.calendar_today_outlined), label: 'Calendar'),
           const NavigationDestination(icon: Icon(Icons.check_circle_outline), label: 'Tasks'),
           const NavigationDestination(icon: Icon(Icons.description_outlined), label: 'Notes'),
+          const NavigationDestination(icon: Icon(Icons.local_shipping_outlined), label: 'Shipments'),
           NavigationDestination(
             icon: Badge(
               isLabelVisible: pendingCount > 0,

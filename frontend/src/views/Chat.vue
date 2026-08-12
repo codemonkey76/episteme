@@ -7,6 +7,7 @@ import { useLogsStore } from '../stores/logs'
 import { useCalendarStore } from '../stores/calendar'
 import { useTasksStore } from '../stores/tasks'
 import { useNotesStore } from '../stores/notes'
+import { useShipmentsStore } from '../stores/shipments'
 import * as api from '../api'
 import { renderMarkdown } from '../lib/markdown'
 import ApprovalCard from '../components/ApprovalCard.vue'
@@ -23,6 +24,7 @@ const approvalsStore = useApprovalsStore()
 const calStore = useCalendarStore()
 const tasksStore = useTasksStore()
 const notesStore = useNotesStore()
+const shipmentsStore = useShipmentsStore()
 
 // Per-window conversation state — each chat window is independent.
 const activeSession = ref<api.Session | null>(null)
@@ -210,6 +212,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
   let calendarTouched = false
   let tasksTouched = false
   let notesTouched = false
+  let shipmentsTouched = false
   sending.value = true
   thinking.value = false
   error.value = null
@@ -246,6 +249,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (calendarTouched) { calStore.notifyChanged(); calendarTouched = false }
         if (tasksTouched) { tasksStore.notifyChanged(); tasksTouched = false }
         if (notesTouched) { notesStore.notifyChanged(); notesTouched = false }
+        if (shipmentsTouched) { shipmentsStore.notifyChanged(); shipmentsTouched = false }
       },
       (actionId, toolName, toolArgs) => {
         thinking.value = false
@@ -267,6 +271,7 @@ async function sendText(text: string, images: api.ChatImage[] = []) {
         if (name === 'create_calendar_event' || name === 'delete_calendar_event') calendarTouched = true
         if (name === 'create_task' || name === 'update_task' || name === 'complete_task' || name === 'delete_task') tasksTouched = true
         if (name === 'create_note' || name === 'update_note' || name === 'delete_note') notesTouched = true
+        if (name === 'create_shipment' || name === 'update_shipment' || name === 'add_shipment_update' || name === 'delete_shipment') shipmentsTouched = true
       },
       (title) => {
         if (activeSession.value) {

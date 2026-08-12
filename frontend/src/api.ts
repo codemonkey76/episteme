@@ -934,6 +934,104 @@ export const notes = {
   remove: (id: string) => fetch(BASE + `/notes/${id}`, { method: 'DELETE' }),
 }
 
+// Shipments — what's on the way. Rows come from the user, the chat agent, or
+// the email categorizer's deliveries pass.
+export type ShipmentStatus =
+  | 'ordered'
+  | 'in_transit'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'exception'
+  | 'cancelled'
+
+export interface ShipmentEvent {
+  id: string
+  shipment_id: string
+  status: ShipmentStatus | null
+  detail: string
+  occurred_at: string
+  source: string
+}
+
+export interface Shipment {
+  id: string
+  label: string
+  description: string | null
+  carrier: string | null
+  tracking_number: string | null
+  tracking_url: string | null
+  merchant: string | null
+  order_ref: string | null
+  status: ShipmentStatus
+  eta: string | null
+  delivered_at: string | null
+  has_photo: boolean
+  source: 'manual' | 'email' | 'agent'
+  conversation_id: string | null
+  created_at: string
+  updated_at: string
+  events: ShipmentEvent[]
+}
+
+export type ShipmentFields = Partial<{
+  label: string
+  description: string | null
+  carrier: string | null
+  tracking_number: string | null
+  tracking_url: string | null
+  merchant: string | null
+  order_ref: string | null
+  status: ShipmentStatus
+  eta: string | null
+}>
+
+export const shipments = {
+  // `status`: 'active' (default — not delivered or cancelled), 'all', or one status.
+  list: (params?: { status?: string; q?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (params?.status) p.set('status', params.status)
+    if (params?.q) p.set('q', params.q)
+    if (params?.limit !== undefined) p.set('limit', String(params.limit))
+    return json<{ shipments: Shipment[] }>(`/shipments?${p}`)
+  },
+  create: (shipment: ShipmentFields & { label: string }) =>
+    json<{ shipment: Shipment }>('/shipments', {
+      method: 'POST',
+      body: JSON.stringify(shipment),
+    }),
+  // Partial update; pass null to clear an optional field.
+  update: (id: string, patch: ShipmentFields) =>
+    json<{ shipment: Shipment }>(`/shipments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  remove: (id: string) => fetch(BASE + `/shipments/${id}`, { method: 'DELETE' }),
+  addEvent: (id: string, detail: string, status?: ShipmentStatus) =>
+    json<{ event: ShipmentEvent }>(`/shipments/${id}/events`, {
+      method: 'POST',
+      body: JSON.stringify({ detail, status }),
+    }),
+  // `contentBytes` is raw base64 with no `data:` prefix, matching documents.
+  setPhoto: async (id: string, contentType: string, contentBytes: string) => {
+    const res = await fetch(BASE + `/shipments/${id}/photo`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_type: contentType, content_bytes: contentBytes }),
+    })
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`
+      try {
+        const body = await res.json()
+        if (body?.error) msg = body.error
+      } catch {}
+      throw new Error(msg)
+    }
+  },
+  removePhoto: (id: string) => fetch(BASE + `/shipments/${id}/photo`, { method: 'DELETE' }),
+  // Photo src for an <img>. The cache-buster makes a replaced photo show up.
+  photoUrl: (s: Shipment) => `${BASE}/shipments/${s.id}/photo?v=${encodeURIComponent(s.updated_at)}`,
+}
+
 // Writer — long-form markdown documents with an AI "Improve" feature.
 export interface WriterDoc {
   id: string

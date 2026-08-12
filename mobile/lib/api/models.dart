@@ -103,6 +103,101 @@ class Note {
       );
 }
 
+/// One line of a shipment's history — a status change or a note.
+class ShipmentEvent {
+  ShipmentEvent({
+    required this.id,
+    required this.status,
+    required this.detail,
+    required this.occurredAt,
+  });
+
+  final String id;
+  final String? status;
+  final String detail;
+  final DateTime? occurredAt;
+
+  factory ShipmentEvent.fromJson(Map<String, dynamic> j) => ShipmentEvent(
+        id: j['id'] as String,
+        status: j['status'] as String?,
+        detail: j['detail'] as String? ?? '',
+        occurredAt:
+            DateTime.tryParse(j['occurred_at'] as String? ?? '')?.toLocal(),
+      );
+}
+
+/// Something on the way. Created by hand, by the chat agent, or by the email
+/// categorizer's deliveries pass.
+class Shipment {
+  Shipment({
+    required this.id,
+    required this.label,
+    required this.description,
+    required this.carrier,
+    required this.trackingNumber,
+    required this.trackingUrl,
+    required this.merchant,
+    required this.orderRef,
+    required this.status,
+    required this.eta,
+    required this.hasPhoto,
+    required this.updatedAt,
+    required this.events,
+  });
+
+  final String id;
+  final String label;
+  final String? description;
+  final String? carrier;
+  final String? trackingNumber;
+  final String? trackingUrl;
+  final String? merchant;
+  final String? orderRef;
+
+  /// ordered | in_transit | out_for_delivery | delivered | exception | cancelled
+  final String status;
+  final DateTime? eta;
+  final bool hasPhoto;
+
+  /// Doubles as the photo URL's cache-buster — it moves when the photo does.
+  final DateTime? updatedAt;
+  final List<ShipmentEvent> events;
+
+  bool get isOpen => status != 'delivered' && status != 'cancelled';
+
+  /// Past its promised date and still not here.
+  bool get isLate => isOpen && eta != null && eta!.isBefore(DateTime.now());
+
+  String get statusLabel => switch (status) {
+        'ordered' => 'Ordered',
+        'in_transit' => 'In transit',
+        'out_for_delivery' => 'Out for delivery',
+        'delivered' => 'Delivered',
+        'exception' => 'Problem',
+        'cancelled' => 'Cancelled',
+        _ => status,
+      };
+
+  factory Shipment.fromJson(Map<String, dynamic> j) => Shipment(
+        id: j['id'] as String,
+        label: j['label'] as String? ?? '',
+        description: j['description'] as String?,
+        carrier: j['carrier'] as String?,
+        trackingNumber: j['tracking_number'] as String?,
+        trackingUrl: j['tracking_url'] as String?,
+        merchant: j['merchant'] as String?,
+        orderRef: j['order_ref'] as String?,
+        status: j['status'] as String? ?? 'ordered',
+        eta: DateTime.tryParse(j['eta'] as String? ?? '')?.toLocal(),
+        hasPhoto: j['has_photo'] == true,
+        updatedAt:
+            DateTime.tryParse(j['updated_at'] as String? ?? '')?.toLocal(),
+        events: ((j['events'] as List?) ?? const [])
+            .map((e) => ShipmentEvent.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class Suggestion {
   Suggestion({
     required this.id,

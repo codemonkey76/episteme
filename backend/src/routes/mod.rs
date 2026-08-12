@@ -27,6 +27,7 @@ mod memories;
 mod prompts;
 mod reports;
 mod scheduler;
+mod shipments;
 mod transcribe;
 mod tasks;
 mod notes;
@@ -165,6 +166,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/tasks/lists/:id", delete(tasks::delete_list))
         .route("/api/tasks/:id", put(tasks::update))
         .route("/api/tasks/:id", delete(tasks::delete))
+        .route("/api/shipments", get(shipments::list))
+        .route("/api/shipments", post(shipments::create))
+        .route("/api/shipments/:id", put(shipments::update))
+        .route("/api/shipments/:id", delete(shipments::delete))
+        .route("/api/shipments/:id/events", post(shipments::add_event))
+        .route("/api/shipments/:id/photo", get(shipments::get_photo))
+        // A phone camera shot arrives base64-encoded, well past the 2 MB default.
+        .route(
+            "/api/shipments/:id/photo",
+            put(shipments::set_photo).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
+        .route("/api/shipments/:id/photo", delete(shipments::delete_photo))
         .route("/api/notes", get(notes::list))
         .route("/api/notes", post(notes::create))
         .route("/api/notes/:id", put(notes::update))

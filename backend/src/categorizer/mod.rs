@@ -22,6 +22,8 @@ use crate::model_router::{ChatMessage, ModelRouter, ProviderConfig};
 use crate::routes::email;
 use crate::state::AppState;
 
+pub mod deliveries;
+
 const CONFIG_KEY: &str = "email_categorizer";
 const STATE_KEY: &str = "email_categorizer_state";
 
@@ -104,6 +106,8 @@ pub struct RunSummary {
     pub skipped: usize,
     /// Messages recognised as updates to a linked helpdesk ticket.
     pub ticket_updates: usize,
+    /// Delivery mail that created or advanced a tracked shipment.
+    pub shipments: usize,
     pub message: String,
 }
 
@@ -326,7 +330,24 @@ pub async fn run_mailbox(
         },
     ];
 
-    let (raw, used) = ModelRouter::complete_json_with_usage(&provider, history).await?;
+    // Pin the reply to an array-of-objects schema. Legacy JSON mode only forces
+    // *valid* JSON, letting thinking-family models (e.g. qwen3) return a single
+    // object and silently drop every email after the first; the schema forces the
+    // full array. `id` may come back as an int or a string (see `Classification`).
+    let schema = serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": { "type": ["integer", "string"] },
+                "category": { "type": "string" },
+                "folder": { "type": "string" },
+            },
+            "required": ["id", "category"],
+        },
+    });
+    let (raw, used) =
+        ModelRouter::complete_json_schema_with_usage(&provider, history, schema).await?;
     db::usage::record(&state.db, user_id, &provider, "auto-sort", used).await;
     let classifications = match parse_classifications(&raw) {
         Ok(c) => c,
@@ -385,6 +406,24 @@ pub async fn run_mailbox(
                 }
             }
             other => {
+                // Shipping mail gets a second pass that turns it into a tracked
+                // shipment. It must run BEFORE the move: Graph issues a fresh id
+                // when a message changes folder, so the body fetch would 404
+                // afterwards.
+                if other == "deliveries" {
+                    match deliveries::handle(state, &provider, user_id, account_id, &seg, m).await {
+                        Ok(true) => {
+                            summary.shipments += 1;
+                            log_event(state, "info", format!("Tracking shipment: {subject}"));
+                        }
+                        Ok(false) => {}
+                        Err(e) => log_event(
+                            state,
+                            "error",
+                            format!("Shipment extraction failed for \"{subject}\": {e}"),
+                        ),
+                    }
+                }
                 // "folder" carries a custom destination named by the per-mailbox
                 // instructions; everything else maps through the fixed categories.
                 let folder_name = if other == "folder" {
@@ -441,8 +480,13 @@ pub async fn run_mailbox(
     db::settings::set(&state.db, &state_key(account_id, mailbox), &st).await?;
 
     summary.message = format!(
-        "Scanned {}, moved {}, flagged {}, ticket updates {}, left {}.",
-        summary.scanned, summary.moved, summary.flagged, summary.ticket_updates, summary.skipped
+        "Scanned {}, moved {}, flagged {}, ticket updates {}, shipments {}, left {}.",
+        summary.scanned,
+        summary.moved,
+        summary.flagged,
+        summary.ticket_updates,
+        summary.shipments,
+        summary.skipped
     );
     Ok(summary)
 }

@@ -22,6 +22,7 @@ pub mod notify;
 pub mod phoneus;
 pub mod recipes;
 pub mod research;
+pub mod shipments;
 pub mod tasks;
 pub mod web;
 
@@ -31,6 +32,7 @@ pub fn schemas() -> Vec<Value> {
     all.extend(calendar::schemas());
     all.extend(tasks::schemas());
     all.extend(notes::schemas());
+    all.extend(shipments::schemas());
     all.extend(email::schemas());
     all.extend(web::schemas());
     all.extend(memories::schemas());
@@ -65,6 +67,7 @@ pub fn is_native(name: &str) -> bool {
     calendar::handles(name)
         || tasks::handles(name)
         || notes::handles(name)
+        || shipments::handles(name)
         || email::handles(name)
         || web::handles(name)
         || memories::handles(name)
@@ -85,6 +88,7 @@ pub fn catalog() -> Vec<(&'static str, Vec<Value>)> {
         ("calendar", calendar::schemas()),
         ("tasks", tasks::schemas()),
         ("notes", notes::schemas()),
+        ("shipments", shipments::schemas()),
         ("email", email::schemas()),
         ("web", web::schemas()),
         ("memory", memories::schemas()),
@@ -135,6 +139,9 @@ pub async fn execute(
     }
     if notes::handles(name) {
         return notes::execute(state, user_id, name, args).await;
+    }
+    if shipments::handles(name) {
+        return shipments::execute(state, user_id, name, args).await;
     }
     if email::handles(name) {
         return email::execute(state, user_id, name, args).await;
